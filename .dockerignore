@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+.git
+.cursor
+apps/web/dist
+dist
+coverage
+*.log
+agent-transcripts
+**/pytest-cache-files-*
+**/.pytest_cache
+**/__pycache__
+**/*.pyc

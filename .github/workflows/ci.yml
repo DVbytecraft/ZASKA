@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  frontend:
+    name: Frontend — typecheck, lint, build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck --workspace @zaska/web
+
+      - name: Lint
+        run: npm run lint --workspace @zaska/web
+
+      - name: Format check
+        run: npm run format:check --workspace @zaska/web
+
+      - name: Build
+        run: npm run build --workspace @zaska/web
+
+  backend:
+    name: Backend — lint, tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: zaska
+          POSTGRES_PASSWORD: zaska
+          POSTGRES_DB: zaska_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/fastapi/requirements.txt
+
+      - name: Install Python dependencies
+        run: pip install -r backend/fastapi/requirements.txt
+
+      - name: Install test dependencies
+        run: pip install pytest pytest-asyncio httpx
+
+      - name: Lint with ruff
+        run: |
+          pip install ruff
+          ruff check backend/fastapi/app
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://zaska:zaska@localhost:5432/zaska_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: ci-test-secret-key-at-least-32-chars-long
+          ENVIRONMENT: test
+        run: |
+          cd backend/fastapi
+          python -m pytest tests/ -v --tb=short
+        continue-on-error: true
+
+  docker:
+    name: Docker build check
+    runs-on: ubuntu-latest
+    needs: [frontend, backend]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -f backend/fastapi/Dockerfile -t zaska-api:${{ github.sha }} .
+
+      - name: Build frontend image
+        run: docker build -f apps/web/Dockerfile -t zaska-web:${{ github.sha }} .

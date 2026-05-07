@@ -1,0 +1,139 @@
+import asyncio
+import json
+
+import sentry_sdk
+from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.api.v1.api import api_router
+from app.api.websocket import chat_ws_manager, websocket_loop
+from app.core.config import settings
+from app.core.observability import RequestIDMiddleware, logger
+from app.core.rate_limit import RedisRateLimitMiddleware
+from app.core.responses import error_response, success_response
+from app.core.ws_ticket import consume_ws_ticket
+from app.db.base import Base
+from app.db.session import engine
+from app.models import (  # noqa: F401
+    chat_message,
+    feature_flag,
+    kyc,
+    location_config,
+    payment_method,
+    payout,
+    dispute,
+    task,
+    task_completion_code,
+    user,
+    user_address,
+    virtual_card,
+    wallet,
+)
+
+
+app = FastAPI(title=settings.app_name)
+
+
+def _validate_production_hard_lock() -> None:
+    mode = str(settings.payment_mode).strip().lower()
+    if mode != "production":
+        return
+    provider_ok = any(
+        [
+            bool(settings.stripe_secret_key.strip()),
+            bool(settings.fedapay_api_key.strip()),
+            bool(settings.flutterwave_secret_key.strip()),
+        ]
+    )
+    if not provider_ok:
+        raise RuntimeError("Production hard-lock: at least one payment provider key is required")
+    if not any([settings.stripe_webhook_secret, settings.fedapay_webhook_secret, settings.flutterwave_hash]):
+        raise RuntimeError("Production hard-lock: webhook secret/hash required")
+    if not settings.kyc_provider_enabled:
+        raise RuntimeError("Production hard-lock: KYC provider must be enabled")
+    if not settings.otp_provider_enabled:
+        raise RuntimeError("Production hard-lock: OTP provider must be enabled")
+
+
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Country-Code", "X-Request-ID"],
+)
+app.add_middleware(
+    RedisRateLimitMiddleware,
+    max_requests=settings.rate_limit_max_requests,
+    window_seconds=settings.rate_limit_window_seconds,
+)
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    logger.info("ZASKA CORE OS startup env={} version=core-os-1.0", settings.env)
+    if settings.sentry_dsn.strip():
+        sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1, environment=settings.env)
+    _validate_production_hard_lock()
+    await chat_ws_manager.start()
+
+
+@app.get("/health")
+def health():
+    return success_response({"status": "ok"})
+
+
+@app.get("/health/db")
+def health_db():
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+    return success_response({"status": "ok"})
+
+
+@app.exception_handler(StarletteHTTPException)
+async def starlette_http_exception_handler(_, exc: StarletteHTTPException):
+    return JSONResponse(status_code=exc.status_code, content=error_response(str(exc.detail)))
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_, exc: HTTPException):
+    return JSONResponse(status_code=exc.status_code, content=error_response(str(exc.detail)))
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_, exc: RequestValidationError):
+    return JSONResponse(status_code=422, content=error_response("Invalid request payload", exc.errors()))
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(_, exc: Exception):
+    logger.exception("Unhandled exception: {}", exc)
+    return JSONResponse(status_code=500, content=error_response("Internal server error"))
+
+
+@app.websocket("/ws/tasks/{task_id}")
+async def websocket_task_chat(websocket: WebSocket, task_id: str) -> None:
+    await websocket.accept()
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)
+        data = json.loads(raw)
+        if data.get("type") != "auth" or not data.get("ticket"):
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+        user_id = consume_ws_ticket(str(data["ticket"]), expected_task_id=task_id)
+        if not user_id:
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+        await websocket_loop(task_id=task_id, websocket=websocket, user_id=user_id)
+    except (TimeoutError, asyncio.TimeoutError, json.JSONDecodeError):
+        await websocket.close(code=1008, reason="Unauthorized")
+    except Exception:
+        await websocket.close(code=1011, reason="Server error")
+
+
+app.include_router(api_router, prefix=settings.api_prefix)

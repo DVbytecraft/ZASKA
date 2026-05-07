@@ -1,0 +1,137 @@
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: zaska-postgres
+    environment:
+      POSTGRES_DB: zaska
+      POSTGRES_USER: zaska_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    # DEV ONLY: set POSTGRES_PUBLISH_PORT=5417 in .env to expose locally. Never expose in production.
+    ports:
+      - "${POSTGRES_PUBLISH_PORT:-}:5432"
+    volumes:
+      - zaska-postgres-data:/var/lib/postgresql/data
+    networks:
+      - zaska-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zaska_admin -d zaska"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: zaska-redis
+    # DEV ONLY: set REDIS_PUBLISH_PORT=16379 in .env to expose locally. Never expose in production.
+    ports:
+      - "${REDIS_PUBLISH_PORT:-}:6379"
+    networks:
+      - zaska-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/fastapi/Dockerfile
+    container_name: zaska-backend
+    env_file:
+      - backend/fastapi/.env
+    environment:
+      # DATABASE_URL uses internal docker hostname 'postgres', not localhost
+      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
+      # JWT_SECRET and ENV come from env_file (.env) — do NOT override here
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    volumes:
+      - ./backend/fastapi/app:/app/backend/fastapi/app
+      - ./backend/fastapi/alembic:/app/backend/fastapi/alembic
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PUBLISH_PORT:-6969}:6969"
+    networks:
+      - zaska-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6969/health').read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: backend/fastapi/Dockerfile
+    container_name: zaska-celery-worker
+    command: ["celery", "-A", "app.worker.celery_app.celery_app", "worker", "--loglevel=info"]
+    env_file:
+      - backend/fastapi/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    volumes:
+      - ./backend/fastapi/app:/app/backend/fastapi/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - zaska-network
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: backend/fastapi/Dockerfile
+    container_name: zaska-celery-beat
+    command: ["celery", "-A", "app.worker.celery_app.celery_app", "beat", "--loglevel=info"]
+    env_file:
+      - backend/fastapi/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    volumes:
+      - ./backend/fastapi/app:/app/backend/fastapi/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - zaska-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: zaska-frontend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:6969/api}
+    volumes:
+      - ./apps/web/src:/app/src
+      - ./packages/shared-services/src:/packages/shared-services/src
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PUBLISH_PORT:-3010}:3010"
+    networks:
+      - zaska-network
+
+networks:
+  zaska-network:
+    driver: bridge
+
+volumes:
+  zaska-postgres-data:

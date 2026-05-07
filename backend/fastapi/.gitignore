@@ -1,0 +1,20 @@
+# Secrets — NEVER commit
+.env
+.env.local
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Test & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Alembic compiled
+alembic/__pycache__/

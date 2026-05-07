@@ -1,0 +1,9 @@
+{
+  "expo": {
+    "name": "ZASKA Mobile",
+    "slug": "zaska-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "platforms": ["ios", "android"]
+  }
+}
