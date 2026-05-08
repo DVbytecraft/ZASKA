@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
-import { MapPin, Clock, Zap, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
+import { MapPin, Clock, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
 import { taskService, apiClient } from '@zaska/shared-services';
 import type { Task } from '@zaska/shared-services';
 
@@ -23,8 +23,7 @@ export function TaskerModeScreen({ onApply, onBack }: TaskerModeScreenProps) {
     taskService
       .browseAvailableTasks()
       .then((data) => {
-        // Exclude tasks the current user created
-        setTasks(data.filter((t) => t.createdBy !== myId && t.created_by !== myId));
+        setTasks(data.filter((t) => t.createdBy !== myId));
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Impossible de charger les tâches'))
       .finally(() => setLoading(false));
@@ -80,25 +79,21 @@ export function TaskerModeScreen({ onApply, onBack }: TaskerModeScreenProps) {
               <h3 className="text-base font-semibold text-gray-900 flex-1">
                 {task.title || task.description?.slice(0, 50)}
               </h3>
-              {task.urgent && (
-                <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-700 rounded-lg text-xs font-semibold ml-2 flex-shrink-0">
-                  <Zap size={12} fill="currentColor" />
-                  Urgent
-                </span>
-              )}
             </div>
 
             <div className="flex items-center gap-4 mb-4 text-sm text-gray-500">
-              {task.latitude && task.longitude && (
+              {task.address && (
                 <div className="flex items-center gap-1.5">
                   <MapPin size={14} strokeWidth={2.5} />
-                  <span>Géolocalisé</span>
+                  <span className="truncate max-w-[140px]">{task.address}</span>
                 </div>
               )}
-              <div className="flex items-center gap-1.5">
-                <Clock size={14} strokeWidth={2.5} />
-                <span>{new Date(task.created_at ?? task.createdAt ?? '').toLocaleDateString('fr-FR')}</span>
-              </div>
+              {task.createdAt && (
+                <div className="flex items-center gap-1.5">
+                  <Clock size={14} strokeWidth={2.5} />
+                  <span>{new Date(task.createdAt).toLocaleDateString('fr-FR')}</span>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between">

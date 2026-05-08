@@ -119,10 +119,15 @@ export interface Task {
   currency: string;
   latitude: number;
   longitude: number;
+  address?: string | null;
   status: "OPEN" | "ASSIGNED" | "COMPLETED";
   createdBy: string;
   assignedTo: string | null;
   mode?: TaskMode;
+  createdAt?: string | null;
+  negotiationStatus?: string | null;
+  negotiatedPrice?: number | null;
+  completionPercent?: number | null;
 }
 
 export interface TaskApplication {
