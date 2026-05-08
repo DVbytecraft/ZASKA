@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import secrets
-from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,7 +17,6 @@ from app.core.config import settings
 from app.core.observability import logger
 from app.core.responses import success_response
 from app.models.task import Task
-from app.models.task_completion_code import TaskCompletionCode
 from app.models.user import User
 from app.schemas.task import (
     MatchQueryPayload,
@@ -81,28 +76,6 @@ def _get_task_or_404(task_id: str, service: TaskService) -> Task:
     if task is None:
         raise HTTPException(status_code=404, detail="Tâche introuvable")
     return task
-
-
-def _hash_code(code: str) -> str:
-    return hmac.new(settings.jwt_secret.encode(), code.encode(), hashlib.sha256).hexdigest()
-
-
-def _send_completion_code_email(email: str, code: str, role: str, task_title: str) -> None:
-    role_label = "client" if role == "client" else "exécutant"
-    EmailService().send_email(
-        to_email=email,
-        subject=f"ZASKA — Code de finalisation de tâche",
-        html_content=(
-            f"<p>Bonjour,</p>"
-            f"<p>La tâche <strong>{task_title}</strong> est marquée comme terminée.</p>"
-            f"<p>En tant que <strong>{role_label}</strong>, votre code de validation est :</p>"
-            f"<h2 style='letter-spacing:8px'>{code}</h2>"
-            f"<p>Entrez ce code dans l'application pour confirmer la finalisation.<br>"
-            f"Ce code expire dans 48 heures.</p>"
-            f"<p>Si vous n'avez pas terminé ce travail, ne validez pas ce code.</p>"
-        ),
-        text_content=f"Code de finalisation ZASKA : {code}",
-    )
 
 
 # ─── CRUD ────────────────────────────────────────────────────────────────────
@@ -489,201 +462,116 @@ def abandon_negotiation(
         raise HTTPException(status_code=500, detail="Impossible d'abandonner la tâche") from exc
 
 
-# ─── Task Completion Codes ────────────────────────────────────────────────────
-
-class CompleteTaskPayload(BaseModel):
-    completion_percent: int = Field(default=100, ge=1, le=100)
-
+# ─── Task Completion ──────────────────────────────────────────────────────────
 
 @router.post("/{task_id}/complete")
 def mark_task_complete(
     task_id: str,
-    payload: CompleteTaskPayload,
-    service: TaskService = Depends(get_task_service),
-    db: Session = Depends(get_db),
-    user_id: str = Depends(get_current_user_id),
-):
-    """Exécutant déclare la tâche terminée (ou partiellement).
-    Génère 2 codes email — un pour chaque partie — pour valider la finalisation.
-    """
-    try:
-        task = _get_task_or_404(task_id, service)
-        if task.assigned_to != user_id:
-            raise HTTPException(status_code=403, detail="Seul l'exécutant assigné peut déclarer la tâche terminée")
-        if task.status not in ("ASSIGNED",):
-            raise HTTPException(status_code=409, detail="La tâche doit être ASSIGNED pour être déclarée terminée")
-
-        # Update completion_percent
-        service.set_completion_percent(task_id, payload.completion_percent)
-
-        # Delete any previous unused codes for this task
-        db.query(TaskCompletionCode).filter(
-            TaskCompletionCode.task_id == task_id,
-            TaskCompletionCode.is_used == False,
-        ).delete()
-        db.commit()
-
-        now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(hours=48)
-
-        # Generate code for client
-        client = db.get(User, task.created_by)
-        client_code = secrets.token_urlsafe(4).upper()[:6]
-        db.add(TaskCompletionCode(
-            task_id=task_id,
-            user_id=task.created_by,
-            role="client",
-            code_hash=_hash_code(client_code),
-            is_used=False,
-            expires_at=expires_at,
-        ))
-
-        # Generate code for executor
-        executor = db.get(User, user_id)
-        executor_code = secrets.token_urlsafe(4).upper()[:6]
-        db.add(TaskCompletionCode(
-            task_id=task_id,
-            user_id=user_id,
-            role="executor",
-            code_hash=_hash_code(executor_code),
-            is_used=False,
-            expires_at=expires_at,
-        ))
-        db.commit()
-
-        # Send emails
-        if client and client.email:
-            _send_completion_code_email(client.email, client_code, "client", task.title)
-        if executor and executor.email:
-            _send_completion_code_email(executor.email, executor_code, "executor", task.title)
-
-        logger.info("task:completion_codes_generated task_id={} completion={}%", task_id, payload.completion_percent)
-        return success_response({
-            "task_id": task_id,
-            "completion_percent": payload.completion_percent,
-            "message": "Codes de finalisation envoyés par email aux deux parties. Entrez votre code pour valider.",
-        })
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("task:complete_error task_id={} error={}", task_id, exc)
-        raise HTTPException(status_code=500, detail="Impossible de marquer la tâche terminée") from exc
-
-
-class SubmitCodePayload(BaseModel):
-    code: str = Field(min_length=4, max_length=12)
-
-
-@router.post("/{task_id}/finalize")
-def submit_completion_code(
-    task_id: str,
-    payload: SubmitCodePayload,
     service: TaskService = Depends(get_task_service),
     wallet_svc: WalletService = Depends(get_wallet_service),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Soumettre son code de finalisation. Quand les 2 codes sont validés,
-    le paiement passe en hold 24h (contestation possible), puis libéré automatiquement.
+    """Exécutant déclare la prestation terminée.
+    Passe la tâche en PENDING_VALIDATION et ouvre une fenêtre de 24h.
+    Le client confirme ou conteste directement dans l'app — aucun code email requis.
     """
     try:
         task = _get_task_or_404(task_id, service)
-        if user_id not in {task.created_by, task.assigned_to}:
-            raise HTTPException(status_code=403, detail="Non autorisé pour cette tâche")
+        if task.assigned_to != user_id:
+            raise HTTPException(status_code=403, detail="Seul l'exécutant assigné peut déclarer la tâche terminée")
+        if task.status != "ASSIGNED":
+            raise HTTPException(status_code=409, detail="La tâche doit être ASSIGNED pour être déclarée terminée")
 
-        now = datetime.now(timezone.utc)
+        service.update_status(task_id, "PENDING_VALIDATION")
 
-        # Find this user's code
-        my_code_row = (
-            db.query(TaskCompletionCode)
-            .filter(
-                TaskCompletionCode.task_id == task_id,
-                TaskCompletionCode.user_id == user_id,
-                TaskCompletionCode.is_used == False,
-            )
-            .one_or_none()
-        )
-        if my_code_row is None:
-            raise HTTPException(status_code=404, detail="Aucun code de finalisation en attente pour vous")
-        if my_code_row.expires_at.replace(tzinfo=timezone.utc) < now:
-            raise HTTPException(status_code=410, detail="Votre code a expiré. L'exécutant doit redéclarer la tâche terminée.")
-
-        submitted_hash = _hash_code(payload.code.strip().upper())
-        if not hmac.compare_digest(submitted_hash, my_code_row.code_hash):
-            raise HTTPException(status_code=400, detail="Code incorrect")
-
-        my_code_row.is_used = True
-        db.commit()
-
-        # Check if both codes are now validated
-        pending_codes = (
-            db.query(TaskCompletionCode)
-            .filter(
-                TaskCompletionCode.task_id == task_id,
-                TaskCompletionCode.is_used == False,
-            )
-            .count()
-        )
-
-        if pending_codes > 0:
-            return success_response({
-                "task_id": task_id,
-                "code_validated": True,
-                "both_validated": False,
-                "message": "Votre code est validé. En attente de la validation de l'autre partie.",
-            })
-
-        # Both codes validated — trigger payment flow
-        task_obj = service.get_task(task_id)
-        completion_percent = task_obj.completion_percent if task_obj else 100
-
+        # Put escrow on 24h hold — auto-released if client doesn't act
         escrow = wallet_svc.get_escrow_by_task(task_id)
-        if escrow is None or escrow.status not in {"funded", "hold"}:
-            # No escrow — just mark task completed
-            service.update_status(task_id, "COMPLETED")
-            return success_response({
-                "task_id": task_id,
-                "code_validated": True,
-                "both_validated": True,
-                "message": "Les deux codes sont validés. Tâche finalisée.",
-            })
-
-        if completion_percent < 100:
-            # Partial work: executor 10%, client refund 90%
-            task_price = task_obj.price if task_obj else escrow.amount
-            esc, exec_amount, client_refund = wallet_svc.partial_release_escrow(
-                escrow_id=escrow.id,
-                task_price=task_price,
-            )
-            service.update_status(task_id, "COMPLETED")
-            return success_response({
-                "task_id": task_id,
-                "code_validated": True,
-                "both_validated": True,
-                "completion_percent": completion_percent,
-                "executor_paid": str(exec_amount),
-                "client_refunded": str(client_refund),
-                "currency": escrow.currency,
-                "message": f"Travail partiel validé ({completion_percent}%). Paiement distribué.",
-            })
-        else:
-            # Full work: hold 24h before releasing
+        if escrow and escrow.status == "funded":
             wallet_svc.hold_escrow_24h(escrow.id)
-            service.update_status(task_id, "COMPLETED")
-            return success_response({
-                "task_id": task_id,
-                "code_validated": True,
-                "both_validated": True,
-                "completion_percent": 100,
-                "message": "Tâche validée. Le paiement sera libéré dans 24h si aucune contestation.",
-                "payout_available_in_hours": 24,
-            })
 
+        # Notify client (best-effort)
+        try:
+            from app.core.email import send_task_done_email
+            client = db.get(User, task.created_by)
+            executor = db.get(User, user_id)
+            if client and client.email:
+                executor_name = " ".join(filter(None, [executor.first_name, executor.last_name])) if executor else "Le prestataire"
+                send_task_done_email(
+                    to_email=client.email,
+                    task_title=task.title,
+                    executor_name=executor_name or "Le prestataire",
+                )
+        except Exception:
+            pass
+
+        logger.info("task:pending_validation task_id={}", task_id)
+        return success_response({
+            "task_id": task_id,
+            "status": "PENDING_VALIDATION",
+            "message": "Prestation déclarée terminée. Le client a 24h pour confirmer ou contester.",
+        })
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("task:finalize_error task_id={} error={}", task_id, exc)
-        raise HTTPException(status_code=500, detail="Impossible de finaliser la tâche") from exc
+        logger.error("task:complete_error task_id={} error={}", task_id, exc)
+        raise HTTPException(status_code=500, detail="Impossible de déclarer la tâche terminée") from exc
+
+
+@router.post("/{task_id}/confirm")
+def confirm_task_complete(
+    task_id: str,
+    service: TaskService = Depends(get_task_service),
+    wallet_svc: WalletService = Depends(get_wallet_service),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Client confirme que le travail est réalisé → libération immédiate de l'escrow."""
+    try:
+        task = _get_task_or_404(task_id, service)
+        if task.created_by != user_id:
+            raise HTTPException(status_code=403, detail="Seul le client peut confirmer la réalisation")
+        if task.status != "PENDING_VALIDATION":
+            raise HTTPException(status_code=409, detail="La tâche n'est pas en attente de validation")
+
+        service.update_status(task_id, "COMPLETED")
+
+        # Release escrow immediately — client explicitly confirmed
+        escrow = wallet_svc.get_escrow_by_task(task_id)
+        if escrow and escrow.status in ("funded", "hold"):
+            try:
+                wallet_svc.release_escrow(escrow.id)
+            except EscrowError as exc:
+                logger.error("task:confirm_escrow_error task_id={} error={}", task_id, exc)
+
+        # Notify executor (best-effort)
+        try:
+            from app.core.email import send_email
+            executor = db.get(User, task.assigned_to) if task.assigned_to else None
+            if executor and executor.email:
+                send_email(
+                    to_email=executor.email,
+                    subject="ZASKA — Paiement libéré !",
+                    html_content=(
+                        f"<p>Le client a confirmé la réalisation de <strong>{task.title}</strong>.</p>"
+                        f"<p>Votre paiement a été libéré sur votre portefeuille ZASKA.</p>"
+                    ),
+                    text_content=f"Paiement libéré pour la tâche : {task.title}",
+                )
+        except Exception:
+            pass
+
+        logger.info("task:confirmed task_id={}", task_id)
+        updated_task = service.get_task(task_id)
+        return success_response({
+            **(_serialize_task(updated_task) if updated_task else {"task_id": task_id}),
+            "message": "Tâche confirmée. Le paiement a été libéré au prestataire.",
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("task:confirm_error task_id={} error={}", task_id, exc)
+        raise HTTPException(status_code=500, detail="Impossible de confirmer la tâche") from exc
 
 
 # ─── Contest & Release ────────────────────────────────────────────────────────

@@ -367,7 +367,7 @@ export default function App() {
           <TaskDetailScreen
             taskId={currentTaskId}
             onBack={() => setCurrentScreen('home')}
-            onComplete={() => setCurrentScreen('confirmCompletion')}
+            onComplete={() => setCurrentScreen('paymentSuccess')}
             onChat={(name) => { setCurrentChatTaskerName(name ?? ''); setCurrentScreen('taskChat'); }}
             onViewApplicants={() => setCurrentScreen('applicants')}
           />

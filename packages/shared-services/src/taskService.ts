@@ -63,6 +63,21 @@ export const taskService = {
     return apiClient.get<TaskApplication[]>('/tasks/my-applications');
   },
 
+  completeTask(taskId: string) {
+    return apiClient.post<{ task_id: string; status: string; message: string }>(
+      `/tasks/${taskId}/complete`,
+      {},
+    );
+  },
+
+  confirmTask(taskId: string) {
+    return apiClient.post<{ message: string }>(`/tasks/${taskId}/confirm`, {});
+  },
+
+  contestTask(taskId: string, reason: string) {
+    return apiClient.post<{ escrow_status: string }>(`/tasks/${taskId}/contest`, { reason });
+  },
+
   listAssignedToMe(status?: string) {
     const params = new URLSearchParams({ assigned_to_me: "true" });
     if (status) params.set("status", status);
