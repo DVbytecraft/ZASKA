@@ -98,6 +98,9 @@ class Settings(BaseSettings):
 
     # ── Admin ─────────────────────────────────────────────────────────────
     admin_role: str = "admin"
+    # One-time secret to promote first admin via POST /api/admin/bootstrap
+    # Set in env, call the endpoint once, then remove the variable.
+    admin_bootstrap_secret: str = ""
 
     # ── Brevo HTTP API (replaces SMTP relay — no IP allowlist required) ──
     brevo_api_key: str = ""

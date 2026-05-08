@@ -27,6 +27,31 @@ from app.services.wallet_service import InsufficientFundsError, WalletService
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+# ── Bootstrap: promote first admin (one-time, secret-protected) ──────────────
+
+class BootstrapPayload(BaseModel):
+    email: str
+    secret: str
+
+
+@router.post("/bootstrap", include_in_schema=False)
+def bootstrap_admin(payload: BootstrapPayload, db: Session = Depends(get_db)):
+    """Promote a user to admin role using the ADMIN_BOOTSTRAP_SECRET.
+
+    Call once after first deploy, then remove ADMIN_BOOTSTRAP_SECRET from env.
+    """
+    if not settings.admin_bootstrap_secret.strip():
+        raise HTTPException(status_code=403, detail="Bootstrap not available")
+    if payload.secret != settings.admin_bootstrap_secret:
+        raise HTTPException(status_code=403, detail="Invalid secret")
+    user = db.query(User).filter(User.email == payload.email.strip().lower()).one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.role = settings.admin_role
+    db.commit()
+    return success_response({"promoted": user.email, "role": user.role})
+
+
 # ── Existing endpoints (preserved) ───────────────────────────────────────────
 
 @router.get("/stats")
