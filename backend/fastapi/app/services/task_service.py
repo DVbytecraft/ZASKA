@@ -55,10 +55,19 @@ class TaskService:
         self.db.delete(task)
         self.db.commit()
 
+    def get_user_applications(self, user_id: str) -> list[TaskApplication]:
+        return (
+            self.db.query(TaskApplication)
+            .filter(TaskApplication.tasker_id == user_id)
+            .order_by(TaskApplication.created_at.desc())
+            .all()
+        )
+
     def list_tasks(
         self,
         status: str | None = None,
         created_by: str | None = None,
+        assigned_to: str | None = None,
         ref_lat: float | None = None,
         ref_lng: float | None = None,
     ) -> tuple[list[Task], list[float | None]]:
@@ -68,6 +77,8 @@ class TaskService:
             query = query.filter(Task.status == status.upper())
         if created_by:
             query = query.filter(Task.created_by == created_by)
+        if assigned_to:
+            query = query.filter(Task.assigned_to == assigned_to)
 
         if ref_lat is not None and ref_lng is not None:
             # PostGIS: sort by distance from reference point, tasks with no coords go last

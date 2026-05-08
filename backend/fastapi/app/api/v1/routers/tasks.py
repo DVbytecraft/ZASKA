@@ -128,6 +128,7 @@ def create_task(
 def list_tasks(
     status: str | None = None,
     mine: bool = False,
+    assigned_to_me: bool = False,
     lat: float | None = None,
     lng: float | None = None,
     service: TaskService = Depends(get_task_service),
@@ -137,6 +138,7 @@ def list_tasks(
         tasks, distances = service.list_tasks(
             status=status,
             created_by=user_id if mine else None,
+            assigned_to=user_id if assigned_to_me else None,
             ref_lat=lat,
             ref_lng=lng,
         )
@@ -148,6 +150,30 @@ def list_tasks(
         return success_response(result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de charger les tâches") from exc
+
+
+@router.get("/my-applications")
+def get_my_applications(
+    service: TaskService = Depends(get_task_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        applications = service.get_user_applications(user_id)
+        return success_response([
+            {
+                "id": app.id,
+                "taskId": app.task_id,
+                "taskerId": app.tasker_id,
+                "proposedPrice": float(app.proposed_price) if app.proposed_price is not None else None,
+                "currency": app.currency,
+                "status": app.status,
+                "message": app.message,
+                "createdAt": app.created_at.isoformat(),
+            }
+            for app in applications
+        ])
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible de charger vos candidatures") from exc
 
 
 @router.get("/{task_id}")

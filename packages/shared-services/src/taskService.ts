@@ -59,7 +59,17 @@ export const taskService = {
     return apiClient.patch<Task>(`/tasks/${taskId}/status`, { status });
   },
 
+  getMyApplications() {
+    return apiClient.get<TaskApplication[]>('/tasks/my-applications');
+  },
+
+  listAssignedToMe(status?: string) {
+    const params = new URLSearchParams({ assigned_to_me: "true" });
+    if (status) params.set("status", status);
+    return apiClient.get<Task[]>(`/tasks?${params.toString()}`);
+  },
+
   negotiateTask(taskId: string, proposedBudget: number) {
-    return apiClient.post<Task>(`/tasks/${taskId}/negotiate`, { proposed_budget: proposedBudget });
+    return apiClient.post<Task>(`/tasks/${taskId}/negotiate`, { proposed_price: proposedBudget });
   },
 };

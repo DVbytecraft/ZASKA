@@ -149,11 +149,13 @@ export interface TaskApplication {
   taskId: string;
   taskerId: string;
   taskerName?: string;
+  taskerEmail?: string;
   taskerRating?: number;
   taskerReviews?: number;
-  proposedPrice?: number;
+  proposedPrice?: number | null;
   currency: string;
   status: "pending" | "accepted" | "rejected";
+  message?: string | null;
   createdAt: string;
 }
 
