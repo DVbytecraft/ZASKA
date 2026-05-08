@@ -1,17 +1,17 @@
-import os
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.api.deps import get_current_user_id, get_kyc_service
+from app.core.cloudinary_client import is_configured, upload_kyc_document
 from app.core.config import settings
 from app.core.responses import success_response
 from app.services.kyc_service import KycService
 
 router = APIRouter(prefix="/kyc", tags=["kyc"])
 
-ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
+ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
 
 
 def _serialize(kyc) -> dict:
@@ -24,32 +24,38 @@ def _serialize(kyc) -> dict:
     }
 
 
-async def _save_upload(file: UploadFile) -> str:
+async def _upload_file(file: UploadFile, label: str) -> str:
     if file.content_type not in ALLOWED_TYPES:
-        raise HTTPException(status_code=400, detail="Unsupported file type (JPEG, PNG or WebP only)")
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label}: unsupported file type (JPEG, PNG, WebP or PDF only)",
+        )
     data = await file.read()
     if len(data) > settings.max_upload_bytes:
-        raise HTTPException(status_code=400, detail=f"File too large (max {settings.max_upload_bytes // 1_000_000} MB)")
-    upload_dir = os.path.join("backend", "fastapi", "uploads")
-    os.makedirs(upload_dir, exist_ok=True)
-    filename = f"{uuid.uuid4()}-{file.filename}"
-    path = os.path.join(upload_dir, filename)
-    with open(path, "wb") as f:
-        f.write(data)
-    return path
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label}: file too large (max {settings.max_upload_bytes // 1_000_000} MB)",
+        )
+    if not is_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Document storage not configured — contact support",
+        )
+    public_id = f"{label}-{uuid.uuid4()}"
+    return await upload_kyc_document(data, file.content_type, public_id)
 
 
 @router.post("/submit")
 async def submit_kyc(
-    id_document: UploadFile = File(..., description="ID card or passport (JPEG/PNG/WebP)"),
+    id_document: UploadFile = File(..., description="ID card or passport (JPEG/PNG/WebP/PDF)"),
     selfie: UploadFile = File(..., description="Selfie holding the document (JPEG/PNG/WebP)"),
     service: KycService = Depends(get_kyc_service),
     user_id: str = Depends(get_current_user_id),
 ):
     try:
-        id_path = await _save_upload(id_document)
-        selfie_path = await _save_upload(selfie)
-        kyc = service.create_submission(user_id=user_id, id_document_url=id_path, selfie_url=selfie_path)
+        id_url = await _upload_file(id_document, "id_document")
+        selfie_url = await _upload_file(selfie, "selfie")
+        kyc = service.create_submission(user_id=user_id, id_document_url=id_url, selfie_url=selfie_url)
         return success_response(_serialize(kyc))
     except HTTPException:
         raise
