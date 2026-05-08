@@ -195,12 +195,56 @@ def delete_task(
         task = _get_task_or_404(task_id, service)
         if task.created_by != user_id:
             raise HTTPException(status_code=403, detail="Non autorisé à supprimer cette tâche")
+        if task.status in ("ASSIGNED", "PENDING_VALIDATION"):
+            raise HTTPException(status_code=409, detail="Impossible de supprimer une tâche avec un prestataire actif")
         service.delete_task(task_id)
         return success_response({"deleted": True})
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de supprimer la tâche") from exc
+
+
+@router.post("/{task_id}/pause")
+def pause_task(
+    task_id: str,
+    service: TaskService = Depends(get_task_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Créateur désactive temporairement sa tâche (OPEN → PAUSED)."""
+    try:
+        task = _get_task_or_404(task_id, service)
+        if task.created_by != user_id:
+            raise HTTPException(status_code=403, detail="Non autorisé")
+        if task.status != "OPEN":
+            raise HTTPException(status_code=409, detail="Seules les tâches OPEN peuvent être mises en pause")
+        task = service.update_status(task_id, "PAUSED")
+        return success_response(_serialize_task(task))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible de mettre en pause la tâche") from exc
+
+
+@router.post("/{task_id}/reactivate")
+def reactivate_task(
+    task_id: str,
+    service: TaskService = Depends(get_task_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Créateur réactive une tâche mise en pause (PAUSED → OPEN)."""
+    try:
+        task = _get_task_or_404(task_id, service)
+        if task.created_by != user_id:
+            raise HTTPException(status_code=403, detail="Non autorisé")
+        if task.status != "PAUSED":
+            raise HTTPException(status_code=409, detail="Seules les tâches PAUSED peuvent être réactivées")
+        task = service.update_status(task_id, "OPEN")
+        return success_response(_serialize_task(task))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible de réactiver la tâche") from exc
 
 
 # ─── Choose Mode — Applications ──────────────────────────────────────────────
@@ -473,7 +517,7 @@ def mark_task_complete(
     user_id: str = Depends(get_current_user_id),
 ):
     """Exécutant déclare la prestation terminée.
-    Passe la tâche en PENDING_VALIDATION et ouvre une fenêtre de 24h.
+    Passe la tâche en PENDING_VALIDATION et ouvre une fenêtre de 6h.
     Le client confirme ou conteste directement dans l'app — aucun code email requis.
     """
     try:
@@ -485,10 +529,10 @@ def mark_task_complete(
 
         service.update_status(task_id, "PENDING_VALIDATION")
 
-        # Put escrow on 24h hold — auto-released if client doesn't act
+        # Put escrow on 6h hold — auto-released if client doesn't act
         escrow = wallet_svc.get_escrow_by_task(task_id)
         if escrow and escrow.status == "funded":
-            wallet_svc.hold_escrow_24h(escrow.id)
+            wallet_svc.hold_escrow_6h(escrow.id)
 
         # Notify client (best-effort)
         try:
@@ -509,7 +553,7 @@ def mark_task_complete(
         return success_response({
             "task_id": task_id,
             "status": "PENDING_VALIDATION",
-            "message": "Prestation déclarée terminée. Le client a 24h pour confirmer ou contester.",
+            "message": "Prestation déclarée terminée. Le client a 6h pour confirmer ou contester.",
         })
     except HTTPException:
         raise
@@ -589,7 +633,7 @@ def contest_task(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Client conteste le travail dans la fenêtre de 24h. Le paiement est gelé."""
+    """Client conteste le travail dans la fenêtre de 6h. Le paiement est gelé."""
     try:
         task = _get_task_or_404(task_id, service)
         if task.created_by != user_id:
@@ -630,8 +674,8 @@ def release_payment(
     wallet_svc: WalletService = Depends(get_wallet_service),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Libère le paiement après 24h (si aucune contestation). Peut aussi être appelé
-    avant les 24h par le client pour libérer immédiatement (satisfaction confirmée).
+    """Libère le paiement après 6h (si aucune contestation). Peut aussi être appelé
+    avant les 6h par le client pour libérer immédiatement (satisfaction confirmée).
     """
     try:
         task = _get_task_or_404(task_id, service)
@@ -649,7 +693,7 @@ def release_payment(
             except EscrowError as exc:
                 raise HTTPException(status_code=409, detail=str(exc))
         else:
-            # Executor waits for 24h
+            # Executor waits for 6h
             try:
                 escrow = wallet_svc.release_held_escrow(escrow.id)
             except EscrowError as exc:

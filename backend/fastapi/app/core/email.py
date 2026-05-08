@@ -238,7 +238,7 @@ def send_task_done_email(
         f'<strong>{executor_name}</strong> a déclaré votre tâche terminée et attend votre confirmation.</p>'
         f'<div style="background:#F0FDF4;border-left:4px solid #22C55E;border-radius:8px;padding:16px 20px;margin-bottom:16px;">'
         f'<p style="margin:0 0 4px;font-size:16px;font-weight:700;color:#111827;">{task_title}</p>'
-        f'<p style="margin:0;font-size:13px;color:#6B7280;">Le paiement sera libéré automatiquement dans 24h si vous ne répondez pas.</p>'
+        f'<p style="margin:0;font-size:13px;color:#6B7280;">Le paiement sera libéré automatiquement dans 6h si vous ne répondez pas.</p>'
         f'</div>'
         f'<p style="margin:0;font-size:14px;color:#6B7280;">Ouvrez l\'application pour <strong>confirmer</strong> ou <strong>contester</strong> la réalisation.</p>'
     )
@@ -246,7 +246,7 @@ def send_task_done_email(
         to_email=to_email,
         subject=f"ZASKA — {executor_name} a terminé votre tâche",
         html_content=_notification_html("✅", "Prestation déclarée terminée", body, "Confirmer dans l'app", _s.app_frontend_url),
-        text_content=f"{executor_name} a déclaré la tâche '{task_title}' terminée. Confirmez dans l'app dans les 24h.",
+        text_content=f"{executor_name} a déclaré la tâche '{task_title}' terminée. Confirmez dans l'app dans les 6h.",
     )
 
 

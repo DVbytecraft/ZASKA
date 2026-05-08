@@ -3,7 +3,7 @@ import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import {
   CheckCircle2, Activity, Clock, AlertCircle, RefreshCw, Users,
-  Briefcase, Send, XCircle, ChevronRight,
+  Briefcase, Send, XCircle, ChevronRight, Pause, Play, Trash2,
 } from 'lucide-react';
 import { taskService } from '@zaska/shared-services';
 import type { Task, TaskApplication } from '@zaska/shared-services';
@@ -20,12 +20,16 @@ type RootTab = 'client' | 'missions';
 function taskStatusLabel(status: Task['status']) {
   if (status === 'COMPLETED') return 'Terminée';
   if (status === 'ASSIGNED') return 'En cours';
+  if (status === 'PENDING_VALIDATION') return 'En validation';
+  if (status === 'PAUSED') return 'En pause';
   return 'Ouverte';
 }
 
 function taskStatusClass(status: Task['status']) {
   if (status === 'COMPLETED') return 'bg-green-50 text-green-700';
   if (status === 'ASSIGNED') return 'bg-blue-50 text-blue-700';
+  if (status === 'PENDING_VALIDATION') return 'bg-amber-50 text-amber-700';
+  if (status === 'PAUSED') return 'bg-gray-100 text-gray-500';
   return 'bg-purple-50 text-purple-700';
 }
 
@@ -92,6 +96,8 @@ function ClientTab({
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionTaskId, setActionTaskId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -104,14 +110,77 @@ function ClientTab({
 
   useEffect(() => { load(); }, [load]);
 
+  const handlePause = async (e: React.MouseEvent, taskId: string) => {
+    e.stopPropagation();
+    setActionTaskId(taskId);
+    try { await taskService.pauseTask(taskId); load(); } catch { /* ignore */ }
+    finally { setActionTaskId(null); }
+  };
+
+  const handleReactivate = async (e: React.MouseEvent, taskId: string) => {
+    e.stopPropagation();
+    setActionTaskId(taskId);
+    try { await taskService.reactivateTask(taskId); load(); } catch { /* ignore */ }
+    finally { setActionTaskId(null); }
+  };
+
+  const handleDelete = async (taskId: string) => {
+    setActionTaskId(taskId);
+    try { await taskService.deleteTask(taskId); load(); } catch { /* ignore */ }
+    finally { setActionTaskId(null); setConfirmDelete(null); }
+  };
+
   const filtered = tasks.filter((t) => {
-    if (filter === 'active') return t.status !== 'COMPLETED';
+    if (filter === 'active') return !['COMPLETED'].includes(t.status);
     if (filter === 'completed') return t.status === 'COMPLETED';
     return true;
   });
 
+  const statusIcon = (status: Task['status']) => {
+    if (status === 'COMPLETED') return <CheckCircle2 size={20} className="text-green-600" />;
+    if (status === 'ASSIGNED') return <Activity size={20} className="text-blue-600" />;
+    if (status === 'PENDING_VALIDATION') return <Clock size={20} className="text-amber-500" />;
+    if (status === 'PAUSED') return <Pause size={20} className="text-gray-400" />;
+    return <Clock size={20} className="text-purple-600" />;
+  };
+
+  const statusIconBg = (status: Task['status']) => {
+    if (status === 'COMPLETED') return 'bg-green-50';
+    if (status === 'ASSIGNED') return 'bg-blue-50';
+    if (status === 'PENDING_VALIDATION') return 'bg-amber-50';
+    if (status === 'PAUSED') return 'bg-gray-100';
+    return 'bg-purple-50';
+  };
+
   return (
     <div className="px-6 py-4">
+      {/* Delete confirm modal */}
+      {confirmDelete && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-end justify-center pb-8 px-6">
+          <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl">
+            <h3 className="font-bold text-gray-900 text-lg mb-2">Supprimer la tâche ?</h3>
+            <p className="text-sm text-gray-500 mb-5">Cette action est irréversible. Les candidatures associées seront aussi supprimées.</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDelete(null)}
+                className="flex-1 py-3 border-2 border-gray-200 rounded-xl text-sm font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={() => handleDelete(confirmDelete)}
+                disabled={actionTaskId === confirmDelete}
+                className="flex-1 py-3 bg-red-600 text-white rounded-xl text-sm font-semibold hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {actionTaskId === confirmDelete
+                  ? <RefreshCw size={14} className="animate-spin" />
+                  : <><Trash2 size={14} /> Supprimer</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-4">
         <div className="flex gap-2">
           {(['all', 'active', 'completed'] as const).map((f) => (
@@ -146,20 +215,11 @@ function ClientTab({
             <Card key={task.id} onClick={() => onTaskClick(task.id)} className="hover:shadow-lg transition-all cursor-pointer">
               <div className="flex items-start justify-between mb-2">
                 <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                    task.status === 'COMPLETED' ? 'bg-green-50' :
-                    task.status === 'ASSIGNED' ? 'bg-blue-50' : 'bg-purple-50'
-                  }`}>
-                    {task.status === 'COMPLETED' ? (
-                      <CheckCircle2 size={20} className="text-green-600" />
-                    ) : task.status === 'ASSIGNED' ? (
-                      <Activity size={20} className="text-blue-600" />
-                    ) : (
-                      <Clock size={20} className="text-purple-600" />
-                    )}
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${statusIconBg(task.status)}`}>
+                    {statusIcon(task.status)}
                   </div>
                   <div className="min-w-0">
-                    <p className="font-medium text-gray-900 truncate max-w-[160px]">
+                    <p className="font-medium text-gray-900 truncate max-w-[150px]">
                       {task.title || task.description.slice(0, 40)}
                     </p>
                     <p className="text-xs text-gray-500">
@@ -172,14 +232,48 @@ function ClientTab({
                 </span>
               </div>
 
+              {/* View applicants — OPEN only */}
               {task.status === 'OPEN' && onViewApplicants && (
                 <button
                   onClick={(e) => { e.stopPropagation(); onViewApplicants(task.id); }}
-                  className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-2.5 bg-[#6D28D9] text-white rounded-lg font-medium text-sm hover:bg-[#5B21B6] transition-colors"
+                  className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-2 bg-[#6D28D9] text-white rounded-lg font-medium text-sm hover:bg-[#5B21B6] transition-colors"
                 >
-                  <Users size={16} />
-                  Voir les candidats
+                  <Users size={15} /> Voir les candidats
                 </button>
+              )}
+
+              {/* Actions — only for OPEN or PAUSED tasks */}
+              {(task.status === 'OPEN' || task.status === 'PAUSED') && (
+                <div className="flex gap-2 mt-2 pt-2 border-t border-gray-100">
+                  {task.status === 'OPEN' ? (
+                    <button
+                      onClick={(e) => handlePause(e, task.id)}
+                      disabled={actionTaskId === task.id}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 transition-colors"
+                    >
+                      {actionTaskId === task.id
+                        ? <RefreshCw size={12} className="animate-spin" />
+                        : <><Pause size={12} /> Mettre en pause</>}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => handleReactivate(e, task.id)}
+                      disabled={actionTaskId === task.id}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 transition-colors"
+                    >
+                      {actionTaskId === task.id
+                        ? <RefreshCw size={12} className="animate-spin" />
+                        : <><Play size={12} /> Republier</>}
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setConfirmDelete(task.id); }}
+                    disabled={actionTaskId === task.id}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 disabled:opacity-50 transition-colors"
+                  >
+                    <Trash2 size={12} /> Supprimer
+                  </button>
+                </div>
               )}
             </Card>
           ))}

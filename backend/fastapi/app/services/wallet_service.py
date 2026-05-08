@@ -412,19 +412,19 @@ class WalletService:
         return self.db.execute(select(Escrow).where(Escrow.task_id == task_id)).scalars().one_or_none()
 
     def hold_escrow_24h(self, escrow_id: str) -> Escrow:
-        """Transition funded → hold: starts the 24h contestation window."""
+        """Transition funded → hold: starts the 6h contestation window."""
         from datetime import timedelta
         escrow = self._get_escrow(escrow_id, for_update=True)
         if escrow.status != "funded":
             raise EscrowError(f"Escrow {escrow_id} ne peut passer en hold (statut: {escrow.status})")
         escrow.status = "hold"
-        escrow.payout_available_at = datetime.now(timezone.utc) + timedelta(hours=24)
+        escrow.payout_available_at = datetime.now(timezone.utc) + timedelta(hours=6)
         self.db.commit()
         self.db.refresh(escrow)
         return escrow
 
     def contest_escrow(self, escrow_id: str, client_user_id: str) -> Escrow:
-        """Client contests the work — freezes payment during 24h hold window."""
+        """Client contests the work — freezes payment during 6h hold window."""
         from datetime import timedelta
         now = datetime.now(timezone.utc)
         escrow = self._get_escrow(escrow_id, for_update=True)
@@ -433,7 +433,7 @@ class WalletService:
         if escrow.status != "hold":
             raise EscrowError(f"Escrow {escrow_id} ne peut être contesté (statut: {escrow.status})")
         if escrow.payout_available_at and now > escrow.payout_available_at:
-            raise EscrowError("La fenêtre de contestation de 24h est expirée")
+            raise EscrowError("La fenêtre de contestation de 6h est expirée")
         escrow.status = "contested"
         escrow.contested_at = now
         self.db.commit()

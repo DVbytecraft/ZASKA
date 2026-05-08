@@ -247,7 +247,7 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
                 <h4 className="font-semibold text-gray-900">Prestation déclarée terminée</h4>
                 <p className="text-xs text-gray-500 mt-0.5">
                   Confirmez si le travail est satisfaisant, ou contestez si ce n'est pas le cas.
-                  Sans action de votre part, le paiement sera libéré dans 24h.
+                  Sans action de votre part, le paiement sera libéré dans 6h.
                 </p>
               </div>
             </div>
@@ -333,7 +333,7 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
               <div>
                 <h4 className="font-semibold text-gray-900">En attente de validation</h4>
                 <p className="text-sm text-gray-600 mt-0.5">
-                  Votre prestation a été déclarée terminée. Le client a été notifié et dispose de 24h pour confirmer.
+                  Votre prestation a été déclarée terminée. Le client a été notifié et dispose de 6h pour confirmer.
                   Sans action de sa part, le paiement vous sera libéré automatiquement.
                 </p>
               </div>
@@ -382,7 +382,7 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
               : 'Terminer ma prestation'}
           </Button>
           <p className="text-xs text-gray-400 text-center mt-2">
-            Le client sera notifié et aura 24h pour confirmer ou contester
+            Le client sera notifié et aura 6h pour confirmer ou contester
           </p>
         </div>
       )}

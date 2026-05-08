@@ -78,6 +78,18 @@ export const taskService = {
     return apiClient.post<{ escrow_status: string }>(`/tasks/${taskId}/contest`, { reason });
   },
 
+  pauseTask(taskId: string) {
+    return apiClient.post<Task>(`/tasks/${taskId}/pause`, {});
+  },
+
+  reactivateTask(taskId: string) {
+    return apiClient.post<Task>(`/tasks/${taskId}/reactivate`, {});
+  },
+
+  deleteTask(taskId: string) {
+    return apiClient.delete<{ deleted: boolean }>(`/tasks/${taskId}`);
+  },
+
   listAssignedToMe(status?: string) {
     const params = new URLSearchParams({ assigned_to_me: "true" });
     if (status) params.set("status", status);

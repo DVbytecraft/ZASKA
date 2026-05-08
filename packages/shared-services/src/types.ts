@@ -133,7 +133,7 @@ export interface Task {
   latitude: number;
   longitude: number;
   address?: string | null;
-  status: "OPEN" | "ASSIGNED" | "PENDING_VALIDATION" | "COMPLETED";
+  status: "OPEN" | "ASSIGNED" | "PENDING_VALIDATION" | "COMPLETED" | "PAUSED";
   createdBy: string;
   assignedTo: string | null;
   mode?: TaskMode;
