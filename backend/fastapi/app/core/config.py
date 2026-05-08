@@ -116,6 +116,15 @@ class Settings(BaseSettings):
     # FCM project ID (extracted from service account if empty)
     fcm_project_id: str = ""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_urls(cls, values: dict) -> dict:
+        # Render provides postgresql:// — psycopg3 requires postgresql+psycopg://
+        url = values.get("database_url", "")
+        if isinstance(url, str) and url.startswith("postgresql://"):
+            values["database_url"] = url.replace("postgresql://", "postgresql+psycopg://", 1)
+        return values
+
     @model_validator(mode="after")
     def _validate_payment_mode_and_keys(self):
         mode = str(self.payment_mode).strip().lower()

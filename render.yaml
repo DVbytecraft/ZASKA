@@ -1,0 +1,173 @@
+
+# render.yaml — ZASKA Blueprint
+# Deploy all services in one click: https://dashboard.render.com/select-repo
+# Docs: https://render.com/docs/blueprint-spec
+
+databases:
+  - name: zaska-postgres
+    databaseName: zaska
+    user: zaska_admin
+    plan: starter           # $7/month — upgrade to 'standard' for production
+    postgresMajorVersion: 16
+
+services:
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  - type: redis
+    name: zaska-redis
+    plan: starter           # $10/month
+    ipAllowList: []         # internal only — no public access
+
+  # ── Backend API (FastAPI) ──────────────────────────────────────────────────
+  - type: web
+    name: zaska-backend
+    runtime: docker
+    dockerfilePath: ./backend/fastapi/Dockerfile
+    dockerContext: .
+    plan: starter           # $7/month
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: zaska-postgres
+          property: connectionString   # auto-filled — config.py converts to +psycopg
+      - key: REDIS_URL
+        fromService:
+          name: zaska-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: zaska-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: zaska-redis
+          type: redis
+          property: connectionString
+      - key: PYTHONPATH
+        value: /app/backend/fastapi
+      - key: ENV
+        value: production
+      - key: PAYMENT_MODE
+        value: sandbox              # change to 'production' when providers are live
+      - key: OTP_PROVIDER
+        value: smtp
+      - key: JWT_SECRET
+        generateValue: true         # Render generates a secure random value
+      # ── Set these manually in Render dashboard after deploy ────────────────
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: FEDAPAY_API_KEY
+        sync: false
+      - key: FLUTTERWAVE_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false                 # e.g. https://zaska-frontend.onrender.com
+      - key: PAYMENT_WEBHOOK_BASE_URL
+        sync: false                 # e.g. https://zaska-backend.onrender.com
+      - key: PAYMENT_REDIRECT_URL
+        sync: false                 # e.g. https://zaska-frontend.onrender.com/payment/success
+
+  # ── Celery Worker ──────────────────────────────────────────────────────────
+  - type: worker
+    name: zaska-celery-worker
+    runtime: docker
+    dockerfilePath: ./backend/fastapi/Dockerfile
+    dockerContext: .
+    startCommand: celery -A app.worker.celery_app.celery_app worker --loglevel=info --concurrency=2
+    plan: starter
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: zaska-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: zaska-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: zaska-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: zaska-redis
+          type: redis
+          property: connectionString
+      - key: PYTHONPATH
+        value: /app/backend/fastapi
+      - key: ENV
+        value: production
+      - key: PAYMENT_MODE
+        value: sandbox
+      - key: JWT_SECRET
+        sync: false                 # copy same value as zaska-backend
+
+  # ── Celery Beat (scheduler) ────────────────────────────────────────────────
+  - type: worker
+    name: zaska-celery-beat
+    runtime: docker
+    dockerfilePath: ./backend/fastapi/Dockerfile
+    dockerContext: .
+    startCommand: celery -A app.worker.celery_app.celery_app beat --loglevel=info --scheduler=celery.beat:PersistentScheduler --schedule=/tmp/celerybeat-schedule
+    plan: starter
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: zaska-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: zaska-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          name: zaska-redis
+          type: redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          name: zaska-redis
+          type: redis
+          property: connectionString
+      - key: PYTHONPATH
+        value: /app/backend/fastapi
+      - key: ENV
+        value: production
+      - key: PAYMENT_MODE
+        value: sandbox
+      - key: JWT_SECRET
+        sync: false                 # copy same value as zaska-backend
+
+  # ── Frontend (React/Vite — static build) ───────────────────────────────────
+  - type: web
+    name: zaska-frontend
+    runtime: static
+    buildCommand: npm ci && npx vite build
+    staticPublishPath: ./dist
+    plan: free                      # static sites are free on Render
+    buildEnvVars:
+      - key: VITE_API_URL
+        value: https://zaska-backend.onrender.com/api
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
