@@ -106,6 +106,15 @@ class Settings(BaseSettings):
     brevo_api_key: str = ""
     email_from_address: str = ""
     email_from_name: str = "ZASKA"
+    # Comma-separated admin emails for KYC review alerts
+    # e.g. admin@zaska.app,ops@zaska.app
+    admin_notification_emails: str = ""
+    # Frontend base URL used in email CTA buttons
+    app_frontend_url: str = "https://zaska-frontend.onrender.com"
+
+    @property
+    def admin_email_list(self) -> list[str]:
+        return [e.strip() for e in self.admin_notification_emails.split(",") if e.strip()]
 
     sentry_dsn: str = ""
 

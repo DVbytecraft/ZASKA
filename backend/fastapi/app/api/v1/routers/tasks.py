@@ -211,6 +211,7 @@ def apply_task(
     task_id: str,
     payload: TaskApplyPayload,
     service: TaskService = Depends(get_task_service),
+    db: Session = Depends(get_db),
     user_id: str = Depends(require_verified_user),
 ):
     try:
@@ -228,6 +229,24 @@ def apply_task(
             currency=currency,
             message=payload.message,
         )
+
+        # Notify task creator
+        try:
+            from app.core.email import send_task_application_email
+            creator = db.get(User, task.created_by)
+            tasker = db.get(User, user_id)
+            if creator and creator.email:
+                tasker_name = " ".join(filter(None, [tasker.first_name, tasker.last_name])) if tasker else "Un prestataire"
+                send_task_application_email(
+                    to_email=creator.email,
+                    task_title=task.title,
+                    tasker_name=tasker_name or "Un prestataire",
+                    proposed_price=float(payload.proposed_price) if payload.proposed_price else None,
+                    currency=currency,
+                )
+        except Exception:
+            pass  # email is best-effort — never block the response
+
         return success_response({
             "id": application.id,
             "taskId": application.task_id,
@@ -323,6 +342,7 @@ def negotiate_price(
     task_id: str,
     payload: NegotiatePayload,
     service: TaskService = Depends(get_task_service),
+    db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
     """Exécutant soumet un contre-prix. Le client reçoit la demande à valider."""
@@ -338,6 +358,24 @@ def negotiate_price(
             raise HTTPException(status_code=409, detail="La négociation n'est possible que sur une tâche OPEN")
 
         task = service.propose_price(task_id=task_id, proposer_id=user_id, proposed_price=payload.proposed_price)
+
+        # Notify task creator of new price proposal
+        try:
+            from app.core.email import send_price_proposal_email
+            creator = db.get(User, task.created_by)
+            proposer = db.get(User, user_id)
+            if creator and creator.email:
+                proposer_name = " ".join(filter(None, [proposer.first_name, proposer.last_name])) if proposer else "Un prestataire"
+                send_price_proposal_email(
+                    to_email=creator.email,
+                    task_title=task.title,
+                    tasker_name=proposer_name or "Un prestataire",
+                    proposed_price=float(payload.proposed_price),
+                    currency=task.currency,
+                )
+        except Exception:
+            pass
+
         return success_response({
             **_serialize_task(task),
             "message": "Demande de modification de prix envoyée au client. En attente de validation.",
