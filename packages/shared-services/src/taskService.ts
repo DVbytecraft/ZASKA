@@ -19,6 +19,16 @@ export const taskService = {
     return apiClient.get<Task[]>(`/tasks${status ? `?status=${status}` : ""}`);
   },
 
+  listMyTasks(status?: string) {
+    const params = new URLSearchParams({ mine: "true" });
+    if (status) params.set("status", status);
+    return apiClient.get<Task[]>(`/tasks?${params.toString()}`);
+  },
+
+  browseAvailableTasks() {
+    return apiClient.get<Task[]>("/tasks?status=OPEN");
+  },
+
   getTask(taskId: string) {
     return apiClient.get<Task>(`/tasks/${taskId}`);
   },

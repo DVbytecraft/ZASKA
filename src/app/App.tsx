@@ -266,6 +266,7 @@ export default function App() {
         return (
           <HomeScreen
             onPostTask={() => setCurrentScreen('taskModeSelection')}
+            onFindTasks={() => setCurrentScreen('taskerMode')}
             onViewApplicants={(taskId) => {
               setCurrentTaskId(taskId);
               setCurrentScreen('applicants');
@@ -403,7 +404,15 @@ export default function App() {
         return <CompletionScreen onDone={() => setCurrentScreen('home')} />;
 
       case 'taskerMode':
-        return <TaskerModeScreen onApply={() => setCurrentScreen('taskerApply')} />;
+        return (
+          <TaskerModeScreen
+            onApply={(taskId) => {
+              setCurrentTaskId(taskId);
+              setCurrentScreen('taskerApply');
+            }}
+            onBack={() => setCurrentScreen('home')}
+          />
+        );
 
       case 'taskerFastMode':
         return <TaskerFastModeScreen onAccept={() => setCurrentScreen('taskDetail')} />;

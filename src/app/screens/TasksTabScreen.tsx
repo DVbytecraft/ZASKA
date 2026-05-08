@@ -20,7 +20,7 @@ export function TasksTabScreen({ onTaskClick, onViewApplicants, onPostTask }: Ta
   const load = () => {
     setLoading(true);
     setError(null);
-    taskService.listTasks()
+    taskService.listMyTasks()
       .then(setTasks)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load tasks'))
       .finally(() => setLoading(false));

@@ -54,10 +54,12 @@ class TaskService:
         self.db.delete(task)
         self.db.commit()
 
-    def list_tasks(self, status: str | None = None) -> list[Task]:
+    def list_tasks(self, status: str | None = None, created_by: str | None = None) -> list[Task]:
         query = self.db.query(Task)
         if status:
             query = query.filter(Task.status == status.upper())
+        if created_by:
+            query = query.filter(Task.created_by == created_by)
         return query.order_by(Task.created_at.desc()).all()
 
     def update_status(self, task_id: str, status: str) -> Task:

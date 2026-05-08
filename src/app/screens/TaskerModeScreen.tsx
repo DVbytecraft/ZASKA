@@ -1,60 +1,119 @@
+import { useEffect, useState } from 'react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
-import { MapPin, Clock, Zap } from 'lucide-react';
+import { MapPin, Clock, Zap, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
+import { taskService, apiClient } from '@zaska/shared-services';
+import type { Task } from '@zaska/shared-services';
 
 interface TaskerModeScreenProps {
-  onApply?: () => void;
+  onApply: (taskId: string) => void;
+  onBack?: () => void;
 }
 
-export function TaskerModeScreen({ onApply }: TaskerModeScreenProps = {}) {
-  const tasks = [
-    { id: 1, title: 'Grocery shopping', location: '0.3 mi', time: '2h', price: '25', urgent: false },
-    { id: 2, title: 'Clean apartment', location: '0.7 mi', time: '3h', price: '45', urgent: true },
-    { id: 3, title: 'Move furniture', location: '1.2 mi', time: '4h', price: '60', urgent: false },
-    { id: 4, title: 'Dog walking', location: '0.5 mi', time: '1h', price: '20', urgent: false }
-  ];
+export function TaskerModeScreen({ onApply, onBack }: TaskerModeScreenProps) {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const myId = apiClient.getUserId();
+
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    taskService
+      .browseAvailableTasks()
+      .then((data) => {
+        // Exclude tasks the current user created
+        setTasks(data.filter((t) => t.createdBy !== myId && t.created_by !== myId));
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Impossible de charger les tâches'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, []);
 
   return (
     <div className="h-full overflow-auto pb-24 bg-gray-50">
       <div className="px-6 pt-8 pb-8 bg-gradient-to-br from-[#1E40AF] to-[#1E3A8A]">
-        <h1 className="text-2xl font-bold text-white mb-1">Available tasks</h1>
-        <p className="text-white/75 text-sm">Accept tasks and start earning</p>
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h1 className="text-2xl font-bold text-white">Tâches disponibles</h1>
+            <p className="text-white/75 text-sm">Postule et commence à gagner</p>
+          </div>
+          <button
+            onClick={load}
+            className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center transition-colors border border-white/10"
+          >
+            <RefreshCw size={16} className="text-white" />
+          </button>
+        </div>
       </div>
 
       <div className="px-6 py-4 space-y-3">
-        {tasks.map(task => (
+        {loading && (
+          <div className="flex items-center justify-center h-48">
+            <Loader2 size={32} className="animate-spin text-blue-600" />
+          </div>
+        )}
+
+        {error && !loading && (
+          <div className="flex flex-col items-center justify-center h-48 gap-3">
+            <AlertCircle size={36} className="text-red-400" />
+            <p className="text-sm text-red-600 text-center">{error}</p>
+            <button onClick={load} className="text-sm font-semibold text-blue-700 hover:underline flex items-center gap-1">
+              <RefreshCw size={14} /> Réessayer
+            </button>
+          </div>
+        )}
+
+        {!loading && !error && tasks.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-48 gap-3 text-gray-400">
+            <Clock size={40} className="text-gray-300" />
+            <p className="text-sm font-medium text-center">Aucune tâche disponible pour le moment</p>
+            <p className="text-xs text-gray-400 text-center">Reviens plus tard ou active les notifications</p>
+          </div>
+        )}
+
+        {!loading && !error && tasks.map((task) => (
           <Card key={task.id} className="hover:shadow-lg transition-all">
             <div className="flex items-start justify-between mb-3">
-              <h3 className="text-base font-semibold text-gray-900 flex-1">{task.title}</h3>
+              <h3 className="text-base font-semibold text-gray-900 flex-1">
+                {task.title || task.description?.slice(0, 50)}
+              </h3>
               {task.urgent && (
-                <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-700 rounded-lg text-xs font-semibold ml-2">
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-700 rounded-lg text-xs font-semibold ml-2 flex-shrink-0">
                   <Zap size={12} fill="currentColor" />
                   Urgent
                 </span>
               )}
             </div>
 
-            <div className="flex items-center gap-4 mb-4 text-sm text-gray-600">
+            <div className="flex items-center gap-4 mb-4 text-sm text-gray-500">
+              {task.latitude && task.longitude && (
+                <div className="flex items-center gap-1.5">
+                  <MapPin size={14} strokeWidth={2.5} />
+                  <span>Géolocalisé</span>
+                </div>
+              )}
               <div className="flex items-center gap-1.5">
-                <MapPin size={15} strokeWidth={2.5} />
-                <span>{task.location}</span>
-              </div>
-              <span className="text-gray-300">•</span>
-              <div className="flex items-center gap-1.5">
-                <Clock size={15} strokeWidth={2.5} />
-                <span>{task.time}</span>
+                <Clock size={14} strokeWidth={2.5} />
+                <span>{new Date(task.created_at ?? task.createdAt ?? '').toLocaleDateString('fr-FR')}</span>
               </div>
             </div>
 
             <div className="flex items-center justify-between">
               <div>
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-gray-900">${task.price}</span>
-                  <span className="text-xs text-gray-500">budget</span>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-2xl font-bold text-gray-900">
+                    {Number(task.price).toLocaleString()}
+                  </span>
+                  <span className="text-sm text-gray-500">{task.currency}</span>
                 </div>
-                <p className="text-xs text-gray-500 mt-0.5">Or propose your price</p>
+                <p className="text-xs text-gray-400 mt-0.5">Budget ou propose ton prix</p>
               </div>
-              <Button size="md" onClick={onApply}>Apply</Button>
+              <Button size="md" onClick={() => onApply(task.id)}>
+                Postuler
+              </Button>
             </div>
           </Card>
         ))}

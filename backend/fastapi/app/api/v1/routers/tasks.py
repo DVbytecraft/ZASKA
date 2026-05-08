@@ -126,12 +126,12 @@ def create_task(
 @router.get("")
 def list_tasks(
     status: str | None = None,
+    mine: bool = False,
     service: TaskService = Depends(get_task_service),
     user_id: str = Depends(get_current_user_id),
 ):
-    _ = user_id
     try:
-        tasks = service.list_tasks(status=status)
+        tasks = service.list_tasks(status=status, created_by=user_id if mine else None)
         return success_response([_serialize_task(t) for t in tasks])
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de charger les tâches") from exc

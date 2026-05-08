@@ -7,6 +7,7 @@ import { Sparkles, Package, FileText, Users, CheckCircle2, Activity, Search, Bel
 
 interface HomeScreenProps {
   onPostTask: () => void;
+  onFindTasks?: () => void;
   onViewApplicants?: (taskId: string) => void;
   onTaskDetail?: (taskId: string) => void;
   onCategories?: () => void;
@@ -45,6 +46,7 @@ function formatAmount(price: number, currency: string) {
 
 export function HomeScreen({
   onPostTask,
+  onFindTasks,
   onViewApplicants,
   onTaskDetail,
   onCategories,
@@ -104,9 +106,19 @@ export function HomeScreen({
           </div>
         </div>
 
-        <Button fullWidth onClick={onPostTask}>
-          Post a task
-        </Button>
+        <div className="flex gap-3">
+          <Button fullWidth onClick={onPostTask}>
+            Poster une tâche
+          </Button>
+          {onFindTasks && (
+            <button
+              onClick={onFindTasks}
+              className="flex-1 py-3 rounded-2xl bg-white/20 hover:bg-white/30 text-white font-semibold text-sm border border-white/30 transition-all active:scale-[0.98]"
+            >
+              Trouver une tâche
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="px-6 pt-4">
