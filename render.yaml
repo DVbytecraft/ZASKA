@@ -79,7 +79,7 @@ services:
     runtime: docker
     dockerfilePath: ./backend/fastapi/Dockerfile
     dockerContext: .
-    startCommand: celery -A app.worker.celery_app.celery_app worker --loglevel=info --concurrency=2
+    dockerCommand: celery -A app.worker.celery_app.celery_app worker --loglevel=info --concurrency=2
     plan: starter
     envVars:
       - key: DATABASE_URL
@@ -116,7 +116,7 @@ services:
     runtime: docker
     dockerfilePath: ./backend/fastapi/Dockerfile
     dockerContext: .
-    startCommand: celery -A app.worker.celery_app.celery_app beat --loglevel=info --scheduler=celery.beat:PersistentScheduler --schedule=/tmp/celerybeat-schedule
+    dockerCommand: celery -A app.worker.celery_app.celery_app beat --loglevel=info --scheduler=celery.beat:PersistentScheduler --schedule=/tmp/celerybeat-schedule
     plan: starter
     envVars:
       - key: DATABASE_URL
