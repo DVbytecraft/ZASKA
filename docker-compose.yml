@@ -80,6 +80,7 @@ services:
       - "${BACKEND_PUBLISH_PORT:-6969}:6969"
     networks:
       - zaska-network
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6969/health').read()"]
       interval: 15s
@@ -110,6 +111,7 @@ services:
         condition: service_healthy
     networks:
       - zaska-network
+    restart: unless-stopped
 
   celery_beat:
     build:
@@ -134,6 +136,7 @@ services:
         condition: service_healthy
     networks:
       - zaska-network
+    restart: unless-stopped
 
   frontend:
     build:
@@ -150,6 +153,7 @@ services:
       - "${FRONTEND_PUBLISH_PORT:-3010}:3010"
     networks:
       - zaska-network
+    restart: unless-stopped
 
   # ── Nginx reverse proxy (production profile) ────────────────────────────────
   # Enable with: docker compose --profile production up

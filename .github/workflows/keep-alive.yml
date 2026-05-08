@@ -1,0 +1,39 @@
+name: Keep-Alive
+
+# Pings the production backend and frontend every 14 minutes to prevent
+# free-tier platforms (Render, Railway) from spinning down idle services.
+# On paid plans this is harmless — remove if not needed.
+#
+# Setup: add these variables in GitHub repo Settings → Variables → Actions:
+#   PRODUCTION_API_URL     e.g. https://api.zaska.app
+#   PRODUCTION_FRONTEND_URL  e.g. https://zaska.app
+
+on:
+  schedule:
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping production services
+    runs-on: ubuntu-latest
+    # Skip if the variable is not configured yet (avoids noise during dev)
+    if: vars.PRODUCTION_API_URL != ''
+
+    steps:
+      - name: Ping backend health
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${{ vars.PRODUCTION_API_URL }}/health")
+          echo "Backend status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::Backend returned $STATUS — service may be down"
+          fi
+
+      - name: Ping frontend
+        if: vars.PRODUCTION_FRONTEND_URL != ''
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "${{ vars.PRODUCTION_FRONTEND_URL }}")
+          echo "Frontend status: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::Frontend returned $STATUS — service may be down"
+          fi
