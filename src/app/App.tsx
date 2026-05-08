@@ -3,6 +3,7 @@ import { authService, apiClient } from '@zaska/shared-services';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoadingScreen } from './screens/LoadingScreen';
 import { BottomNav } from './components/BottomNav';
+import { InstallPrompt } from './components/InstallPrompt';
 
 // Eagerly loaded: needed before any interaction (auth guard, fallback)
 import { SplashScreen } from './screens/SplashScreen';
@@ -670,6 +671,7 @@ export default function App() {
         {showBottomNav && (
           <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
         )}
+        <InstallPrompt />
       </div>
     </ErrorBoundary>
   );
