@@ -7,8 +7,8 @@ databases:
   - name: zaska-postgres
     databaseName: zaska
     user: zaska_admin
-    plan: starter           # $7/month — upgrade to 'standard' for production
-    postgresMajorVersion: 16
+    plan: free              # free tier (90-day expiry) — upgrade to 'basic-256mb' for production
+    postgresMajorVersion: "16"
 
 services:
   # ── Redis ──────────────────────────────────────────────────────────────────
@@ -153,7 +153,6 @@ services:
     runtime: static
     buildCommand: npm ci && npx vite build
     staticPublishPath: ./dist
-    plan: free                      # static sites are free on Render
     envVars:
       - key: VITE_API_URL
         value: https://zaska-backend.onrender.com/api
