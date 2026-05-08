@@ -232,3 +232,15 @@ export interface PaymentMethod {
   details: string;
   isDefault: boolean;
 }
+
+export interface NegotiationEvent {
+  id: string;
+  taskId: string;
+  actorId: string;
+  actorName: string;
+  /** "proposed" | "accepted" | "rejected" | "abandoned" | "counter" */
+  eventType: string;
+  price: number | null;
+  currency: string;
+  createdAt: string;
+}

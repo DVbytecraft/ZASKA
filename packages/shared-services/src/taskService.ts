@@ -1,5 +1,5 @@
 import { apiClient } from "./apiClient";
-import type { Task, TaskApplication, TaskPayload } from "./types";
+import type { Task, TaskApplication, TaskPayload, NegotiationEvent } from "./types";
 
 export const taskService = {
   createTask(payload: TaskPayload) {
@@ -17,14 +17,34 @@ export const taskService = {
     });
   },
 
-  listTasks(status?: string) {
-    return apiClient.get<Task[]>(`/tasks${status ? `?status=${status}` : ""}`);
+  listTasks(status?: string, lat?: number, lng?: number) {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (lat !== undefined && lng !== undefined) {
+      params.set("lat", String(lat));
+      params.set("lng", String(lng));
+    }
+    const q = params.toString();
+    return apiClient.get<Task[]>(`/tasks${q ? `?${q}` : ""}`);
   },
 
   listMyTasks(status?: string) {
     const params = new URLSearchParams({ mine: "true" });
     if (status) params.set("status", status);
     return apiClient.get<Task[]>(`/tasks?${params.toString()}`);
+  },
+
+  /** Tasks I created that are still open for applications */
+  listMyOpenTasks() {
+    const params = new URLSearchParams({ mine: "true", status: "OPEN" });
+    return apiClient.get<Task[]>(`/tasks?${params.toString()}`);
+  },
+
+  /** Tasks I created that are active (ASSIGNED or PENDING_VALIDATION) — "archived" */
+  listMyActiveTasks() {
+    return taskService.listMyTasks().then((tasks) =>
+      tasks.filter((t) => t.status === "ASSIGNED" || t.status === "PENDING_VALIDATION")
+    );
   },
 
   browseAvailableTasks(lat?: number, lng?: number) {
@@ -107,5 +127,9 @@ export const taskService = {
 
   abandonNegotiation(taskId: string) {
     return apiClient.post<Task>(`/tasks/${taskId}/negotiate/abandon`, {});
+  },
+
+  getNegotiationHistory(taskId: string) {
+    return apiClient.get<NegotiationEvent[]>(`/tasks/${taskId}/negotiate/history`);
   },
 };

@@ -5,10 +5,11 @@ import { TaskProgressBar } from '../components/TaskProgressBar';
 import { TaskStatusBadge } from '../components/TaskStatusBadge';
 import { EscrowBadge } from '../components/EscrowBadge';
 import { taskService, walletService, apiClient } from '@zaska/shared-services';
-import type { Task, Escrow } from '@zaska/shared-services';
+import type { Task, Escrow, NegotiationEvent } from '@zaska/shared-services';
 import {
   ArrowLeft, MapPin, MessageCircle, Users, RefreshCw,
   CheckCircle2, Clock, AlertTriangle, Loader2, TrendingUp,
+  Trash2, History, ChevronDown, ChevronUp,
 } from 'lucide-react';
 
 // ── Negotiation Panel ─────────────────────────────────────────────────────────
@@ -152,6 +153,72 @@ function NegotiationPanel({ task, currentUserId, onReload }: NegotiationPanelPro
   );
 }
 
+// ── Negotiation History Panel ─────────────────────────────────────────────────
+function NegotiationHistoryPanel({ taskId, currency }: { taskId: string; currency: string }) {
+  const [events, setEvents] = useState<NegotiationEvent[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  const load = async () => {
+    if (!open) { setOpen(true); }
+    if (events.length > 0) { setOpen(!open); return; }
+    setLoading(true);
+    try {
+      const evts = await taskService.getNegotiationHistory(taskId);
+      setEvents(evts);
+      setOpen(true);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  };
+
+  const EVENT_LABELS: Record<string, { label: string; color: string }> = {
+    proposed: { label: 'Prix proposé', color: 'text-amber-700 bg-amber-50 border-amber-200' },
+    accepted: { label: 'Prix accepté', color: 'text-green-700 bg-green-50 border-green-200' },
+    rejected: { label: 'Prix refusé', color: 'text-red-700 bg-red-50 border-red-200' },
+    abandoned: { label: 'Tâche abandonnée', color: 'text-gray-600 bg-gray-50 border-gray-200' },
+    counter: { label: 'Contre-offre', color: 'text-blue-700 bg-blue-50 border-blue-200' },
+  };
+
+  return (
+    <Card>
+      <button
+        onClick={load}
+        className="w-full flex items-center justify-between text-sm font-semibold text-gray-700"
+      >
+        <span className="flex items-center gap-2">
+          <History size={16} className="text-[#6D28D9]" />
+          Historique des négociations
+        </span>
+        {loading
+          ? <Loader2 size={14} className="animate-spin text-gray-400" />
+          : open ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+      </button>
+      {open && !loading && (
+        <div className="mt-3 space-y-2">
+          {events.length === 0 ? (
+            <p className="text-xs text-gray-400 text-center py-2">Aucun historique disponible</p>
+          ) : (
+            events.map((ev) => {
+              const meta = EVENT_LABELS[ev.eventType] ?? { label: ev.eventType, color: 'text-gray-600 bg-gray-50 border-gray-200' };
+              return (
+                <div key={ev.id} className={`flex items-center justify-between rounded-xl border px-3 py-2 ${meta.color}`}>
+                  <div>
+                    <p className="text-xs font-semibold">{meta.label}</p>
+                    <p className="text-xs opacity-70">{ev.actorName} · {new Date(ev.createdAt).toLocaleString('fr-FR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                  {ev.price != null && (
+                    <p className="text-sm font-bold">{currency} {ev.price.toFixed(2)}</p>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 interface TaskDetailScreenProps {
   taskId: string;
   onBack: () => void;
@@ -180,6 +247,8 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
   const [actionError, setActionError] = useState<string | null>(null);
   const [showContestForm, setShowContestForm] = useState(false);
   const [contestReason, setContestReason] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const currentUserId = apiClient.getUserId();
 
@@ -202,6 +271,19 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
   useEffect(() => { load(); }, [load]);
 
   // ── Action handlers ──────────────────────────────────────────────────────────
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await taskService.deleteTask(taskId);
+      onBack();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Impossible de supprimer la tâche');
+      setShowDeleteConfirm(false);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const handleExecutorDone = async () => {
     setActionLoading(true);
@@ -299,13 +381,40 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
+      {/* Delete confirmation modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm">
+            <h3 className="font-bold text-gray-900 text-lg mb-2">Supprimer la tâche ?</h3>
+            <p className="text-sm text-gray-500 mb-5">Cette action est irréversible. La tâche sera définitivement supprimée.</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="flex-1 py-3 rounded-xl border-2 border-gray-200 font-semibold text-gray-700"
+                disabled={deleting}
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex-1 py-3 rounded-xl bg-red-500 font-semibold text-white flex items-center justify-center gap-2"
+              >
+                {deleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                Supprimer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="px-6 pt-8 pb-4 bg-white border-b border-gray-200">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors">
             <ArrowLeft size={24} className="text-gray-700" />
           </button>
-          <div>
+          <div className="flex-1">
             <h2 className="text-2xl font-bold text-gray-900 mb-1">
               {isClient ? 'Ma tâche' : isExecutor ? 'Ma mission' : 'Détail de la tâche'}
             </h2>
@@ -314,6 +423,16 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
               size="md"
             />
           </div>
+          {/* Delete button — only creator, only on deletable statuses */}
+          {isClient && (task.status === 'OPEN' || task.status === 'PAUSED') && (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="p-2 hover:bg-red-50 rounded-full transition-colors"
+              title="Supprimer la tâche"
+            >
+              <Trash2 size={20} className="text-red-500" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -489,6 +608,11 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
             currentUserId={currentUserId ?? ''}
             onReload={load}
           />
+        )}
+
+        {/* ── Negotiation history (for parties involved) ── */}
+        {(isClient || isExecutor) && task.negotiationStatus && task.negotiationStatus !== 'none' && (
+          <NegotiationHistoryPanel taskId={taskId} currency={task.currency} />
         )}
 
         {/* Payment / Escrow */}

@@ -46,6 +46,23 @@ def _notify(db: Session, user_id: str, type_: str, title: str, body: str) -> Non
         pass
 
 
+def _record_neg_event(
+    db: Session, task_id: str, actor_id: str,
+    event_type: str, price: Decimal | None, currency: str
+) -> None:
+    """Persist a negotiation event to the audit trail. Never raises."""
+    try:
+        from app.models.negotiation_event import NegotiationEvent
+        ev = NegotiationEvent(
+            task_id=task_id, actor_id=actor_id,
+            event_type=event_type, price=price, currency=currency,
+        )
+        db.add(ev)
+        db.flush()
+    except Exception:
+        pass
+
+
 # ─── Serializers ─────────────────────────────────────────────────────────────
 
 def _serialize_task(task: Task) -> dict:
@@ -129,6 +146,7 @@ def list_tasks(
     assigned_to_me: bool = False,
     lat: float | None = None,
     lng: float | None = None,
+    radius_km: float | None = None,
     service: TaskService = Depends(get_task_service),
     user_id: str = Depends(get_current_user_id),
 ):
@@ -139,6 +157,7 @@ def list_tasks(
             assigned_to=user_id if assigned_to_me else None,
             ref_lat=lat,
             ref_lng=lng,
+            radius_km=radius_km,
         )
         result = []
         for t, dist in zip(tasks, distances):
@@ -450,6 +469,7 @@ def negotiate_price(
 
         _notify(db, task.created_by, "warning", "Modification de prix demandée",
                 f"Un prestataire propose un nouveau prix pour : {task.title}")
+        _record_neg_event(db, task_id, user_id, "proposed", payload.proposed_price, task.currency)
         db.commit()
 
         return success_response({
@@ -510,6 +530,9 @@ def respond_to_negotiation(
             else:
                 _notify(db, task.negotiated_by, "warning", "Modification de prix refusée",
                         f"Le client a refusé votre demande de prix pour : {task.title}")
+        ev_type = "accepted" if payload.accept else "rejected"
+        ev_price = task.negotiated_price if payload.accept else None
+        _record_neg_event(db, task_id, user_id, ev_type, ev_price, task.currency)
         db.commit()
 
         msg = "Prix accepté. La messagerie est maintenant ouverte." if payload.accept else "Prix refusé. L'exécutant sera notifié."
@@ -528,6 +551,7 @@ class AbandonNegotiationPayload(BaseModel):
 def abandon_negotiation(
     task_id: str,
     service: TaskService = Depends(get_task_service),
+    db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
     """Exécutant abandonne après refus du prix → tâche republié (OPEN)."""
@@ -539,6 +563,8 @@ def abandon_negotiation(
             raise HTTPException(status_code=409, detail="L'abandon n'est possible qu'après un refus de prix")
 
         task = service.abandon_and_republish(task_id)
+        _record_neg_event(db, task_id, user_id, "abandoned", None, task.currency)
+        db.commit()
         return success_response({
             **_serialize_task(task),
             "message": "Tâche abandonnée et republiée. Elle est de nouveau visible pour tous.",
@@ -547,6 +573,57 @@ def abandon_negotiation(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible d'abandonner la tâche") from exc
+
+
+@router.get("/{task_id}/negotiate/history")
+def get_negotiation_history(
+    task_id: str,
+    service: TaskService = Depends(get_task_service),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Historique complet des échanges de prix pour une tâche."""
+    try:
+        task = _get_task_or_404(task_id, service)
+        if task.created_by != user_id and task.assigned_to != user_id:
+            raise HTTPException(status_code=403, detail="Accès non autorisé à cet historique")
+        from app.models.negotiation_event import NegotiationEvent
+        events = (
+            db.query(NegotiationEvent)
+            .filter(NegotiationEvent.task_id == task_id)
+            .order_by(NegotiationEvent.created_at.asc())
+            .all()
+        )
+        # Enrich with actor name
+        actor_cache: dict[str, str] = {}
+        def actor_name(actor_id: str) -> str:
+            if actor_id not in actor_cache:
+                u = db.get(User, actor_id)
+                if u:
+                    name = " ".join(filter(None, [u.first_name, u.last_name])) or (u.email or u.id[:8])
+                else:
+                    name = actor_id[:8]
+                actor_cache[actor_id] = name
+            return actor_cache[actor_id]
+
+        result = [
+            {
+                "id": ev.id,
+                "taskId": ev.task_id,
+                "actorId": ev.actor_id,
+                "actorName": actor_name(ev.actor_id),
+                "eventType": ev.event_type,
+                "price": float(ev.price) if ev.price is not None else None,
+                "currency": ev.currency,
+                "createdAt": ev.created_at.isoformat(),
+            }
+            for ev in events
+        ]
+        return success_response(result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible de charger l'historique") from exc
 
 
 # ─── Task Completion ──────────────────────────────────────────────────────────

@@ -101,6 +101,86 @@ def get_stats(
     )
 
 
+@router.get("/metrics")
+def get_metrics(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+):
+    """Résumé des métriques pour le tableau de bord admin."""
+    from sqlalchemy import func as _func
+    from app.models.dispute import DisputeRecord
+
+    total_tasks = db.query(Task).count()
+    open_tasks = db.query(Task).filter(Task.status == "OPEN").count()
+    assigned_tasks = db.query(Task).filter(Task.status == "ASSIGNED").count()
+    completed_tasks = db.query(Task).filter(Task.status == "COMPLETED").count()
+    total_users = db.query(User).count()
+
+    # Active users: users with at least one task or transaction in the last 24h
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    active_users_today = db.query(Task.created_by).filter(Task.created_at >= cutoff).distinct().count()
+
+    # Total volume (completed escrow releases)
+    revenue_row = db.execute(
+        select(
+            _func.coalesce(_func.sum(Transaction.amount), Decimal("0")).label("total"),
+            Wallet.currency.label("currency"),
+        )
+        .join(Wallet, Transaction.wallet_id == Wallet.id)
+        .where(
+            Transaction.status == "completed",
+            Transaction.type == "credit",
+            Transaction.reference.like("escrow_release:%"),
+        )
+        .group_by(Wallet.currency)
+        .order_by(desc(_func.sum(Transaction.amount)))
+        .limit(1)
+    ).first()
+
+    open_disputes = db.query(DisputeRecord).filter(
+        DisputeRecord.status.in_(["open", "pending"])
+    ).count()
+
+    return success_response({
+        "total_tasks": total_tasks,
+        "open_tasks": open_tasks,
+        "assigned_tasks": assigned_tasks,
+        "completed_tasks": completed_tasks,
+        "total_users": total_users,
+        "active_users_today": active_users_today,
+        "total_volume": str(revenue_row.total) if revenue_row else "0",
+        "currency": revenue_row.currency if revenue_row else "XOF",
+        "open_disputes": open_disputes,
+    })
+
+
+@router.get("/tasks/recent")
+def get_recent_tasks(
+    limit: int = Query(default=20, le=50),
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+):
+    """20 dernières tâches toutes statuts confondus."""
+    tasks = (
+        db.query(Task)
+        .order_by(Task.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return success_response([
+        {
+            "id": t.id,
+            "title": t.title,
+            "status": t.status,
+            "price": float(t.price),
+            "currency": t.currency,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        }
+        for t in tasks
+    ])
+
+
 @router.get("/analytics/summary")
 def analytics_summary(
     db: Session = Depends(get_db),
