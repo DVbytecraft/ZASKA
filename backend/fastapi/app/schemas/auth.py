@@ -89,7 +89,7 @@ class VerifyOtpPayload(BaseModel):
 class RefreshPayload(BaseModel):
     model_config = ConfigDict(strict=True)
 
-    refresh_token: str
+    refresh_token: str = Field(min_length=20, max_length=512)
 
 
 class TokenResponse(BaseModel):

@@ -81,19 +81,17 @@ class TaskService:
             query = query.filter(Task.assigned_to == assigned_to)
 
         if ref_lat is not None and ref_lng is not None:
-            # PostGIS: sort by distance from reference point, tasks with no coords go last
-            dist_expr = text(
+            # PostGIS: sort by distance from reference point, tasks with no coords go last.
+            # Use bindparams — never interpolate user coords directly into SQL strings.
+            order_expr = text(
                 "ST_Distance("
                 "ST_SetSRID(ST_MakePoint(tasks.longitude, tasks.latitude), 4326)::geography,"
                 "ST_SetSRID(ST_MakePoint(:ref_lng, :ref_lat), 4326)::geography"
-                ") / 1000.0"
-            )
+                ") ASC"
+            ).bindparams(ref_lng=ref_lng, ref_lat=ref_lat)
             tasks = query.order_by(
-                Task.latitude == 0,   # tasks with no real coords go last
-                text("ST_Distance("
-                     "ST_SetSRID(ST_MakePoint(tasks.longitude, tasks.latitude), 4326)::geography,"
-                     f"ST_SetSRID(ST_MakePoint({ref_lng}, {ref_lat}), 4326)::geography"
-                     ") ASC")
+                Task.latitude == 0,
+                order_expr,
             ).all()
             distances: list[float | None] = []
             for t in tasks:
