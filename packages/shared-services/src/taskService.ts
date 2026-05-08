@@ -10,6 +10,7 @@ export const taskService = {
       currency: payload.currency,
       latitude: payload.latitude,
       longitude: payload.longitude,
+      address: payload.address,
       mode: payload.mode,
       status: payload.status,
     });
@@ -25,8 +26,13 @@ export const taskService = {
     return apiClient.get<Task[]>(`/tasks?${params.toString()}`);
   },
 
-  browseAvailableTasks() {
-    return apiClient.get<Task[]>("/tasks?status=OPEN");
+  browseAvailableTasks(lat?: number, lng?: number) {
+    const params = new URLSearchParams({ status: "OPEN" });
+    if (lat !== undefined && lng !== undefined) {
+      params.set("lat", String(lat));
+      params.set("lng", String(lng));
+    }
+    return apiClient.get<Task[]>(`/tasks?${params.toString()}`);
   },
 
   getTask(taskId: string) {

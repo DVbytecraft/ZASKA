@@ -29,6 +29,7 @@ class TaskService:
             currency=payload["currency"].upper(),
             latitude=payload["latitude"],
             longitude=payload["longitude"],
+            address=payload.get("address"),
             status=payload.get("status", "OPEN"),
             created_by=payload["created_by"],
         )
@@ -54,13 +55,55 @@ class TaskService:
         self.db.delete(task)
         self.db.commit()
 
-    def list_tasks(self, status: str | None = None, created_by: str | None = None) -> list[Task]:
+    def list_tasks(
+        self,
+        status: str | None = None,
+        created_by: str | None = None,
+        ref_lat: float | None = None,
+        ref_lng: float | None = None,
+    ) -> tuple[list[Task], list[float | None]]:
+        """Return (tasks, distances_km). distances are None when no ref provided."""
         query = self.db.query(Task)
         if status:
             query = query.filter(Task.status == status.upper())
         if created_by:
             query = query.filter(Task.created_by == created_by)
-        return query.order_by(Task.created_at.desc()).all()
+
+        if ref_lat is not None and ref_lng is not None:
+            # PostGIS: sort by distance from reference point, tasks with no coords go last
+            dist_expr = text(
+                "ST_Distance("
+                "ST_SetSRID(ST_MakePoint(tasks.longitude, tasks.latitude), 4326)::geography,"
+                "ST_SetSRID(ST_MakePoint(:ref_lng, :ref_lat), 4326)::geography"
+                ") / 1000.0"
+            )
+            tasks = query.order_by(
+                Task.latitude == 0,   # tasks with no real coords go last
+                text("ST_Distance("
+                     "ST_SetSRID(ST_MakePoint(tasks.longitude, tasks.latitude), 4326)::geography,"
+                     f"ST_SetSRID(ST_MakePoint({ref_lng}, {ref_lat}), 4326)::geography"
+                     ") ASC")
+            ).all()
+            distances: list[float | None] = []
+            for t in tasks:
+                if t.latitude and t.longitude and not (t.latitude == 0 and t.longitude == 0):
+                    d = self._haversine(ref_lat, ref_lng, t.latitude, t.longitude)
+                    distances.append(d)
+                else:
+                    distances.append(None)
+            return tasks, distances
+
+        tasks = query.order_by(Task.created_at.desc()).all()
+        return tasks, [None] * len(tasks)
+
+    @staticmethod
+    def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        import math
+        R = 6371.0
+        d_lat = math.radians(lat2 - lat1)
+        d_lon = math.radians(lon2 - lon1)
+        a = math.sin(d_lat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lon / 2) ** 2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     def update_status(self, task_id: str, status: str) -> Task:
         task = self.db.query(Task).filter(Task.id == task_id).one()

@@ -12,6 +12,7 @@ class TaskCreatePayload(BaseModel):
     currency: str = Field(min_length=3, max_length=8)
     latitude: float
     longitude: float
+    address: str | None = Field(default=None, max_length=512)
     mode: str | None = Field(default=None, pattern="^(fast|choose)$")
     status: str = Field(default="OPEN", pattern="^(OPEN|ASSIGNED|COMPLETED)$")
 

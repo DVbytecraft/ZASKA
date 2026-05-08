@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { taskService } from '@zaska/shared-services';
@@ -7,7 +7,6 @@ import { Sparkles, Package, FileText, Users, CheckCircle2, Activity, Search, Bel
 
 interface HomeScreenProps {
   onPostTask: () => void;
-  onFindTasks?: () => void;
   onViewApplicants?: (taskId: string) => void;
   onTaskDetail?: (taskId: string) => void;
   onCategories?: () => void;
@@ -46,7 +45,6 @@ function formatAmount(price: number, currency: string) {
 
 export function HomeScreen({
   onPostTask,
-  onFindTasks,
   onViewApplicants,
   onTaskDetail,
   onCategories,
@@ -57,24 +55,17 @@ export function HomeScreen({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(() => {
     setLoading(true);
+    setError(null);
     taskService
-      .listTasks()
-      .then((data) => {
-        if (!cancelled) setTasks(data);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load tasks');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .listMyTasks()
+      .then(setTasks)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Erreur de chargement'))
+      .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   const recentTasks = tasks.slice(0, 10);
 
@@ -106,19 +97,9 @@ export function HomeScreen({
           </div>
         </div>
 
-        <div className="flex gap-3">
-          <Button fullWidth onClick={onPostTask}>
-            Poster une tâche
-          </Button>
-          {onFindTasks && (
-            <button
-              onClick={onFindTasks}
-              className="flex-1 py-3 rounded-2xl bg-white/20 hover:bg-white/30 text-white font-semibold text-sm border border-white/30 transition-all active:scale-[0.98]"
-            >
-              Trouver une tâche
-            </button>
-          )}
-        </div>
+        <Button fullWidth onClick={onPostTask}>
+          Poster une tâche
+        </Button>
       </div>
 
       <div className="px-6 pt-4">
@@ -160,19 +141,19 @@ export function HomeScreen({
 
         {error && !loading && (
           <div className="bg-red-50 border border-red-100 rounded-2xl p-4 text-center">
-            <p className="text-sm text-red-600">{error}</p>
+            <p className="text-sm text-red-600">Impossible de charger l'activité</p>
             <button
-              onClick={() => window.location.reload()}
+              onClick={load}
               className="mt-2 text-xs text-red-700 font-semibold underline"
             >
-              Retry
+              Réessayer
             </button>
           </div>
         )}
 
         {!loading && !error && recentTasks.length === 0 && (
           <div className="bg-gray-100 rounded-2xl p-8 text-center">
-            <p className="text-sm text-gray-500">No tasks yet. Post your first task!</p>
+            <p className="text-sm text-gray-500">Aucune activité. Publiez votre première tâche !</p>
           </div>
         )}
 

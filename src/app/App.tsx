@@ -137,6 +137,7 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'home') setCurrentScreen('home');
+    else if (activeTab === 'explore') setCurrentScreen('taskerMode');
     else if (activeTab === 'tasks') setCurrentScreen('tasksTab');
     else if (activeTab === 'wallet') setCurrentScreen('wallet');
     else if (activeTab === 'profile') setCurrentScreen('profile');
@@ -178,7 +179,7 @@ export default function App() {
   }, []);
 
   const isAuthenticated = !!apiClient.getAccessToken();
-  const showBottomNav = isAuthenticated && ['home', 'tasksTab', 'wallet', 'profile', 'categories', 'search', 'admin', 'callCenter'].includes(currentScreen);
+  const showBottomNav = isAuthenticated && ['home', 'taskerMode', 'tasksTab', 'wallet', 'profile', 'categories', 'search', 'admin', 'callCenter'].includes(currentScreen);
 
   const renderScreen = () => {
     if (!publicScreens.includes(currentScreen) && !isAuthenticated) {
@@ -266,7 +267,6 @@ export default function App() {
         return (
           <HomeScreen
             onPostTask={() => setCurrentScreen('taskModeSelection')}
-            onFindTasks={() => setCurrentScreen('taskerMode')}
             onViewApplicants={(taskId) => {
               setCurrentTaskId(taskId);
               setCurrentScreen('applicants');

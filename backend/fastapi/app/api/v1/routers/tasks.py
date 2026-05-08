@@ -128,12 +128,24 @@ def create_task(
 def list_tasks(
     status: str | None = None,
     mine: bool = False,
+    lat: float | None = None,
+    lng: float | None = None,
     service: TaskService = Depends(get_task_service),
     user_id: str = Depends(get_current_user_id),
 ):
     try:
-        tasks = service.list_tasks(status=status, created_by=user_id if mine else None)
-        return success_response([_serialize_task(t) for t in tasks])
+        tasks, distances = service.list_tasks(
+            status=status,
+            created_by=user_id if mine else None,
+            ref_lat=lat,
+            ref_lng=lng,
+        )
+        result = []
+        for t, dist in zip(tasks, distances):
+            d = _serialize_task(t)
+            d["distanceKm"] = round(dist, 1) if dist is not None else None
+            result.append(d)
+        return success_response(result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de charger les tâches") from exc
 

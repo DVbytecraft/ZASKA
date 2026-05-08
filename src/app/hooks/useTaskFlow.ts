@@ -10,6 +10,7 @@ interface CreateTaskInput {
   longitude: number;
   currency?: string;
   title?: string;
+  address?: string;
 }
 
 export function useTaskFlow() {
@@ -25,6 +26,7 @@ export function useTaskFlow() {
         currency: input.currency ?? apiClient.getCurrency() ?? "USD",
         latitude: input.latitude,
         longitude: input.longitude,
+        address: input.address,
         mode: input.mode,
       });
     } finally {

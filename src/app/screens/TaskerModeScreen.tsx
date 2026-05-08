@@ -1,51 +1,202 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
-import { MapPin, Clock, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
+import { MapPin, Clock, RefreshCw, AlertCircle, Loader2, ChevronDown, ChevronUp, Navigation } from 'lucide-react';
 import { taskService, apiClient } from '@zaska/shared-services';
-import type { Task } from '@zaska/shared-services';
+import type { Task, UserAddress } from '@zaska/shared-services';
+import { requestGeolocation } from '../hooks/useTaskFlow';
 
 interface TaskerModeScreenProps {
   onApply: (taskId: string) => void;
   onBack?: () => void;
 }
 
-export function TaskerModeScreen({ onApply, onBack }: TaskerModeScreenProps) {
+// ── Distance badge ────────────────────────────────────────────────────────────
+function DistanceBadge({ km }: { km: number | null | undefined }) {
+  if (km === null || km === undefined) {
+    return <span className="text-xs text-gray-400 italic">Distance inconnue</span>;
+  }
+  if (km < 20) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 text-green-700">
+        <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+        {km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`} · Candidat idéal
+      </span>
+    );
+  }
+  if (km < 100) {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+        À {km.toFixed(0)} km
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+      <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+      Loin de vous · {km.toFixed(0)} km
+    </span>
+  );
+}
+
+// ── Task card ─────────────────────────────────────────────────────────────────
+function TaskCard({ task, onApply }: { task: Task; onApply: (id: string) => void }) {
+  return (
+    <Card className="hover:shadow-lg transition-all">
+      <div className="flex items-start justify-between mb-2">
+        <h3 className="text-base font-semibold text-gray-900 flex-1 pr-2">
+          {task.title || task.description?.slice(0, 60)}
+        </h3>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <DistanceBadge km={task.distanceKm} />
+        {task.address && (
+          <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+            <MapPin size={12} /> {task.address}
+          </span>
+        )}
+        {task.createdAt && (
+          <span className="inline-flex items-center gap-1 text-xs text-gray-400">
+            <Clock size={12} /> {new Date(task.createdAt).toLocaleDateString('fr-FR')}
+          </span>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-baseline gap-1">
+            <span className="text-xl font-bold text-gray-900">{Number(task.price).toLocaleString()}</span>
+            <span className="text-sm text-gray-500">{task.currency}</span>
+          </div>
+          <p className="text-xs text-gray-400 mt-0.5">Budget · négociable</p>
+        </div>
+        <Button size="md" onClick={() => onApply(task.id)}>Postuler</Button>
+      </div>
+    </Card>
+  );
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+export function TaskerModeScreen({ onApply }: TaskerModeScreenProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showFar, setShowFar] = useState(false);
+
+  // Reference location for sorting
+  const [refLabel, setRefLabel] = useState<string>('Chargement...');
+  const [refCoords, setRefCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
+  const [showAddressPicker, setShowAddressPicker] = useState(false);
 
   const myId = apiClient.getUserId();
 
-  const load = () => {
+  // Load saved addresses
+  useEffect(() => {
+    apiClient.get<UserAddress[]>('/addresses').then(setSavedAddresses).catch(() => {});
+  }, []);
+
+  // Get GPS on mount
+  useEffect(() => {
+    requestGeolocation()
+      .then(({ latitude, longitude }) => {
+        setRefCoords({ lat: latitude, lng: longitude });
+        setRefLabel('Ma position GPS');
+      })
+      .catch(() => {
+        // Try default address from saved list
+        const def = savedAddresses.find(a => a.isDefault);
+        if (def?.latitude && def?.longitude) {
+          setRefCoords({ lat: def.latitude, lng: def.longitude });
+          setRefLabel(`${def.label} · ${def.city}`);
+        } else {
+          setRefLabel('Position indisponible');
+        }
+      });
+  }, []);
+
+  const load = useCallback(() => {
     setLoading(true);
     setError(null);
     taskService
-      .browseAvailableTasks()
-      .then((data) => {
-        setTasks(data.filter((t) => t.createdBy !== myId));
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Impossible de charger les tâches'))
+      .browseAvailableTasks(refCoords?.lat, refCoords?.lng)
+      .then((data) => setTasks(data.filter(t => t.createdBy !== myId)))
+      .catch((err) => setError(err instanceof Error ? err.message : 'Erreur'))
       .finally(() => setLoading(false));
+  }, [refCoords, myId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const nearTasks = tasks.filter(t => (t.distanceKm ?? Infinity) < 100);
+  const farTasks = tasks.filter(t => (t.distanceKm ?? Infinity) >= 100);
+
+  const selectAddress = (addr: UserAddress) => {
+    if (addr.latitude && addr.longitude) {
+      setRefCoords({ lat: addr.latitude, lng: addr.longitude });
+      setRefLabel(`${addr.label} · ${addr.city}`);
+    }
+    setShowAddressPicker(false);
   };
 
-  useEffect(() => { load(); }, []);
+  const selectGps = () => {
+    requestGeolocation()
+      .then(({ latitude, longitude }) => {
+        setRefCoords({ lat: latitude, lng: longitude });
+        setRefLabel('Ma position GPS');
+      })
+      .catch(() => {})
+      .finally(() => setShowAddressPicker(false));
+  };
 
   return (
     <div className="h-full overflow-auto pb-24 bg-gray-50">
-      <div className="px-6 pt-8 pb-8 bg-gradient-to-br from-[#1E40AF] to-[#1E3A8A]">
-        <div className="flex items-center justify-between mb-2">
+      {/* Header */}
+      <div className="px-6 pt-8 pb-5 bg-gradient-to-br from-[#1E40AF] to-[#1E3A8A]">
+        <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold text-white">Tâches disponibles</h1>
-            <p className="text-white/75 text-sm">Postule et commence à gagner</p>
+            <p className="text-white/70 text-sm">Postule et commence à gagner</p>
           </div>
-          <button
-            onClick={load}
-            className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center transition-colors border border-white/10"
-          >
+          <button onClick={load} className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center border border-white/10">
             <RefreshCw size={16} className="text-white" />
           </button>
         </div>
+
+        {/* Reference location switcher */}
+        <button
+          onClick={() => setShowAddressPicker(!showAddressPicker)}
+          className="w-full flex items-center gap-2 px-4 py-2.5 bg-white/15 hover:bg-white/25 rounded-xl border border-white/20 transition-all"
+        >
+          <Navigation size={14} className="text-white/80 flex-shrink-0" />
+          <span className="flex-1 text-left text-sm font-medium text-white truncate">{refLabel}</span>
+          <ChevronDown size={14} className="text-white/60" />
+        </button>
+
+        {/* Address picker dropdown */}
+        {showAddressPicker && (
+          <div className="mt-2 bg-white rounded-xl shadow-xl overflow-hidden">
+            <button onClick={selectGps} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 border-b border-gray-100">
+              <Navigation size={16} className="text-blue-600" />
+              <span className="text-sm font-medium text-gray-900">Ma position actuelle (GPS)</span>
+            </button>
+            {savedAddresses.map(addr => (
+              <button
+                key={addr.id}
+                onClick={() => selectAddress(addr)}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-0"
+              >
+                <MapPin size={16} className={addr.isDefault ? 'text-purple-600' : 'text-gray-400'} />
+                <div className="flex-1 text-left">
+                  <p className="text-sm font-medium text-gray-900">{addr.label}</p>
+                  <p className="text-xs text-gray-400">{addr.city}, {addr.country}</p>
+                </div>
+                {addr.isDefault && <span className="text-xs text-purple-600 font-semibold">Par défaut</span>}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="px-6 py-4 space-y-3">
@@ -59,59 +210,53 @@ export function TaskerModeScreen({ onApply, onBack }: TaskerModeScreenProps) {
           <div className="flex flex-col items-center justify-center h-48 gap-3">
             <AlertCircle size={36} className="text-red-400" />
             <p className="text-sm text-red-600 text-center">{error}</p>
-            <button onClick={load} className="text-sm font-semibold text-blue-700 hover:underline flex items-center gap-1">
-              <RefreshCw size={14} /> Réessayer
-            </button>
+            <button onClick={load} className="text-sm font-semibold text-blue-700 hover:underline">Réessayer</button>
           </div>
         )}
 
         {!loading && !error && tasks.length === 0 && (
           <div className="flex flex-col items-center justify-center h-48 gap-3 text-gray-400">
             <Clock size={40} className="text-gray-300" />
-            <p className="text-sm font-medium text-center">Aucune tâche disponible pour le moment</p>
-            <p className="text-xs text-gray-400 text-center">Reviens plus tard ou active les notifications</p>
+            <p className="text-sm font-medium">Aucune tâche disponible pour le moment</p>
           </div>
         )}
 
-        {!loading && !error && tasks.map((task) => (
-          <Card key={task.id} className="hover:shadow-lg transition-all">
-            <div className="flex items-start justify-between mb-3">
-              <h3 className="text-base font-semibold text-gray-900 flex-1">
-                {task.title || task.description?.slice(0, 50)}
-              </h3>
+        {/* Section 1 — Near tasks */}
+        {!loading && !error && nearTasks.length > 0 && (
+          <>
+            <div className="flex items-center gap-2 pt-2">
+              <span className="w-2 h-2 rounded-full bg-green-500" />
+              <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                Près de vous ({nearTasks.length})
+              </p>
             </div>
+            {nearTasks.map(task => (
+              <TaskCard key={task.id} task={task} onApply={onApply} />
+            ))}
+          </>
+        )}
 
-            <div className="flex items-center gap-4 mb-4 text-sm text-gray-500">
-              {task.address && (
-                <div className="flex items-center gap-1.5">
-                  <MapPin size={14} strokeWidth={2.5} />
-                  <span className="truncate max-w-[140px]">{task.address}</span>
-                </div>
-              )}
-              {task.createdAt && (
-                <div className="flex items-center gap-1.5">
-                  <Clock size={14} strokeWidth={2.5} />
-                  <span>{new Date(task.createdAt).toLocaleDateString('fr-FR')}</span>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="flex items-baseline gap-1.5">
-                  <span className="text-2xl font-bold text-gray-900">
-                    {Number(task.price).toLocaleString()}
-                  </span>
-                  <span className="text-sm text-gray-500">{task.currency}</span>
-                </div>
-                <p className="text-xs text-gray-400 mt-0.5">Budget ou propose ton prix</p>
+        {/* Section 2 — Far tasks, collapsible */}
+        {!loading && !error && farTasks.length > 0 && (
+          <>
+            <button
+              onClick={() => setShowFar(v => !v)}
+              className="w-full flex items-center justify-between px-4 py-3 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors mt-2"
+            >
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-red-400" />
+                <span className="text-sm font-semibold text-gray-600">
+                  Autres régions · {farTasks.length} tâche{farTasks.length > 1 ? 's' : ''}
+                </span>
               </div>
-              <Button size="md" onClick={() => onApply(task.id)}>
-                Postuler
-              </Button>
-            </div>
-          </Card>
-        ))}
+              {showFar ? <ChevronUp size={16} className="text-gray-500" /> : <ChevronDown size={16} className="text-gray-500" />}
+            </button>
+
+            {showFar && farTasks.map(task => (
+              <TaskCard key={task.id} task={task} onApply={onApply} />
+            ))}
+          </>
+        )}
       </div>
     </div>
   );

@@ -107,8 +107,21 @@ export interface TaskPayload {
   currency: string;
   latitude: number;
   longitude: number;
+  address?: string;
   mode?: TaskMode;
   status?: string;
+}
+
+export interface UserAddress {
+  id: string;
+  label: string;
+  street: string;
+  city: string;
+  country: string;
+  latitude: number | null;
+  longitude: number | null;
+  isDefault: boolean;
+  createdAt: string;
 }
 
 export interface Task {
@@ -128,6 +141,7 @@ export interface Task {
   negotiationStatus?: string | null;
   negotiatedPrice?: number | null;
   completionPercent?: number | null;
+  distanceKm?: number | null;
 }
 
 export interface TaskApplication {
