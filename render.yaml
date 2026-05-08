@@ -32,7 +32,7 @@ services:
       - key: PYTHONPATH
         value: /app/backend/fastapi
       - key: ENV
-        value: production
+        value: staging
       - key: PAYMENT_MODE
         value: sandbox
       - key: OTP_PROVIDER
@@ -56,6 +56,15 @@ services:
         sync: false          # e.g. https://zaska-backend.onrender.com
       - key: PAYMENT_REDIRECT_URL
         sync: false          # e.g. https://zaska-frontend.onrender.com/payment/success
+      # ── Payment provider sandbox keys (at least one required) ────────────────
+      - key: FLUTTERWAVE_SECRET_KEY
+        sync: false          # starts with FLWSECK_TEST-  (free sandbox account)
+      - key: STRIPE_SECRET_KEY
+        sync: false          # starts with sk_test_  (free sandbox account)
+      - key: FEDAPAY_API_KEY
+        sync: false          # starts with sk_sandbox_  (free sandbox account)
+      - key: PAYSTACK_SECRET_KEY
+        sync: false          # starts with sk_test_  (free sandbox account)
 
   # ── Frontend (React/Vite — static build) ───────────────────────────────────
   - type: web
