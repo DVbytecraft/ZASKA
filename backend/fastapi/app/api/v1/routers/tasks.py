@@ -57,7 +57,6 @@ def _serialize_task(task: Task) -> dict:
         "negotiationStatus": task.negotiation_status,
         "negotiatedPrice": float(task.negotiated_price) if task.negotiated_price else None,
         "createdAt": task.created_at.isoformat() if task.created_at else None,
-        "mode": task.mode,
     }
 
 
