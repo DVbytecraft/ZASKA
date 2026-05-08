@@ -223,8 +223,8 @@ COUNTRY_REGISTRY: dict[str, CountryConfig] = {
     ),
     "NG": CountryConfig(
         country_code="NG", currency="NGN",
-        payment_methods=["card", "mobile_money"],
-        payment_providers=["flutterwave"],
+        payment_methods=["mobile_money", "card"],  # MM primary for Africa
+        payment_providers=["paystack", "flutterwave"],  # paystack primary; flutterwave fallback
         kyc_provider="smile_identity",
         sms_gateway="termii",
         mobile_money_enabled=True,

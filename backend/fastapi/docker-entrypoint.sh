@@ -11,4 +11,4 @@ echo "[entrypoint] Seeding country configs..."
 python /app/backend/fastapi/scripts/seed_countries.py
 
 echo "[entrypoint] Starting API server..."
-exec uvicorn backend.fastapi.main:app --host 0.0.0.0 --port 6969
+exec uvicorn app.main:app --host 0.0.0.0 --port 6969

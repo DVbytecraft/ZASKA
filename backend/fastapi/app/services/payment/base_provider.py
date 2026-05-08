@@ -35,6 +35,16 @@ class PaymentIntentResult:
 
 
 @dataclass
+class PayoutResult:
+    provider: str
+    payout_id: str
+    status: str          # "processing" | "completed" | "failed"
+    amount: Decimal
+    currency: str
+    raw: dict = field(default_factory=dict)
+
+
+@dataclass
 class WebhookEvent:
     event_type: str                 # "payment.success" | "payment.failed" | "unhandled"
     provider_tx_id: str
@@ -103,6 +113,26 @@ class PaymentProvider(ABC):
         raw_body: bytes,
         headers: dict[str, str],
     ) -> WebhookEvent: ...
+
+    async def payout(
+        self,
+        *,
+        amount: Decimal,
+        currency: str,
+        recipient_phone: str,
+        country_code: str,
+        reference: str,
+        idempotency_key: str,
+    ) -> PayoutResult:
+        """Initiate a payout to a mobile money / bank account.
+
+        Default implementation raises NotImplementedError.
+        Providers that support payout MUST override this method.
+        """
+        raise NotImplementedError(
+            f"Provider '{self.PROVIDER_NAME}' does not support direct payout. "
+            "Use the payout worker or a dedicated payout provider."
+        )
 
     # ── Handlers financiers — implémentation par défaut ───────────────────────
 

@@ -24,13 +24,16 @@ from app.core.country_engine.definitions import get_config
 from .base_provider import PaymentProvider, UnsupportedCountryError
 from .fedapay_provider import FedaPayProvider
 from .flutterwave_provider import FlutterwaveProvider
+from .paystack_provider import PaystackProvider
 from .stripe_provider import StripeProvider
 
 # Registre nom_provider → factory callable (sandbox et production)
+# Adding a new provider = 1 line here + 1 import above. No other changes needed.
 PROVIDER_CLASS_MAP: dict[str, Callable[[], PaymentProvider]] = {
     "stripe": StripeProvider,
     "fedapay": FedaPayProvider,
     "flutterwave": FlutterwaveProvider,
+    "paystack": PaystackProvider,
 }
 
 

@@ -149,6 +149,8 @@ def get_balance(
 @router.get("/transactions/{currency}")
 def list_transactions(
     currency: str,
+    limit: int = 50,
+    offset: int = 0,
     user_id: str = Depends(get_current_user_id),
     svc: WalletService = Depends(get_wallet_service),
 ):
@@ -159,18 +161,41 @@ def list_transactions(
     except WalletNotFoundError:
         svc.create_wallet(user_id=user_id, currency=currency_upper)
         txs = []
+    # Apply pagination in Python (simple approach for now)
+    page = txs[offset: offset + limit]
     return success_response(
         [
             {
                 "id": tx.id,
                 "type": tx.type,
                 "amount": str(tx.amount),
+                "currency": currency_upper,
                 "status": tx.status,
                 "reference": tx.reference,
                 "provider": tx.provider,
                 "created_at": tx.created_at.isoformat(),
             }
-            for tx in txs
+            for tx in page
+        ]
+    )
+
+
+@router.get("/summary")
+def wallet_summary(
+    user_id: str = Depends(get_current_user_id),
+    svc: WalletService = Depends(get_wallet_service),
+):
+    """Return all wallets for the current user with balances."""
+    _wallet_rate_limit(user_id)
+    wallets = svc.list_wallets(user_id)
+    # Auto-create XOF wallet on first call if none exist
+    if not wallets:
+        w = svc.create_wallet(user_id=user_id, currency="XOF")
+        wallets = [w]
+    return success_response(
+        [
+            {"currency": w.currency, "balance": str(w.balance)}
+            for w in wallets
         ]
     )
 

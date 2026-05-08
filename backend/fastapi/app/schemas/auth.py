@@ -6,13 +6,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class LoginPayload(BaseModel):
     model_config = ConfigDict(strict=True)
 
-    phone: str = Field(min_length=7, max_length=20)
+    email: str = Field(min_length=5, max_length=255)
     password: str = Field(min_length=6, max_length=128)
 
-    @field_validator("phone")
+    @field_validator("email")
     @classmethod
-    def phone_strip(cls, v: str) -> str:
-        return v.strip()
+    def email_lowercase(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 class RegisterPayload(BaseModel):
@@ -101,25 +101,25 @@ class TokenResponse(BaseModel):
 class ForgotPasswordPayload(BaseModel):
     model_config = ConfigDict(strict=True)
 
-    phone: str = Field(min_length=7, max_length=20)
+    email: str = Field(min_length=5, max_length=255)
 
-    @field_validator("phone")
+    @field_validator("email")
     @classmethod
-    def phone_strip(cls, v: str) -> str:
-        return v.strip()
+    def email_lowercase(cls, v: str) -> str:
+        return v.strip().lower()
 
 
 class ResetPasswordPayload(BaseModel):
     model_config = ConfigDict(strict=True)
 
-    phone: str = Field(min_length=7, max_length=20)
+    email: str = Field(min_length=5, max_length=255)
     code: str = Field(min_length=4, max_length=10)
     new_password: str = Field(min_length=8, max_length=128)
 
-    @field_validator("phone")
+    @field_validator("email")
     @classmethod
-    def phone_strip(cls, v: str) -> str:
-        return v.strip()
+    def email_lowercase(cls, v: str) -> str:
+        return v.strip().lower()
 
     @field_validator("new_password")
     @classmethod

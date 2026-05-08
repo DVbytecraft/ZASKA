@@ -22,13 +22,32 @@ services:
   redis:
     image: redis:7-alpine
     container_name: zaska-redis
+    # If REDIS_PASSWORD is set, AUTH is required on all connections.
+    # Leave unset in local dev (no auth). Always set in staging/production.
+    command: >
+      sh -c '
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          redis-server --requirepass "$$REDIS_PASSWORD" --maxmemory 256mb --maxmemory-policy allkeys-lru;
+        else
+          redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru;
+        fi
+      '
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     # DEV ONLY: set REDIS_PUBLISH_PORT=16379 in .env to expose locally. Never expose in production.
     ports:
       - "${REDIS_PUBLISH_PORT:-}:6379"
     networks:
       - zaska-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: >
+        sh -c '
+          if [ -n "$$REDIS_PASSWORD" ]; then
+            redis-cli -a "$$REDIS_PASSWORD" ping;
+          else
+            redis-cli ping;
+          fi
+        '
       interval: 10s
       timeout: 5s
       retries: 10
@@ -44,9 +63,11 @@ services:
       # DATABASE_URL uses internal docker hostname 'postgres', not localhost
       DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
       # JWT_SECRET and ENV come from env_file (.env) — do NOT override here
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # Full Redis URLs — override in .env for auth: redis://:password@redis:6379/N
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      PYTHONPATH: /app/backend/fastapi
     volumes:
       - ./backend/fastapi/app:/app/backend/fastapi/app
       - ./backend/fastapi/alembic:/app/backend/fastapi/alembic
@@ -70,16 +91,18 @@ services:
       context: .
       dockerfile: backend/fastapi/Dockerfile
     container_name: zaska-celery-worker
-    command: ["celery", "-A", "app.worker.celery_app.celery_app", "worker", "--loglevel=info"]
+    command: ["celery", "-A", "app.worker.celery_app.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
     env_file:
       - backend/fastapi/.env
     environment:
       DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      PYTHONPATH: /app/backend/fastapi
     volumes:
       - ./backend/fastapi/app:/app/backend/fastapi/app
+      - zaska-backups:/app/backups
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,14 +116,15 @@ services:
       context: .
       dockerfile: backend/fastapi/Dockerfile
     container_name: zaska-celery-beat
-    command: ["celery", "-A", "app.worker.celery_app.celery_app", "beat", "--loglevel=info"]
+    command: ["celery", "-A", "app.worker.celery_app.celery_app", "beat", "--loglevel=info", "--scheduler=celery.beat:PersistentScheduler", "--schedule=/tmp/celerybeat-schedule"]
     env_file:
       - backend/fastapi/.env
     environment:
       DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      PYTHONPATH: /app/backend/fastapi
     volumes:
       - ./backend/fastapi/app:/app/backend/fastapi/app
     depends_on:
@@ -114,20 +138,42 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: apps/web/Dockerfile
+      dockerfile: docker/frontend/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:6969/api}
     container_name: zaska-frontend
-    environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:6969/api}
-    volumes:
-      - ./apps/web/src:/app/src
-      - ./packages/shared-services/src:/packages/shared-services/src
     depends_on:
       backend:
         condition: service_healthy
+    # In production, expose via nginx proxy — direct port only for dev.
     ports:
       - "${FRONTEND_PUBLISH_PORT:-3010}:3010"
     networks:
       - zaska-network
+
+  # ── Nginx reverse proxy (production profile) ────────────────────────────────
+  # Enable with: docker compose --profile production up
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: zaska-nginx
+    profiles: ["production"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Mount SSL certs — generate with: certbot certonly --standalone -d yourdomain.com
+      # or use self-signed for staging: ./scripts/gen-self-signed-cert.sh
+      - ${SSL_CERT_PATH:-./docker/nginx/certs}:/etc/ssl/certs:ro
+      - ${SSL_KEY_PATH:-./docker/nginx/certs}:/etc/ssl/private:ro
+    depends_on:
+      frontend:
+        condition: service_started
+      backend:
+        condition: service_healthy
+    networks:
+      - zaska-network
+    restart: unless-stopped
 
 networks:
   zaska-network:
@@ -135,3 +181,4 @@ networks:
 
 volumes:
   zaska-postgres-data:
+  zaska-backups:

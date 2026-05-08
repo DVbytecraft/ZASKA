@@ -52,11 +52,11 @@ export function useAuth() {
     }
   };
 
-  const login = async (phone: string, password: string) => {
+  const login = async (email: string, password: string) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await authService.login({ phone, password });
+      const data = await authService.login({ email, password });
       setSession(data);
       return data;
     } catch (err) {

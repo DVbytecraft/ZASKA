@@ -1,39 +1,51 @@
+"""
+Payment provider factory — provider-agnostic adapter pattern.
+
+The canonical provider interface is:
+    app.services.payment.base_provider.PaymentProvider
+
+All providers (Stripe, FedaPay, Flutterwave, Paystack, Mock) implement
+this interface and are fully interchangeable. No business logic in the
+orchestrator depends on any single provider.
+
+To add a new provider:
+  1. Implement PaymentProvider in app/services/payment/<name>_provider.py
+  2. Add it to PROVIDER_CLASS_MAP in app/services/payment/provider_factory.py
+  3. Wire the country in app/core/country_engine/definitions.py
+"""
 from __future__ import annotations
 
-from app.core.country_engine.definitions import get_config
-from app.core.config import settings
-
-from .base import PaymentProvider, PaymentResult
-from .mobile_money_provider import MobileMoneyProvider
-from .mock_provider import MockPaymentProvider
-from .stripe_provider import StripePaymentProvider
+from app.services.payment.base_provider import (
+    PaymentIntentResult,
+    PaymentProvider,
+    PayoutResult,
+)
 
 
 def get_payment_provider(*, payment_mode: str, country_code: str) -> PaymentProvider:
+    """
+    Return the canonical PaymentProvider for the given mode and country.
+
+    - mock/dev mode or real_money_enabled=False → MockProvider (no network calls)
+    - sandbox/production → canonical provider resolved from CountryConfig
+    """
+    from app.core.config import settings
+    from app.services.payment.mock_provider import MockProvider
+    from app.services.payment.provider_factory import get_provider as _canonical
+
     if settings.payments_disabled:
-        return MockPaymentProvider()
+        return MockProvider()
 
     mode = payment_mode.strip().lower()
-    if mode == "dev":
-        mode = "mock"
+    if mode in {"dev", "mock"} or not settings.real_money_enabled:
+        return MockProvider()
 
-    if mode == "mock" or not settings.real_money_enabled:
-        return MockPaymentProvider()
-
-    config = get_config(country_code)
-    provider_name = config.payment_providers[0] if config.payment_providers else "stripe"
-    if provider_name == "stripe":
-        return StripePaymentProvider()
-    if provider_name in {"fedapay", "flutterwave"}:
-        return MobileMoneyProvider()
-    raise ValueError(f"Unsupported payment provider '{provider_name}' for country '{country_code}'")
+    return _canonical(country_code)
 
 
 __all__ = [
     "PaymentProvider",
-    "PaymentResult",
-    "MockPaymentProvider",
-    "StripePaymentProvider",
-    "MobileMoneyProvider",
+    "PaymentIntentResult",
+    "PayoutResult",
     "get_payment_provider",
 ]

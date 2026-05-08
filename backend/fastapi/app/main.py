@@ -65,13 +65,31 @@ app.add_middleware(
     allow_origins=[origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Country-Code", "X-Request-ID"],
+    allow_headers=["Authorization", "Content-Type", "X-Country-Code", "X-Request-ID", "X-Idempotency-Key"],
 )
 app.add_middleware(
     RedisRateLimitMiddleware,
     max_requests=settings.rate_limit_max_requests,
     window_seconds=settings.rate_limit_window_seconds,
 )
+
+
+@app.middleware("http")
+async def security_headers_middleware(request, call_next):
+    response = await call_next(request)
+    env_norm = str(settings.env).strip().lower()
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # HSTS only on production (requires HTTPS)
+    if env_norm == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # Remove server fingerprint
+    if "server" in response.headers:
+        del response.headers["server"]
+    return response
 
 
 @app.on_event("startup")

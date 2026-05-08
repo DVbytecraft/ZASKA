@@ -136,9 +136,9 @@ class AuthService:
         user.password_hash = get_password_hash(password)
         self.db.commit()
 
-    def login(self, phone: str, password: str, country_code: str | None = None) -> dict:
-        phone = phone.strip()
-        user = self.db.query(User).filter(User.phone == phone).one_or_none()
+    def login(self, email: str, password: str, country_code: str | None = None) -> dict:
+        email = email.strip().lower()
+        user = self.db.query(User).filter(User.email == email).one_or_none()
         if user is None or not user.password_hash or not verify_password(password, user.password_hash):
             raise ValueError("Invalid credentials")
         if not user.is_verified:
@@ -150,7 +150,7 @@ class AuthService:
 
         tokens = self._generate_tokens(user.id)
         tokens["userId"] = user.id
-        tokens["phone"] = user.phone
+        tokens["email"] = user.email
         return tokens
 
     def logout(self, refresh_token: str) -> None:
@@ -163,37 +163,37 @@ class AuthService:
         tokens["userId"] = user_id
         return tokens
 
-    def forgot_password(self, phone: str) -> None:
-        phone = phone.strip()
-        user = self.db.query(User).filter(User.phone == phone).one_or_none()
+    def forgot_password(self, email: str) -> None:
+        email = email.strip().lower()
+        user = self.db.query(User).filter(User.email == email).one_or_none()
         if user is None:
-            # Silent — don't reveal whether the phone is registered
-            logger.info("forgot_password:phone_not_found phone={}", phone)
+            # Silent — don't reveal whether the email is registered
+            logger.info("forgot_password:email_not_found email={}", email)
             return
 
         otp_code = f"{secrets.randbelow(1_000_000):06d}"
         otp_hash = _hash_otp(otp_code)
-        redis_sync.setex(f"otp:reset:{phone}", settings.otp_expire_minutes * 60, otp_hash)
+        redis_sync.setex(f"otp:reset:{email}", settings.otp_expire_minutes * 60, otp_hash)
 
         provider = str(settings.otp_provider).strip().lower()
-        if provider == "smtp" and user.email:
-            self.email_service.send_otp_email(to_email=user.email, otp_code=otp_code)
+        if provider == "smtp":
+            self.email_service.send_otp_email(to_email=email, otp_code=otp_code)
         else:
-            logger.info("[OTP MOCK] forgot_password phone={} code={}", phone, otp_code)
+            logger.info("[OTP MOCK] forgot_password email={} code={}", email, otp_code)
 
-    def reset_password(self, phone: str, code: str, new_password: str) -> None:
-        phone = phone.strip()
-        stored_hash = redis_sync.get(f"otp:reset:{phone}")
+    def reset_password(self, email: str, code: str, new_password: str) -> None:
+        email = email.strip().lower()
+        stored_hash = redis_sync.get(f"otp:reset:{email}")
         if not stored_hash or not _verify_otp_hash(code, stored_hash):
             raise ValueError("Code invalide ou expiré")
 
-        user = self.db.query(User).filter(User.phone == phone).one_or_none()
+        user = self.db.query(User).filter(User.email == email).one_or_none()
         if user is None:
             raise ValueError("Utilisateur introuvable")
 
         user.password_hash = get_password_hash(new_password)
         self.db.commit()
-        redis_sync.delete(f"otp:reset:{phone}")
+        redis_sync.delete(f"otp:reset:{email}")
         revoke_all_user_tokens(user.id)
 
     def issue_ws_ticket(self, user_id: str, task_id: str | None = None) -> str:

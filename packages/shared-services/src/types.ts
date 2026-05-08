@@ -11,7 +11,7 @@ export interface AuthSession {
 }
 
 export interface LoginPayload {
-  phone: string;
+  email: string;
   password: string;
 }
 

@@ -128,7 +128,7 @@ export default function App() {
   const [currentTaskId, setCurrentTaskId] = useState<string>('');
   const [registeredPhone, setRegisteredPhone] = useState<string>('');
   const [registeredEmail, setRegisteredEmail] = useState<string>('');
-  const [resetPhone, setResetPhone] = useState<string>('');
+  const [resetEmail, setResetEmail] = useState<string>('');
   const [currentChatTaskerName, setCurrentChatTaskerName] = useState<string>('');
   const [currentNegotiation, setCurrentNegotiation] = useState<{
     taskerName: string; originalPrice: number; proposedPrice: number;
@@ -235,8 +235,8 @@ export default function App() {
         return (
           <ForgotPasswordScreen
             onBack={() => setCurrentScreen('login')}
-            onCodeSent={(phone) => {
-              setResetPhone(phone);
+            onCodeSent={(email) => {
+              setResetEmail(email);
               setCurrentScreen('resetPassword');
             }}
           />
@@ -245,7 +245,7 @@ export default function App() {
       case 'resetPassword':
         return (
           <ResetPasswordScreen
-            phone={resetPhone}
+            email={resetEmail}
             onBack={() => setCurrentScreen('forgotPassword')}
             onSuccess={() => setCurrentScreen('login')}
           />

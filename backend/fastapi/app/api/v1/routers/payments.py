@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -16,32 +17,28 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.core.country_engine import PaymentRouterService
-from app.core.country_engine.definitions import get_config
+from app.core.country_engine.feature_engine import FeatureFlagEngine
 from app.core.redis_client import redis_sync
 from app.core.observability import logger
 from app.core.responses import success_response
-from app.models.task import Task
-from app.models.user import User
 from app.payment.audit_logger import FinancialAuditLogger
-from app.payment.idempotency import IdempotencyError, IdempotencyService
 from app.payment.limits import TransactionLimits
-from app.payment.providers import get_payment_provider
-from app.payment.safety_layer import PaymentSafetyError, PaymentSafetyLayer
+from app.payment.orchestrator import OrchestratorError, PaymentOrchestrator
+from app.payment.safety_layer import PaymentSafetyLayer
 from app.services.payment import (
     InvalidWebhookSignature,
     MockProvider,
     PaymentProviderError,
-    UnsupportedCountryError,
     WebhookEvent,
     list_supported_countries,
 )
 from app.services.payment.fedapay_provider import FedaPayProvider
 from app.services.payment.flutterwave_provider import FlutterwaveProvider
+from app.services.payment.paystack_provider import PaystackProvider
 from app.services.payment.stripe_provider import StripeProvider
 from app.services.payment_service import PaymentService
 from app.services.payment.webhook_queue import QueuedWebhookEvent, WebhookQueue
-from app.services.wallet_service import EscrowError, WalletService
-from app.core.country_engine.feature_engine import FeatureFlagEngine
+from app.services.wallet_service import WalletService
 from app.worker.celery_app import celery_app as _celery_app
 
 
@@ -113,6 +110,8 @@ def _assert_webhook_secret_configured(provider_name: str) -> None:
         raise HTTPException(status_code=500, detail="FedaPay webhook secret missing")
     if provider_name == "flutterwave" and not settings.flutterwave_hash.strip():
         raise HTTPException(status_code=500, detail="Flutterwave webhook hash missing")
+    if provider_name == "paystack" and not settings.paystack_webhook_secret.strip():
+        raise HTTPException(status_code=500, detail="Paystack webhook secret missing")
 
 
 def _require_dev_mode() -> None:
@@ -135,98 +134,32 @@ async def create_intent(
     _assert_payments_enabled()
     _payments_rate_limit(f"intent:{user_id}", limit=20)
 
-    if not x_idempotency_key and settings.payment_mode in {"production", "sandbox"}:
-        raise HTTPException(status_code=400, detail="X-Idempotency-Key header is required in sandbox/production")
-    if not x_idempotency_key:
-        x_idempotency_key = f"dev-{uuid.uuid4().hex}"
-
-    task = db.get(Task, payload.task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Tache introuvable")
-
-    amount = Decimal(str(task.price))
-    currency = (task.currency or "EUR").upper()
-
-    safety = PaymentSafetyLayer(db)
+    orchestrator = PaymentOrchestrator(db=db, wallet_svc=wallet_svc)
     try:
-        safety.assert_create_payment_safe(
+        result = await orchestrator.execute(
+            task_id=payload.task_id,
             user_id=user_id,
             country_code=country_code,
-            amount=amount,
-            currency=currency,
             idempotency_key=x_idempotency_key,
         )
-    except PaymentSafetyError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except OrchestratorError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=str(exc))
 
-    user = db.get(User, user_id)
-    user_email = (user.email if user else "") or ""
-    real_money_enabled = _is_real_money_enabled(db, country_code.upper())
-
-    idempotency = IdempotencyService(ttl_seconds=180)
-    payload_fingerprint = f"{user_id}|{amount}|{currency}|{country_code}|{get_config(country_code).payment_providers[0]}"
-    try:
-        with idempotency.lock(x_idempotency_key, payload_fingerprint):
-            escrow = wallet_svc.create_pending_escrow(
-                task_id=payload.task_id,
-                payer_id=user_id,
-                payee_id=task.assigned_to,
-                amount=amount,
-                currency=currency,
-            )
-            wallet_svc.lock_funds(escrow.id)
-
-            provider = get_payment_provider(
-                payment_mode=("mock" if not real_money_enabled else settings.payment_mode),
-                country_code=country_code,
-            )
-            result = await provider.create_payment(
-                amount=amount,
-                currency=currency,
-                user_id=user_id,
-                user_email=user_email,
-                metadata={
-                    "escrow_id": escrow.id,
-                    "task_id": payload.task_id,
-                    "task_description": str(getattr(task, "description", None) or getattr(task, "title", "Tache ZASKA")),
-                    "country_code": country_code,
-                },
-                idempotency_key=x_idempotency_key,
-            )
-            cfg_provider = get_config(country_code).payment_providers[0]
-            safety.assert_provider_mode_keys(cfg_provider)
-
-            FinancialAuditLogger.log(
-                action="intent_created",
-                user_id=user_id,
-                payment_id=result.payment_id,
-                amount=amount,
-                currency=currency,
-                provider=result.provider,
-                status=result.status,
-            )
-    except IdempotencyError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    except PaymentProviderError as exc:
-        raise HTTPException(status_code=502, detail=f"Erreur provider: {exc}")
-    except UnsupportedCountryError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-    commission = PaymentRouterService.compute_commission(amount, country_code)
     return success_response(
         {
-            "mode": PaymentSafetyLayer.resolve_mode().value,
-            "real_money_enabled": real_money_enabled,
+            "mode": result.mode,
+            "real_money_enabled": result.real_money_enabled,
             "provider": result.provider,
-            "provider_intent_id": result.payment_id,
-            "client_secret": result.raw.get("client_secret"),
-            "payment_url": result.raw.get("payment_url"),
-            "escrow_id": escrow.id,
+            "provider_intent_id": result.provider_intent_id,
+            "client_secret": result.client_secret,
+            "payment_url": result.payment_url,
+            "escrow_id": result.escrow_id,
             "amount": str(result.amount),
             "currency": result.currency,
-            "commission": commission["commission"],
-            "escrow_amount": commission["escrow_amount"],
-            "idempotency_key": x_idempotency_key,
+            "commission": result.commission,
+            "escrow_amount": result.escrow_amount,
+            "idempotency_key": result.idempotency_key,
+            "region": result.region,
         }
     )
 
@@ -344,38 +277,46 @@ def _credit_wallet_from_topup_event(
     return True, idem_key
 
 
-@router.post("/webhook/stripe", include_in_schema=False)
-async def webhook_stripe(request: Request, db: Session = Depends(get_db)):
-    _assert_payments_enabled()
-    _payments_rate_limit("webhook:stripe", limit=180)
-    _assert_webhook_secret_configured("stripe")
+async def _dispatch_provider_webhook(
+    *,
+    provider_name: str,
+    provider_instance: Any,
+    request: Request,
+    db: Session,
+) -> dict:
+    """
+    Single webhook dispatcher — handles all three providers identically.
+
+    Replaces three near-identical handlers (stripe/fedapay/flutterwave).
+    All idempotency, queue, and audit logic lives here once.
+    """
     raw_body = await request.body()
     headers = dict(request.headers)
     wallet_svc = WalletService(db)
-    try:
-        provider = StripeProvider()
-        event = await _handle_webhook(provider, raw_body, headers, wallet_svc)
+    event: WebhookEvent | None = None
 
-        # ── Reject unknown / unhandled events ─────────────────────────────────
+    try:
+        event = await _handle_webhook(provider_instance, raw_body, headers, wallet_svc)
+
         if event.event_type == "unhandled":
             logger.warning(
-                "webhook:stripe_unknown_event provider_tx={} payload={}",
-                event.provider_tx_id, _safe_log_payload(event.raw_data),
+                "webhook:{}_unknown_event provider_tx={} payload={}",
+                provider_name, event.provider_tx_id, _safe_log_payload(event.raw_data),
             )
             return {"received": True, "ignored": True}
 
-        # ── Wallet top-up (checkout.session.completed) ────────────────────────
         if event.event_type == "wallet_topup":
-            processed, _ = _credit_wallet_from_topup_event(event, wallet_svc, "stripe", db=db)
+            processed, _ = _credit_wallet_from_topup_event(event, wallet_svc, provider_name, db=db)
             return {"received": True, "duplicate": not processed}
 
-        # ── Escrow-based payment (PaymentIntent) ──────────────────────────────
-        idem_key = f"stripe:{event.provider_tx_id}"
-        if event.provider_tx_id and WebhookQueue.is_processed(idem_key):
+        # Escrow-based payment → enqueue for async Celery processing
+        idem_key = f"{provider_name}:{event.provider_tx_id}"
+        if event.provider_tx_id and WebhookQueue.is_processed(idem_key, db=db):
             return {"received": True, "duplicate": True}
+
         WebhookQueue.enqueue(
             QueuedWebhookEvent(
-                provider="stripe",
+                provider=provider_name,
                 raw_body=raw_body.decode("utf-8", errors="ignore"),
                 headers=headers,
                 idempotency_key=idem_key,
@@ -386,35 +327,50 @@ async def webhook_stripe(request: Request, db: Session = Depends(get_db)):
             _celery_app.send_task("app.workers.payment_webhook_worker.process_webhook")
         except Exception as _celery_err:
             logger.warning(
-                "webhook:celery_unavailable provider=stripe — queued for drain: {}",
-                _celery_err,
+                "webhook:celery_unavailable provider={} — queued for drain: {}",
+                provider_name, _celery_err,
             )
+
     except InvalidWebhookSignature as exc:
-        logger.warning("webhook:stripe_invalid_signature error={}", exc)
+        logger.warning("webhook:{}_invalid_signature error={}", provider_name, exc)
         FinancialAuditLogger.log(
             action="webhook_invalid",
             user_id="system",
             payment_id="",
             amount=Decimal("0"),
             currency="",
-            provider="stripe",
+            provider=provider_name,
             status="invalid_signature",
         )
         raise HTTPException(status_code=400, detail="Signature invalide")
     except PaymentProviderError as exc:
-        logger.error("webhook:stripe_provider_error error={}", exc)
+        logger.error("webhook:{}_provider_error error={}", provider_name, exc)
         raise HTTPException(status_code=500, detail="Configuration provider")
 
-    FinancialAuditLogger.log(
-        action="payment_success" if event.event_type == "payment.success" else "payment_failed",
-        user_id="system",
-        payment_id=event.provider_tx_id,
-        amount=event.amount,
-        currency=event.currency,
-        provider="stripe",
-        status=event.event_type,
-    )
+    if event is not None:
+        FinancialAuditLogger.log(
+            action="payment_success" if event.event_type == "payment.success" else "payment_failed",
+            user_id="system",
+            payment_id=event.provider_tx_id,
+            amount=event.amount,
+            currency=event.currency,
+            provider=provider_name,
+            status=event.event_type,
+        )
     return {"received": True}
+
+
+@router.post("/webhook/stripe", include_in_schema=False)
+async def webhook_stripe(request: Request, db: Session = Depends(get_db)):
+    _assert_payments_enabled()
+    _payments_rate_limit("webhook:stripe", limit=180)
+    _assert_webhook_secret_configured("stripe")
+    return await _dispatch_provider_webhook(
+        provider_name="stripe",
+        provider_instance=StripeProvider(),
+        request=request,
+        db=db,
+    )
 
 
 @router.post("/webhook/fedapay", include_in_schema=False)
@@ -422,72 +378,12 @@ async def webhook_fedapay(request: Request, db: Session = Depends(get_db)):
     _assert_payments_enabled()
     _payments_rate_limit("webhook:fedapay", limit=180)
     _assert_webhook_secret_configured("fedapay")
-    raw_body = await request.body()
-    headers = dict(request.headers)
-    wallet_svc = WalletService(db)
-    try:
-        provider = FedaPayProvider()
-        event = await _handle_webhook(provider, raw_body, headers, wallet_svc)
-
-        # ── Reject unknown / unhandled events ─────────────────────────────
-        if event.event_type == "unhandled":
-            logger.warning(
-                "webhook:fedapay_unknown_event provider_tx={} payload={}",
-                event.provider_tx_id, _safe_log_payload(event.raw_data),
-            )
-            return {"received": True, "ignored": True}
-
-        # ── Wallet top-up ──────────────────────────────────────────────────
-        if event.event_type == "wallet_topup":
-            processed, _ = _credit_wallet_from_topup_event(event, wallet_svc, "fedapay", db=db)
-            return {"received": True, "duplicate": not processed}
-
-        # ── Escrow-based payment ───────────────────────────────────────────
-        idem_key = f"fedapay:{event.provider_tx_id}"
-        if event.provider_tx_id and WebhookQueue.is_processed(idem_key, db=db):
-            return {"received": True, "duplicate": True}
-        WebhookQueue.enqueue(
-            QueuedWebhookEvent(
-                provider="fedapay",
-                raw_body=raw_body.decode("utf-8", errors="ignore"),
-                headers=headers,
-                idempotency_key=idem_key,
-                request_id=request.headers.get("x-request-id", ""),
-            )
-        )
-        try:
-            _celery_app.send_task("app.workers.payment_webhook_worker.process_webhook")
-        except Exception as _celery_err:
-            logger.warning(
-                "webhook:celery_unavailable provider=fedapay — queued for drain: {}",
-                _celery_err,
-            )
-    except InvalidWebhookSignature as exc:
-        logger.warning("webhook:fedapay_invalid_signature error={}", exc)
-        FinancialAuditLogger.log(
-            action="webhook_invalid",
-            user_id="system",
-            payment_id="",
-            amount=Decimal("0"),
-            currency="",
-            provider="fedapay",
-            status="invalid_signature",
-        )
-        raise HTTPException(status_code=400, detail="Signature invalide")
-    except PaymentProviderError as exc:
-        logger.error("webhook:fedapay_provider_error error={}", exc)
-        raise HTTPException(status_code=500, detail="Configuration provider")
-
-    FinancialAuditLogger.log(
-        action="payment_success" if event.event_type == "payment.success" else "payment_failed",
-        user_id="system",
-        payment_id=event.provider_tx_id,
-        amount=event.amount,
-        currency=event.currency,
-        provider="fedapay",
-        status=event.event_type,
+    return await _dispatch_provider_webhook(
+        provider_name="fedapay",
+        provider_instance=FedaPayProvider(),
+        request=request,
+        db=db,
     )
-    return {"received": True}
 
 
 @router.post("/webhook/flutterwave", include_in_schema=False)
@@ -495,72 +391,25 @@ async def webhook_flutterwave(request: Request, db: Session = Depends(get_db)):
     _assert_payments_enabled()
     _payments_rate_limit("webhook:flutterwave", limit=180)
     _assert_webhook_secret_configured("flutterwave")
-    raw_body = await request.body()
-    headers = dict(request.headers)
-    wallet_svc = WalletService(db)
-    try:
-        provider = FlutterwaveProvider()
-        event = await _handle_webhook(provider, raw_body, headers, wallet_svc)
-
-        # ── Reject unknown / unhandled events ─────────────────────────────
-        if event.event_type == "unhandled":
-            logger.warning(
-                "webhook:flutterwave_unknown_event provider_tx={} payload={}",
-                event.provider_tx_id, _safe_log_payload(event.raw_data),
-            )
-            return {"received": True, "ignored": True}
-
-        # ── Wallet top-up ──────────────────────────────────────────────────
-        if event.event_type == "wallet_topup":
-            processed, _ = _credit_wallet_from_topup_event(event, wallet_svc, "flutterwave", db=db)
-            return {"received": True, "duplicate": not processed}
-
-        # ── Escrow-based payment ───────────────────────────────────────────
-        idem_key = f"flutterwave:{event.provider_tx_id}"
-        if event.provider_tx_id and WebhookQueue.is_processed(idem_key, db=db):
-            return {"received": True, "duplicate": True}
-        WebhookQueue.enqueue(
-            QueuedWebhookEvent(
-                provider="flutterwave",
-                raw_body=raw_body.decode("utf-8", errors="ignore"),
-                headers=headers,
-                idempotency_key=idem_key,
-                request_id=request.headers.get("x-request-id", ""),
-            )
-        )
-        try:
-            _celery_app.send_task("app.workers.payment_webhook_worker.process_webhook")
-        except Exception as _celery_err:
-            logger.warning(
-                "webhook:celery_unavailable provider=flutterwave — queued for drain: {}",
-                _celery_err,
-            )
-    except InvalidWebhookSignature as exc:
-        logger.warning("webhook:flutterwave_invalid_signature error={}", exc)
-        FinancialAuditLogger.log(
-            action="webhook_invalid",
-            user_id="system",
-            payment_id="",
-            amount=Decimal("0"),
-            currency="",
-            provider="flutterwave",
-            status="invalid_signature",
-        )
-        raise HTTPException(status_code=400, detail="Signature invalide")
-    except PaymentProviderError as exc:
-        logger.error("webhook:flutterwave_provider_error error={}", exc)
-        raise HTTPException(status_code=500, detail="Configuration provider")
-
-    FinancialAuditLogger.log(
-        action="payment_success" if event.event_type == "payment.success" else "payment_failed",
-        user_id="system",
-        payment_id=event.provider_tx_id,
-        amount=event.amount,
-        currency=event.currency,
-        provider="flutterwave",
-        status=event.event_type,
+    return await _dispatch_provider_webhook(
+        provider_name="flutterwave",
+        provider_instance=FlutterwaveProvider(),
+        request=request,
+        db=db,
     )
-    return {"received": True}
+
+
+@router.post("/webhook/paystack", include_in_schema=False)
+async def webhook_paystack(request: Request, db: Session = Depends(get_db)):
+    _assert_payments_enabled()
+    _payments_rate_limit("webhook:paystack", limit=180)
+    _assert_webhook_secret_configured("paystack")
+    return await _dispatch_provider_webhook(
+        provider_name="paystack",
+        provider_instance=PaystackProvider(),
+        request=request,
+        db=db,
+    )
 
 
 @router.get("/mode")

@@ -5,6 +5,7 @@ from .base_provider import (
     PaymentIntentResult,
     PaymentProvider,
     PaymentProviderError,
+    PayoutResult,
     UnsupportedCountryError,
     WebhookEvent,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "PaymentProviderError",
     "UnsupportedCountryError",
     "MockProvider",
+    "PayoutResult",
     "get_provider",
     "PROVIDER_CLASS_MAP",
     "list_supported_countries",

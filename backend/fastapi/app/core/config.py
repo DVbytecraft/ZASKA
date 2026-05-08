@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     flutterwave_secret_key: str = ""
     flutterwave_hash: str = ""
 
+    # ── Paystack ──────────────────────────────────────────────────────────
+    paystack_secret_key: str = ""
+    paystack_webhook_secret: str = ""
+
     # ── Paiements — URLs ─────────────────────────────────────────────────
     payment_webhook_base_url: str = "http://localhost:6969"
     payment_redirect_url: str = "http://localhost:3010/payment/success"
@@ -102,6 +106,16 @@ class Settings(BaseSettings):
 
     sentry_dsn: str = ""
 
+    # ── PostgreSQL backups ────────────────────────────────────────────────
+    backup_dir: str = "/app/backups"
+    backup_keep_days: int = 7
+
+    # ── FCM push notifications ────────────────────────────────────────────
+    # Path to Firebase service account JSON file (leave empty to disable push)
+    fcm_service_account_path: str = ""
+    # FCM project ID (extracted from service account if empty)
+    fcm_project_id: str = ""
+
     @model_validator(mode="after")
     def _validate_payment_mode_and_keys(self):
         mode = str(self.payment_mode).strip().lower()
@@ -125,10 +139,13 @@ class Settings(BaseSettings):
 
         if mode == "production":
             has_live_provider = bool(
-                self.stripe_secret_key.strip() or self.fedapay_api_key.strip() or self.flutterwave_secret_key.strip()
+                self.stripe_secret_key.strip()
+                or self.fedapay_api_key.strip()
+                or self.flutterwave_secret_key.strip()
+                or self.paystack_secret_key.strip()
             )
             if not has_live_provider:
-                raise ValueError("Production mode requires at least one live provider key (Stripe/FedaPay/Flutterwave)")
+                raise ValueError("Production mode requires at least one live provider key (Stripe/FedaPay/Flutterwave/Paystack)")
             if not self.stripe_webhook_secret and not self.fedapay_webhook_secret and not self.flutterwave_hash:
                 raise ValueError("Production mode requires webhook secret/hash")
             if not self.kyc_provider_enabled:

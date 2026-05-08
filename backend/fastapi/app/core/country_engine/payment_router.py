@@ -18,6 +18,9 @@ from pydantic import BaseModel
 
 from .definitions import CFA_ZONE, EU_ZONE, FLUTTERWAVE_ZONE
 
+# Nigeria uses Paystack as the primary Mobile Money rail
+_PAYSTACK_ZONE: frozenset[str] = frozenset({"NG"})
+
 
 class PaymentRoute(BaseModel, frozen=True):
     provider: str              # stripe | fedapay | flutterwave | mock
@@ -98,10 +101,22 @@ class PaymentRouterService:
                 description="Flutterwave — MTN MoMo Ghana",
             )
 
-        # ── Nigeria + reste zone Flutterwave ──────────────────────────────
+        # ── Nigeria → Paystack (Mobile Money primary rail) ────────────────
+        if cc in _PAYSTACK_ZONE:
+            return PaymentRoute(
+                provider="paystack",
+                method="mobile_money",
+                apple_pay_enabled=False,
+                google_pay_enabled=False,
+                region="WAF",
+                currency="NGN",
+                commission_rate=PaymentRouterService.DEFAULT_COMMISSION,
+                description="Paystack — Mobile Money (MTN, Airtel), USSD, carte NG",
+            )
+
+        # ── Reste zone Flutterwave ────────────────────────────────────────
         if cc in FLUTTERWAVE_ZONE:
             currency_map = {
-                "NG": "NGN",
                 "KE": "KES",
                 "ZA": "ZAR",
                 "TZ": "TZS",
@@ -110,13 +125,13 @@ class PaymentRouterService:
             }
             return PaymentRoute(
                 provider="flutterwave",
-                method="card",
+                method="mobile_money" if cc in {"KE", "TZ", "UG", "RW"} else "card",
                 apple_pay_enabled=False,
                 google_pay_enabled=False,
                 region="WAF",
                 currency=currency_map.get(cc, currency or "USD"),
                 commission_rate=PaymentRouterService.DEFAULT_COMMISSION,
-                description=f"Flutterwave — carte {cc}",
+                description=f"Flutterwave — Mobile Money / carte {cc}",
             )
 
         # ── Fallback international : Stripe ───────────────────────────────

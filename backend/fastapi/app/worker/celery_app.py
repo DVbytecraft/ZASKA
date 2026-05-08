@@ -11,6 +11,7 @@ celery_app.conf.imports = (
     "app.worker.tasks",
     "app.workers.payment_webhook_worker",
     "app.workers.payout_worker",
+    "app.workers.backup_worker",
     "app.services.payment.recovery_engine",
 )
 
@@ -32,5 +33,15 @@ celery_app.conf.beat_schedule = {
     "check-pending-payouts-every-60s": {
         "task": "app.workers.payout_worker.check_pending_payouts",
         "schedule": 60.0,
+    },
+    # Auto-release held escrows once the 24h contestation window expires.
+    "release-held-escrows-every-5m": {
+        "task": "app.workers.payout_worker.release_held_escrows",
+        "schedule": 300.0,
+    },
+    # Daily PostgreSQL backup (86400s = 24h).
+    "postgres-backup-daily": {
+        "task": "app.workers.backup_worker.backup_postgres",
+        "schedule": 86400.0,
     },
 }

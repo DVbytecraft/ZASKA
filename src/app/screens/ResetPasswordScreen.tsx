@@ -4,12 +4,12 @@ import { Button } from '../components/Button';
 import { apiClient } from '@zaska/shared-services';
 
 interface ResetPasswordScreenProps {
-  phone: string;
+  email: string;
   onBack: () => void;
   onSuccess: () => void;
 }
 
-export function ResetPasswordScreen({ phone, onBack, onSuccess }: ResetPasswordScreenProps) {
+export function ResetPasswordScreen({ email, onBack, onSuccess }: ResetPasswordScreenProps) {
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [newPassword, setNewPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -45,7 +45,7 @@ export function ResetPasswordScreen({ phone, onBack, onSuccess }: ResetPasswordS
     setError(null);
     try {
       await apiClient.post('/auth/reset-password', {
-        phone,
+        email,
         code: otp.join(''),
         new_password: newPassword,
       });
@@ -68,7 +68,7 @@ export function ResetPasswordScreen({ phone, onBack, onSuccess }: ResetPasswordS
       <div className="flex-1 overflow-auto px-6">
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-gray-900 mb-1">Nouveau mot de passe</h2>
-          <p className="text-gray-500 text-sm">Code envoyé au <span className="font-semibold text-gray-900">{phone}</span></p>
+          <p className="text-gray-500 text-sm">Code envoyé à <span className="font-semibold text-gray-900">{email}</span></p>
         </div>
 
         {/* OTP */}

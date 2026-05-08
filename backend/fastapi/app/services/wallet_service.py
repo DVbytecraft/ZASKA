@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -30,6 +30,15 @@ class WalletNotFoundError(Exception):
 
 class EscrowError(Exception):
     pass
+
+
+class LedgerDriftError(Exception):
+    """Raised when wallet.balance diverges from the ledger-computed balance.
+
+    The ledger (Transaction table) is the single source of truth.
+    wallet.balance is a denormalized cache; it must always equal
+    SUM(completed credits) - SUM(completed debits) for the wallet.
+    """
 
 
 class WalletService:
@@ -177,14 +186,29 @@ class WalletService:
             raise ValueError("Le montant escrow doit etre positif")
 
         escrow_id = _uuid()
-        ref = f"escrow_fund:{escrow_id}"
-        tx = self.debit_wallet(
-            user_id=payer_id,
-            currency=currency,
+
+        # Acquire row-lock on wallet BEFORE any write — prevents concurrent double-spend.
+        wallet = self.get_wallet(payer_id, currency, for_update=True)
+        if wallet.balance < amount:
+            raise InsufficientFundsError(
+                f"Solde insuffisant : {wallet.balance} {currency} < {amount} {currency}"
+            )
+
+        # Build debit TX and Escrow in a SINGLE commit to avoid the two-phase gap
+        # (old code: debit_wallet committed, then crash before escrow commit → funds lost).
+        tx = Transaction(
+            id=_uuid(),
+            wallet_id=wallet.id,
+            type="debit",
             amount=amount,
-            reference=ref,
-            metadata={"escrow_id": escrow_id, "task_id": task_id},
+            status="completed",
+            reference=f"escrow_fund:{escrow_id}",
+            provider="internal",
+            metadata_json=json.dumps({"type": "escrow_fund", "escrow_id": escrow_id, "task_id": task_id}),
         )
+        wallet.balance -= amount
+        self.db.add(tx)
+        self.db.flush()  # assigns tx.id without committing
 
         escrow = Escrow(
             id=escrow_id,
@@ -197,7 +221,7 @@ class WalletService:
             funding_tx_id=tx.id,
         )
         self.db.add(escrow)
-        self.db.commit()
+        self.db.commit()  # single atomic commit — wallet debit + escrow creation
         self.db.refresh(escrow)
         return escrow
 
@@ -489,6 +513,14 @@ class WalletService:
         )
         return escrow, executor_amount, client_refund
 
+    def list_wallets(self, user_id: str) -> list[Wallet]:
+        """Return all wallets for a user across all currencies."""
+        return (
+            self.db.execute(select(Wallet).where(Wallet.user_id == user_id).order_by(Wallet.currency))
+            .scalars()
+            .all()
+        )
+
     def list_transactions(self, user_id: str, currency: str) -> list[Transaction]:
         wallet = self.get_wallet(user_id, currency)
         return (
@@ -585,6 +617,62 @@ class WalletService:
         self.db.refresh(credit_tx)
 
         return debit_tx, credit_tx
+
+    # ─── Ledger reconciliation ────────────────────────────────────────────────
+
+    def recompute_balance_from_ledger(self, user_id: str, currency: str) -> Decimal:
+        """
+        Compute the correct wallet balance from the immutable Transaction ledger.
+
+        Balance = SUM(completed credits) − SUM(completed debits)
+
+        This is the ground truth. wallet.balance is a denormalized cache that
+        must always equal this value. If they diverge, use this value to correct
+        wallet.balance — the ledger is never wrong, the cache may be stale.
+        """
+        wallet = self.get_wallet(user_id, currency)
+        result = self.db.execute(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (Transaction.type == "credit", Transaction.amount),
+                            else_=Decimal("0"),
+                        )
+                    ),
+                    Decimal("0"),
+                )
+                - func.coalesce(
+                    func.sum(
+                        case(
+                            (Transaction.type == "debit", Transaction.amount),
+                            else_=Decimal("0"),
+                        )
+                    ),
+                    Decimal("0"),
+                )
+            ).where(
+                Transaction.wallet_id == wallet.id,
+                Transaction.status == "completed",
+            )
+        ).scalar()
+        return Decimal(str(result)) if result is not None else Decimal("0")
+
+    def assert_ledger_consistent(self, user_id: str, currency: str) -> None:
+        """
+        Raise LedgerDriftError if wallet.balance != ledger-computed balance.
+
+        Call this in health checks or after suspicious balance operations.
+        Under no condition should the provider or cache layer be authoritative.
+        """
+        wallet = self.get_wallet(user_id, currency)
+        computed = self.recompute_balance_from_ledger(user_id, currency)
+        diff = abs(wallet.balance - computed)
+        if diff > Decimal("0.000001"):
+            raise LedgerDriftError(
+                f"Ledger drift: user={user_id} currency={currency} "
+                f"wallet.balance={wallet.balance} ledger_computed={computed} diff={diff}"
+            )
 
     # ─── Private helpers ─────────────────────────────────────────────────────
 

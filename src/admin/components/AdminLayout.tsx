@@ -1,18 +1,24 @@
 import { ReactNode, useEffect, useState } from 'react';
+import { apiClient } from '@zaska/shared-services';
 import {
   LayoutDashboard,
   Briefcase,
   Users,
   UserCheck,
   DollarSign,
+  Wallet,
   AlertTriangle,
+  BarChart2,
   Globe,
   Headphones,
   Settings,
   Search,
   Bell,
   ChevronRight,
-  LogOut
+  LogOut,
+  ShieldCheck,
+  ClipboardList,
+  ShieldAlert,
 } from 'lucide-react';
 
 interface AdminLayoutProps {
@@ -22,14 +28,19 @@ interface AdminLayoutProps {
 }
 
 const navigation = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'tasks', label: 'Tâches', icon: Briefcase },
-  { id: 'users', label: 'Utilisateurs', icon: Users },
-  { id: 'taskers', label: 'Taskers', icon: UserCheck },
-  { id: 'payments', label: 'Paiements', icon: DollarSign },
-  { id: 'disputes', label: 'Litiges', icon: AlertTriangle },
-  { id: 'countries', label: 'Pays', icon: Globe },
-  { id: 'callcenter', label: 'Call Center', icon: Headphones },
+  { id: 'dashboard',  label: 'Dashboard',      icon: LayoutDashboard },
+  { id: 'analytics',  label: 'Analytics',       icon: BarChart2 },
+  { id: 'tasks',      label: 'Tâches',           icon: Briefcase },
+  { id: 'users',      label: 'Utilisateurs',     icon: Users },
+  { id: 'taskers',    label: 'Taskers',           icon: UserCheck },
+  { id: 'payments',   label: 'Paiements',         icon: DollarSign },
+  { id: 'wallet',     label: 'Portefeuille',      icon: Wallet },
+  { id: 'disputes',   label: 'Litiges',           icon: AlertTriangle },
+  { id: 'callcenter', label: 'Call Center',       icon: Headphones },
+  { id: 'countries',  label: 'Pays',              icon: Globe },
+  { id: 'kyc',        label: 'KYC',               icon: ShieldCheck },
+  { id: 'auditlog',   label: 'Journal d\'audit',  icon: ClipboardList },
+  { id: 'fraud',      label: 'Fraude',            icon: ShieldAlert },
 ];
 
 const bottomNav = [
@@ -43,7 +54,7 @@ function useAdminProfile() {
   const [email, setEmail] = useState('');
   const [initials, setInitials] = useState('?');
   useEffect(() => {
-    const token = localStorage.getItem('zaska_access_token');
+    const token = apiClient.getAccessToken();
     if (!token) return;
     fetch(`${BASE_URL}/users/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.json())

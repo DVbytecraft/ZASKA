@@ -10,22 +10,22 @@ interface LoginScreenProps {
 }
 
 export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword }: LoginScreenProps) {
-  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const { login, loading, error } = useAuth();
 
   const handleContinue = async () => {
     try {
-      await login(phone, password);
+      await login(email, password);
       onLogin();
     } catch {
       // error already set in useAuth
     }
   };
 
-  const phoneValid = /^\+[1-9]\d{6,14}$/.test(phone);
-  const isValid = phoneValid && password.length >= 8;
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  const isValid = emailValid && password.length >= 8;
 
   return (
     <div className="h-full flex flex-col" style={{ fontFamily: "'Poppins', sans-serif" }}>
@@ -75,19 +75,19 @@ export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword }: Log
         <div className="space-y-4 mb-6">
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
-              Téléphone
+              Email
             </label>
             <input
-              type="tel"
-              placeholder="+221701234567"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value.trim())}
+              type="email"
+              placeholder="nom@exemple.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value.trim())}
               className={`w-full px-4 py-3.5 rounded-xl border-2 bg-gray-50 focus:bg-white focus:outline-none transition-all text-gray-900 font-medium placeholder:font-normal placeholder:text-gray-400 ${
-                phone && !phoneValid ? 'border-red-300 focus:border-red-400' : 'border-gray-100 focus:border-[#6D28D9]'
+                email && !emailValid ? 'border-red-300 focus:border-red-400' : 'border-gray-100 focus:border-[#6D28D9]'
               }`}
             />
-            {phone && !phoneValid && (
-              <p className="text-xs text-red-500 mt-1">Format : +221XXXXXXXXX</p>
+            {email && !emailValid && (
+              <p className="text-xs text-red-500 mt-1">Adresse email invalide</p>
             )}
           </div>
 

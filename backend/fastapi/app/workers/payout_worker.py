@@ -22,11 +22,73 @@ from app.services.payment.mobile_money_topup import execute_mobile_money_payout
 from app.services.wallet_service import WalletService
 from app.worker.celery_app import celery_app
 
+from app.models.wallet import Escrow
+
 logger = logging.getLogger(__name__)
 
 
 def _make_limits() -> TransactionLimits:
     return TransactionLimits(fx_rate_usd_to_xof=Decimal(str(settings.fx_usd_to_xof)))
+
+
+@celery_app.task(name="app.workers.payout_worker.release_held_escrows", bind=True)
+def release_held_escrows(self):
+    """
+    Scheduled task — runs every 5 minutes.
+    Finds escrows in 'hold' state where payout_available_at has passed
+    and no contest has been filed. Automatically releases payment to the tasker.
+    This is the 24h automatic release after task completion.
+    """
+    db = SessionLocal()
+    released = 0
+    errors = 0
+    try:
+        now = datetime.utcnow()
+        wallet_svc = WalletService(db)
+
+        # Find all hold escrows whose window has passed
+        expired_holds = db.execute(
+            select(Escrow)
+            .where(
+                Escrow.status == "hold",
+                Escrow.payout_available_at <= now,
+            )
+        ).scalars().all()
+
+        for escrow in expired_holds:
+            try:
+                wallet_svc.release_escrow(escrow.id)
+                FinancialAuditLogger.log(
+                    action="escrow_auto_released",
+                    user_id=escrow.payee_id or "",
+                    payment_id=escrow.id,
+                    amount=escrow.amount,
+                    currency=escrow.currency,
+                    provider="internal",
+                    status="released",
+                )
+                logger.info(
+                    "escrow_auto_release: escrow=%s task=%s amount=%s %s",
+                    escrow.id, escrow.task_id, escrow.amount, escrow.currency,
+                )
+                released += 1
+            except Exception as exc:
+                logger.error(
+                    "escrow_auto_release: failed escrow=%s error=%s",
+                    escrow.id, exc,
+                )
+                errors += 1
+
+        logger.info(
+            "release_held_escrows: checked=%s released=%s errors=%s",
+            len(expired_holds), released, errors,
+        )
+        return {"checked": len(expired_holds), "released": released, "errors": errors}
+    except Exception as exc:
+        logger.error("release_held_escrows: task failed — %s", exc)
+        raise self.retry(exc=exc, countdown=300) from exc
+    finally:
+        db.close()
 
 
 @celery_app.task(name="app.workers.payout_worker.check_pending_payouts", bind=True)
