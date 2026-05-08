@@ -154,7 +154,7 @@ services:
     buildCommand: npm ci && npx vite build
     staticPublishPath: ./dist
     plan: free                      # static sites are free on Render
-    buildEnvVars:
+    envVars:
       - key: VITE_API_URL
         value: https://zaska-backend.onrender.com/api
     headers:
