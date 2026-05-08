@@ -7,7 +7,12 @@ export const paymentService = {
   },
 
   createIntent(taskId: string) {
-    return apiClient.post<PaymentIntent>("/payments/create-intent", { task_id: taskId });
+    const idempotencyKey = `${taskId}-${Date.now().toString(36)}`;
+    return apiClient.post<PaymentIntent>(
+      "/payments/create-intent",
+      { task_id: taskId },
+      { "X-Idempotency-Key": idempotencyKey },
+    );
   },
 
   mockSuccess(escrowId: string) {

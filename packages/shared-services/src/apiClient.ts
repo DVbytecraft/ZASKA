@@ -92,16 +92,21 @@ export class ApiClient {
     return unwrap<T>(response);
   }
 
-  async post<T>(path: string, body: unknown): Promise<T> {
+  async post<T>(path: string, body: unknown, extraHeaders?: Record<string, string>): Promise<T> {
+    const buildHeaders = () => ({
+      "Content-Type": "application/json",
+      ...this.authHeaders(),
+      ...extraHeaders,
+    });
     let response = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...this.authHeaders() },
+      headers: buildHeaders(),
       body: JSON.stringify(body),
     });
     if (response.status === 401 && (await this.tryRefresh())) {
       response = await fetch(`${this.baseUrl}${path}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...this.authHeaders() },
+        headers: buildHeaders(),
         body: JSON.stringify(body),
       });
     }

@@ -37,10 +37,11 @@ export const authService = {
   },
 
   async refresh(): Promise<AuthSession> {
-    if (!apiClient.getAccessToken()) {
+    const refreshToken = apiClient.getRefreshToken();
+    if (!refreshToken) {
       throw new Error("No active session");
     }
-    const session = await apiClient.post<AuthSession>("/auth/refresh", {});
+    const session = await apiClient.post<AuthSession>("/auth/refresh", { refresh_token: refreshToken });
     apiClient.setTokens({
       accessToken: session.accessToken,
       refreshToken: session.refreshToken,
