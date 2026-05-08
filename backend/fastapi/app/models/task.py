@@ -2,7 +2,7 @@ import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -35,3 +35,6 @@ class Task(Base):
     negotiation_status: Mapped[str] = mapped_column(String(16), default="none", nullable=False)
     negotiated_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     negotiated_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+
+    # Multi-stop: [{address, latitude, longitude}, ...]
+    stops: Mapped[list | None] = mapped_column(JSON, nullable=True)

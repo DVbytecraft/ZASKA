@@ -8,8 +8,149 @@ import { taskService, walletService, apiClient } from '@zaska/shared-services';
 import type { Task, Escrow } from '@zaska/shared-services';
 import {
   ArrowLeft, MapPin, MessageCircle, Users, RefreshCw,
-  CheckCircle2, Clock, AlertTriangle, Loader2,
+  CheckCircle2, Clock, AlertTriangle, Loader2, TrendingUp,
 } from 'lucide-react';
+
+// ── Negotiation Panel ─────────────────────────────────────────────────────────
+interface NegotiationPanelProps {
+  task: Task;
+  currentUserId: string;
+  onReload: () => void;
+}
+
+function NegotiationPanel({ task, currentUserId, onReload }: NegotiationPanelProps) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const isInitiator = task.negotiatedBy === currentUserId;
+  const isResponder = !isInitiator && (task.createdBy === currentUserId || task.assignedTo === currentUserId);
+  const status = task.negotiationStatus;
+  const proposed = task.negotiatedPrice ? Number(task.negotiatedPrice) : null;
+
+  const respond = async (accept: boolean) => {
+    setLoading(true);
+    setError(null);
+    try {
+      await taskService.respondToNegotiation(task.id, accept);
+      onReload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const abandon = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await taskService.abandonNegotiation(task.id);
+      onReload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!proposed) return null;
+
+  return (
+    <Card className={`border-2 ${
+      status === 'accepted' ? 'border-green-200 bg-green-50/40' :
+      status === 'rejected' ? 'border-red-200 bg-red-50/40' :
+      'border-amber-200 bg-amber-50/40'
+    }`}>
+      <div className="flex items-center gap-2 mb-3">
+        <TrendingUp size={16} className={
+          status === 'accepted' ? 'text-green-600' :
+          status === 'rejected' ? 'text-red-500' : 'text-amber-600'
+        } />
+        <h4 className="font-semibold text-sm text-gray-900">
+          {status === 'accepted' ? 'Modification de prix acceptée' :
+           status === 'rejected' ? 'Modification de prix refusée' :
+           'Modification de prix en attente'}
+        </h4>
+      </div>
+
+      <div className="flex gap-3 mb-3">
+        <div className="flex-1 bg-white rounded-xl p-3 border border-gray-100">
+          <p className="text-xs text-gray-400 mb-1">Prix initial</p>
+          <p className="font-bold text-gray-900 text-sm">{task.currency} {Number(task.price).toFixed(2)}</p>
+        </div>
+        <div className={`flex-1 rounded-xl p-3 border ${
+          status === 'accepted' ? 'bg-green-50 border-green-200' :
+          status === 'rejected' ? 'bg-red-50 border-red-200' :
+          'bg-amber-50 border-amber-200'
+        }`}>
+          <p className="text-xs text-gray-400 mb-1">Proposé</p>
+          <p className={`font-bold text-sm ${
+            status === 'accepted' ? 'text-green-700' :
+            status === 'rejected' ? 'text-red-600' : 'text-amber-800'
+          }`}>{task.currency} {proposed.toFixed(2)}</p>
+        </div>
+      </div>
+
+      {/* Pending — responder can accept or reject */}
+      {status === 'pending' && isResponder && (
+        <div className="flex gap-2">
+          <button
+            onClick={() => respond(true)}
+            disabled={loading}
+            className="flex-1 py-2.5 bg-green-600 text-white rounded-xl text-sm font-semibold hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-1"
+          >
+            {loading ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+            Accepter
+          </button>
+          <button
+            onClick={() => respond(false)}
+            disabled={loading}
+            className="flex-1 py-2.5 border-2 border-red-200 text-red-600 rounded-xl text-sm font-semibold hover:bg-red-50 disabled:opacity-50 flex items-center justify-center gap-1"
+          >
+            <AlertTriangle size={14} />
+            Refuser
+          </button>
+        </div>
+      )}
+
+      {/* Pending — initiator is waiting */}
+      {status === 'pending' && isInitiator && (
+        <p className="text-xs text-amber-700 bg-amber-100 rounded-xl px-3 py-2">
+          <Clock size={12} className="inline mr-1" />
+          En attente de réponse du client…
+        </p>
+      )}
+
+      {/* Rejected — initiator can abandon */}
+      {status === 'rejected' && isInitiator && (
+        <button
+          onClick={abandon}
+          disabled={loading}
+          className="w-full py-2.5 border-2 border-gray-200 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
+        >
+          {loading ? <Loader2 size={14} className="animate-spin inline" /> : 'Abandonner la tâche'}
+        </button>
+      )}
+
+      {/* Rejected — show message to responder */}
+      {status === 'rejected' && !isInitiator && (
+        <p className="text-xs text-red-700 bg-red-100 rounded-xl px-3 py-2">
+          Vous avez refusé cette proposition. Le prestataire en a été notifié.
+        </p>
+      )}
+
+      {/* Accepted */}
+      {status === 'accepted' && (
+        <p className="text-xs text-green-700 bg-green-100 rounded-xl px-3 py-2">
+          <CheckCircle2 size={12} className="inline mr-1" />
+          Prix accepté — le paiement sera basé sur ce montant.
+        </p>
+      )}
+
+      {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
+    </Card>
+  );
+}
 
 interface TaskDetailScreenProps {
   taskId: string;
@@ -341,6 +482,15 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
           </Card>
         )}
 
+        {/* ── Negotiation panel ── */}
+        {task.negotiatedPrice && task.negotiationStatus && task.negotiationStatus !== 'none' && (
+          <NegotiationPanel
+            task={task}
+            currentUserId={currentUserId ?? ''}
+            onReload={load}
+          />
+        )}
+
         {/* Payment / Escrow */}
         <Card>
           <h4 className="font-semibold text-gray-900 mb-3 text-sm uppercase tracking-wide">Paiement</h4>
@@ -350,14 +500,6 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
               {task.currency} {Number(task.price).toFixed(2)}
             </span>
           </div>
-          {task.negotiatedPrice && task.negotiationStatus === 'pending' && (
-            <div className="mb-3 p-3 bg-amber-50 rounded-xl border border-amber-100">
-              <p className="text-xs font-semibold text-amber-700">Modification de prix en attente</p>
-              <p className="text-sm text-amber-900 mt-0.5">
-                Prix proposé : {task.currency} {Number(task.negotiatedPrice).toFixed(2)}
-              </p>
-            </div>
-          )}
           <EscrowBadge amount={escrowAmount} status={escrowStatus} />
           {task.status === 'COMPLETED' && (
             <p className="text-xs text-green-600 mt-3 font-medium">Paiement libéré au prestataire.</p>

@@ -36,7 +36,7 @@ export function ConfirmCompletionScreen({ taskId, onBack, onSuccess, onReportIss
       walletService.getEscrowForTask(taskId).catch(() => null),
     ])
       .then(([t, esc]) => { if (!cancelled) { setTask(t); setEscrow(esc); } })
-      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load'); })
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Impossible de charger'); })
       .finally(() => { if (!cancelled) setLoadingData(false); });
     return () => { cancelled = true; };
   }, [taskId]);
@@ -49,7 +49,7 @@ export function ConfirmCompletionScreen({ taskId, onBack, onSuccess, onReportIss
       await apiClient.post(`/tasks/${task.id}/complete`, { completion_percent: completionPct });
       setStep('code_sent');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to mark task complete');
+      setError(err instanceof Error ? err.message : 'Impossible de marquer la tâche comme terminée');
     } finally {
       setSubmitting(false);
     }
@@ -178,7 +178,7 @@ export function ConfirmCompletionScreen({ taskId, onBack, onSuccess, onReportIss
                 </div>
               )}
               <Button fullWidth onClick={handleSubmitCode} disabled={!codeComplete || submitting}>
-                {submitting ? <Loader2 size={16} className="animate-spin" /> : 'Validate my code'}
+                {submitting ? <Loader2 size={16} className="animate-spin" /> : 'Valider mon code'}
               </Button>
             </Card>
             <button onClick={onReportIssue} className="w-full px-6 py-3 border-2 border-red-200 rounded-xl font-semibold text-red-600 hover:bg-red-50 transition-all text-sm flex items-center justify-center gap-2">

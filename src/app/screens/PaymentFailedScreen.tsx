@@ -9,7 +9,7 @@ interface PaymentFailedScreenProps {
 }
 
 export function PaymentFailedScreen({
-  reason = 'Payment could not be processed',
+  reason = 'Le paiement n\'a pas pu être traité',
   onRetry,
   onChangePaymentMethod,
   onCancel
@@ -20,19 +20,19 @@ export function PaymentFailedScreen({
         <XCircle size={40} className="text-red-600" />
       </div>
 
-      <h3 className="text-xl font-bold text-gray-900 mb-2 text-center">Payment failed</h3>
+      <h3 className="text-xl font-bold text-gray-900 mb-2 text-center">Paiement échoué</h3>
       <p className="text-gray-600 text-center mb-8 max-w-xs text-sm">{reason}</p>
 
       <div className="w-full max-w-sm space-y-3">
         <Button fullWidth onClick={onRetry}>
-          Try again
+          Réessayer
         </Button>
         <Button fullWidth variant="outline" onClick={onChangePaymentMethod}>
           <CreditCard size={20} />
-          Change payment method
+          Changer de moyen de paiement
         </Button>
         <button onClick={onCancel} className="w-full py-3 text-gray-600 font-medium hover:text-gray-900 transition-colors">
-          Cancel task
+          Annuler la tâche
         </button>
       </div>
 
@@ -40,7 +40,7 @@ export function PaymentFailedScreen({
         <div className="flex items-start gap-2">
           <AlertCircle size={16} className="text-blue-600 flex-shrink-0 mt-0.5" />
           <p className="text-sm text-blue-900">
-            Your payment method was not charged. No funds have been deducted.
+            Votre moyen de paiement n'a pas été débité. Aucun fonds n'a été prélevé.
           </p>
         </div>
       </div>

@@ -9,11 +9,11 @@ export function FAQScreen({ onBack }: FAQScreenProps) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
 
   const faqs = [
-    { q: 'How does ZASKA work?', a: 'ZASKA connects you with nearby taskers who can help with everyday tasks. Simply post your task, get matched, and get it done.' },
-    { q: 'How do I pay?', a: 'We accept mobile money, cards, and wallet payments. Your payment is held securely in escrow until the task is completed.' },
-    { q: 'What if I\'m not satisfied?', a: 'Contact support within 24 hours and we\'ll help resolve the issue or provide a refund.' },
-    { q: 'How do I become a tasker?', a: 'Switch to tasker mode in your profile, complete verification, and start accepting tasks.' },
-    { q: 'Is my payment secure?', a: 'Yes, all payments are encrypted and held in escrow until you confirm task completion.' }
+    { q: 'Comment fonctionne ZASKA ?', a: 'ZASKA vous met en relation avec des prestataires proches de vous qui peuvent vous aider dans vos tâches quotidiennes. Publiez simplement votre tâche, trouvez un match, et c\'est fait.' },
+    { q: 'Comment payer ?', a: 'Nous acceptons le mobile money, les cartes et les paiements par portefeuille. Votre paiement est conservé en toute sécurité en séquestre jusqu\'à la réalisation de la tâche.' },
+    { q: 'Et si je ne suis pas satisfait ?', a: 'Contactez le support dans les 24 heures et nous vous aiderons à résoudre le problème ou vous rembourserons.' },
+    { q: 'Comment devenir prestataire ?', a: 'Passez en mode prestataire dans votre profil, complétez la vérification et commencez à accepter des tâches.' },
+    { q: 'Mon paiement est-il sécurisé ?', a: 'Oui, tous les paiements sont chiffrés et conservés en séquestre jusqu\'à ce que vous confirmiez la réalisation de la tâche.' },
   ];
 
   return (

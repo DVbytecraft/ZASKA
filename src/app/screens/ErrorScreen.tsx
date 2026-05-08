@@ -9,8 +9,8 @@ interface ErrorScreenProps {
 }
 
 export function ErrorScreen({
-  title = 'Something went wrong',
-  message = 'Please try again',
+  title = 'Une erreur est survenue',
+  message = 'Veuillez réessayer',
   onRetry,
   onBack
 }: ErrorScreenProps) {
@@ -23,10 +23,10 @@ export function ErrorScreen({
       <h3 className="text-xl font-bold text-gray-900 mb-8 text-center">{title}</h3>
 
       <div className="space-y-3 w-full max-w-xs">
-        {onRetry && <Button fullWidth onClick={onRetry}>Try again</Button>}
+        {onRetry && <Button fullWidth onClick={onRetry}>Réessayer</Button>}
         {onBack && (
           <button onClick={onBack} className="w-full py-3 text-gray-600 font-medium hover:text-gray-900 transition-colors">
-            Go back
+            Retour
           </button>
         )}
       </div>

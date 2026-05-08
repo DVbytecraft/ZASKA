@@ -8,7 +8,7 @@ interface CompletionScreenProps {
   taskerName?: string;
 }
 
-export function CompletionScreen({ onDone, taskerName = 'Votre tasker' }: CompletionScreenProps) {
+export function CompletionScreen({ onDone, taskerName = 'Votre prestataire' }: CompletionScreenProps) {
   const [rating, setRating] = useState(0);
   const [hoveredRating, setHoveredRating] = useState(0);
 
@@ -18,13 +18,13 @@ export function CompletionScreen({ onDone, taskerName = 'Votre tasker' }: Comple
         <CheckCircle2 size={48} className="text-white" strokeWidth={3} />
       </div>
 
-      <h2 className="text-3xl font-bold text-gray-900 mb-10">Task completed</h2>
+      <h2 className="text-3xl font-bold text-gray-900 mb-10">Tâche terminée</h2>
 
       <div className="w-full max-w-sm bg-gray-50 rounded-3xl p-6 mb-8">
-        <h3 className="font-semibold text-gray-900 mb-5 text-center">Rate your experience</h3>
+        <h3 className="font-semibold text-gray-900 mb-5 text-center">Évaluez votre expérience</h3>
 
         <div className="flex items-center gap-3 mb-6 pb-6 border-b border-gray-200">
-          <Avatar name="{taskerName}" size="md" />
+          <Avatar name={taskerName} size="md" />
           <div>
             <h4 className="font-semibold text-gray-900">{taskerName}</h4>
           </div>
@@ -52,21 +52,21 @@ export function CompletionScreen({ onDone, taskerName = 'Votre tasker' }: Comple
           ))}
         </div>
         <p className="text-center text-sm text-gray-500">
-          {rating === 0 && 'Tap to rate'}
-          {rating === 1 && 'Poor'}
-          {rating === 2 && 'Fair'}
-          {rating === 3 && 'Good'}
-          {rating === 4 && 'Very good'}
+          {rating === 0 && 'Appuyez pour noter'}
+          {rating === 1 && 'Mauvais'}
+          {rating === 2 && 'Passable'}
+          {rating === 3 && 'Bien'}
+          {rating === 4 && 'Très bien'}
           {rating === 5 && 'Excellent'}
         </p>
       </div>
 
       <div className="w-full max-w-sm space-y-3">
         <Button fullWidth onClick={onDone} disabled={rating === 0}>
-          Submit review
+          Envoyer l'avis
         </Button>
         <button onClick={onDone} className="w-full text-gray-500 font-medium py-3 hover:text-gray-700 transition-colors">
-          Skip
+          Passer
         </button>
       </div>
     </div>

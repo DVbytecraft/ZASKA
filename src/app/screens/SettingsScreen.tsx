@@ -10,23 +10,23 @@ interface SettingsScreenProps {
 export function SettingsScreen({ onBack, onSupport, onLogout }: SettingsScreenProps) {
   const settingsSections = [
     {
-      title: 'Preferences',
+      title: 'Préférences',
       items: [
-        { icon: Bell, label: 'Notifications', value: 'On', color: 'text-purple-600', bg: 'bg-purple-50' },
-        { icon: Globe, label: 'Language', value: 'English', color: 'text-blue-600', bg: 'bg-blue-50' },
+        { icon: Bell, label: 'Notifications', value: 'Activées', color: 'text-purple-600', bg: 'bg-purple-50' },
+        { icon: Globe, label: 'Langue', value: 'Français', color: 'text-blue-600', bg: 'bg-blue-50' },
       ]
     },
     {
-      title: 'Privacy & Security',
+      title: 'Confidentialité & Sécurité',
       items: [
-        { icon: Shield, label: 'Privacy Policy', color: 'text-green-600', bg: 'bg-green-50' },
-        { icon: Shield, label: 'Terms of Service', color: 'text-green-600', bg: 'bg-green-50' },
+        { icon: Shield, label: 'Politique de confidentialité', color: 'text-green-600', bg: 'bg-green-50' },
+        { icon: Shield, label: 'Conditions d\'utilisation', color: 'text-green-600', bg: 'bg-green-50' },
       ]
     },
     {
-      title: 'Support',
+      title: 'Assistance',
       items: [
-        { icon: HelpCircle, label: 'Help & Support', color: 'text-orange-600', bg: 'bg-orange-50', onClick: onSupport },
+        { icon: HelpCircle, label: 'Aide & Support', color: 'text-orange-600', bg: 'bg-orange-50', onClick: onSupport },
       ]
     }
   ];
@@ -38,7 +38,7 @@ export function SettingsScreen({ onBack, onSupport, onLogout }: SettingsScreenPr
           <button onClick={onBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors">
             <ArrowLeft size={24} className="text-gray-700" />
           </button>
-          <h2 className="text-2xl font-bold text-gray-900">Settings</h2>
+          <h2 className="text-2xl font-bold text-gray-900">Paramètres</h2>
         </div>
       </div>
 
@@ -72,7 +72,7 @@ export function SettingsScreen({ onBack, onSupport, onLogout }: SettingsScreenPr
           className="w-full mt-8 p-4 bg-white rounded-xl border border-red-200 hover:bg-red-50 transition-colors flex items-center justify-center gap-3"
         >
           <LogOut size={20} className="text-red-600" />
-          <span className="font-semibold text-red-600">Log Out</span>
+          <span className="font-semibold text-red-600">Se déconnecter</span>
         </button>
       </div>
     </div>

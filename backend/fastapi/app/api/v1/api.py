@@ -8,6 +8,7 @@ from app.api.v1.routers import (
     chat,
     feature_flags,
     kyc,
+    notifications,
     payments,
     statement,
     system,
@@ -30,3 +31,4 @@ api_router.include_router(admin.router)
 api_router.include_router(addresses.router)
 api_router.include_router(cards.router)
 api_router.include_router(statement.router)
+api_router.include_router(notifications.router)

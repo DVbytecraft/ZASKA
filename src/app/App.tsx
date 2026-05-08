@@ -44,6 +44,8 @@ const ProfileScreen = lazy(() => import('./screens/ProfileScreen').then(m => ({ 
 const KycScreen = lazy(() => import('./screens/KycScreen').then(m => ({ default: m.KycScreen })));
 const EditProfileScreen = lazy(() => import('./screens/EditProfileScreen').then(m => ({ default: m.EditProfileScreen })));
 const PaymentMethodsScreen = lazy(() => import('./screens/PaymentMethodsScreen').then(m => ({ default: m.PaymentMethodsScreen })));
+const AddressesScreen = lazy(() => import('./screens/AddressesScreen').then(m => ({ default: m.AddressesScreen })));
+const VirtualCardScreen = lazy(() => import('./screens/VirtualCardScreen').then(m => ({ default: m.VirtualCardScreen })));
 const TaskHistoryScreen = lazy(() => import('./screens/TaskHistoryScreen').then(m => ({ default: m.TaskHistoryScreen })));
 const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })));
 const SupportScreen = lazy(() => import('./screens/SupportScreen').then(m => ({ default: m.SupportScreen })));
@@ -100,6 +102,8 @@ type Screen =
   | 'profile'
   | 'editProfile'
   | 'paymentMethods'
+  | 'addresses'
+  | 'virtualCard'
   | 'taskHistory'
   | 'settings'
   | 'support'
@@ -484,6 +488,7 @@ export default function App() {
             onEditProfile={() => setCurrentScreen('editProfile')}
             onKyc={() => setCurrentScreen('kyc')}
             onPaymentMethods={() => setCurrentScreen('paymentMethods')}
+            onAddresses={() => setCurrentScreen('addresses')}
             onTaskHistory={() => setCurrentScreen('taskHistory')}
             onSettings={() => setCurrentScreen('settings')}
             onSupport={() => setCurrentScreen('support')}
@@ -514,7 +519,21 @@ export default function App() {
         return (
           <PaymentMethodsScreen
             onBack={() => setCurrentScreen('profile')}
-            onAddPaymentMethod={() => setCurrentScreen('profile')}
+            onVirtualCards={() => setCurrentScreen('virtualCard')}
+          />
+        );
+
+      case 'addresses':
+        return (
+          <AddressesScreen
+            onBack={() => setCurrentScreen('profile')}
+          />
+        );
+
+      case 'virtualCard':
+        return (
+          <VirtualCardScreen
+            onBack={() => setCurrentScreen('paymentMethods')}
           />
         );
 

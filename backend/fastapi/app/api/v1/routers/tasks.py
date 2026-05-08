@@ -33,6 +33,19 @@ from app.services.wallet_service import EscrowError, WalletService
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
+# ─── In-app notification helper ───────────────────────────────────────────────
+
+def _notify(db: Session, user_id: str, type_: str, title: str, body: str) -> None:
+    """Persist a single in-app notification. Never raises."""
+    try:
+        from app.models.notification import Notification
+        notif = Notification(user_id=user_id, type=type_, title=title, body=body)
+        db.add(notif)
+        db.flush()
+    except Exception:
+        pass
+
+
 # ─── Serializers ─────────────────────────────────────────────────────────────
 
 def _serialize_task(task: Task) -> dict:
@@ -51,7 +64,9 @@ def _serialize_task(task: Task) -> dict:
         "completionPercent": task.completion_percent,
         "negotiationStatus": task.negotiation_status,
         "negotiatedPrice": float(task.negotiated_price) if task.negotiated_price else None,
+        "negotiatedBy": task.negotiated_by,
         "createdAt": task.created_at.isoformat() if task.created_at else None,
+        "stops": task.stops,
     }
 
 
@@ -89,8 +104,18 @@ def create_task(
     try:
         data = payload.model_dump()
         data["created_by"] = user_id
+        # When stops provided, derive primary coords from first stop
+        if data.get("stops"):
+            first = data["stops"][0]
+            data["latitude"] = first["latitude"]
+            data["longitude"] = first["longitude"]
+            data["address"] = first["address"]
+        elif not data.get("latitude") or not data.get("longitude"):
+            raise HTTPException(status_code=422, detail="latitude et longitude requis si stops absent")
         task = service.create_task(data)
         return success_response(_serialize_task(task))
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -290,6 +315,10 @@ def apply_task(
         except Exception:
             pass  # email is best-effort — never block the response
 
+        _notify(db, task.created_by, "info", "Nouvelle candidature",
+                f"Un prestataire a postulé à votre tâche : {task.title}")
+        db.commit()
+
         return success_response({
             "id": application.id,
             "taskId": application.task_id,
@@ -397,8 +426,8 @@ def negotiate_price(
             raise HTTPException(status_code=403, detail="Non autorisé à négocier cette tâche")
         if task.created_by == user_id:
             raise HTTPException(status_code=400, detail="Le créateur ne peut pas négocier son propre prix")
-        if task.status not in ("OPEN",):
-            raise HTTPException(status_code=409, detail="La négociation n'est possible que sur une tâche OPEN")
+        if task.status not in ("OPEN", "ASSIGNED"):
+            raise HTTPException(status_code=409, detail="La négociation n'est possible que sur une tâche en cours ou ouverte")
 
         task = service.propose_price(task_id=task_id, proposer_id=user_id, proposed_price=payload.proposed_price)
 
@@ -418,6 +447,10 @@ def negotiate_price(
                 )
         except Exception:
             pass
+
+        _notify(db, task.created_by, "warning", "Modification de prix demandée",
+                f"Un prestataire propose un nouveau prix pour : {task.title}")
+        db.commit()
 
         return success_response({
             **_serialize_task(task),
@@ -468,6 +501,16 @@ def respond_to_negotiation(
                 ),
                 text_content=f"Modification de prix refusée pour la tâche {task.title}.",
             )
+
+        # In-app notification to the executor who proposed the price
+        if task.negotiated_by:
+            if payload.accept:
+                _notify(db, task.negotiated_by, "success", "Modification de prix acceptée ✓",
+                        f"Le client a accepté votre prix pour : {task.title}")
+            else:
+                _notify(db, task.negotiated_by, "warning", "Modification de prix refusée",
+                        f"Le client a refusé votre demande de prix pour : {task.title}")
+        db.commit()
 
         msg = "Prix accepté. La messagerie est maintenant ouverte." if payload.accept else "Prix refusé. L'exécutant sera notifié."
         return success_response({**_serialize_task(task), "message": msg})
@@ -549,6 +592,10 @@ def mark_task_complete(
         except Exception:
             pass
 
+        _notify(db, task.created_by, "success", "Prestation déclarée terminée",
+                f"Votre prestataire a déclaré la tâche terminée : {task.title}. Vous avez 6h pour confirmer.")
+        db.commit()
+
         logger.info("task:pending_validation task_id={}", task_id)
         return success_response({
             "task_id": task_id,
@@ -604,6 +651,11 @@ def confirm_task_complete(
                 )
         except Exception:
             pass
+
+        if task.assigned_to:
+            _notify(db, task.assigned_to, "success", "Paiement libéré 🎉",
+                    f"Le client a confirmé la réalisation de : {task.title}. Votre paiement est disponible.")
+        db.commit()
 
         logger.info("task:confirmed task_id={}", task_id)
         updated_task = service.get_task(task_id)

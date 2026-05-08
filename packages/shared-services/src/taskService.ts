@@ -13,6 +13,7 @@ export const taskService = {
       address: payload.address,
       mode: payload.mode,
       status: payload.status,
+      stops: payload.stops,
     });
   },
 
@@ -98,5 +99,13 @@ export const taskService = {
 
   negotiateTask(taskId: string, proposedBudget: number) {
     return apiClient.post<Task>(`/tasks/${taskId}/negotiate`, { proposed_price: proposedBudget });
+  },
+
+  respondToNegotiation(taskId: string, accept: boolean) {
+    return apiClient.post<Task>(`/tasks/${taskId}/negotiate/respond`, { accept });
+  },
+
+  abandonNegotiation(taskId: string) {
+    return apiClient.post<Task>(`/tasks/${taskId}/negotiate/abandon`, {});
   },
 };

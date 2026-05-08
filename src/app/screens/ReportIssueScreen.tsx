@@ -13,12 +13,12 @@ export function ReportIssueScreen({ onBack, onSubmit, taskId }: ReportIssueScree
   const [description, setDescription] = useState('');
 
   const issueCategories = [
-    'Task not completed',
-    'Poor quality work',
-    'Tasker didn\'t show up',
-    'Payment issue',
-    'Safety concern',
-    'Other'
+    'Tâche non effectuée',
+    'Travail de mauvaise qualité',
+    'Prestataire absent',
+    'Problème de paiement',
+    'Problème de sécurité',
+    'Autre',
   ];
 
   return (
@@ -28,7 +28,7 @@ export function ReportIssueScreen({ onBack, onSubmit, taskId }: ReportIssueScree
           <button onClick={onBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors">
             <ArrowLeft size={24} className="text-gray-700" />
           </button>
-          <h2 className="text-xl font-semibold text-gray-900">Report an Issue</h2>
+          <h2 className="text-xl font-semibold text-gray-900">Signaler un problème</h2>
           <div className="w-10" />
         </div>
       </div>
@@ -38,15 +38,15 @@ export function ReportIssueScreen({ onBack, onSubmit, taskId }: ReportIssueScree
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 flex items-start gap-3">
             <AlertCircle size={20} className="text-blue-600 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-blue-900">Task ID: {taskId}</p>
-              <p className="text-sm text-blue-700">Our team will review your report within 24 hours</p>
+              <p className="text-sm font-medium text-blue-900">Tâche ID : {taskId}</p>
+              <p className="text-sm text-blue-700">Notre équipe examinera votre signalement dans les 24 heures</p>
             </div>
           </div>
         )}
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Issue Category</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Catégorie du problème</label>
             <div className="grid grid-cols-2 gap-2">
               {issueCategories.map((cat) => (
                 <button
@@ -73,17 +73,17 @@ export function ReportIssueScreen({ onBack, onSubmit, taskId }: ReportIssueScree
               onChange={(e) => setDescription(e.target.value)}
               rows={6}
               className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#6D28D9] focus:border-transparent resize-none"
-              placeholder="Please describe the issue in detail..."
+              placeholder="Décrivez le problème en détail…"
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Attach Photos (Optional)
+              Joindre des photos (facultatif)
             </label>
             <button className="w-full py-8 border-2 border-dashed border-gray-300 rounded-xl hover:border-gray-400 transition-colors">
               <Camera size={32} className="mx-auto mb-2 text-gray-400" />
-              <p className="text-sm font-medium text-gray-600">Upload photos</p>
+              <p className="text-sm font-medium text-gray-600">Importer des photos</p>
             </button>
           </div>
         </div>
@@ -91,7 +91,7 @@ export function ReportIssueScreen({ onBack, onSubmit, taskId }: ReportIssueScree
 
       <div className="p-6 border-t border-gray-200">
         <Button fullWidth onClick={onSubmit} disabled={!category || !description}>
-          Submit Report
+          Envoyer le signalement
         </Button>
       </div>
     </div>

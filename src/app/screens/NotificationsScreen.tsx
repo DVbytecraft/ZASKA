@@ -45,7 +45,7 @@ export function NotificationsScreen({ onBack }: NotificationsScreenProps) {
         if (msg.includes('404') || msg.includes('failed: 404')) {
           setNotifications([]);
         } else {
-          setError('Failed to load notifications');
+          setError('Impossible de charger les notifications');
         }
       })
       .finally(() => setLoading(false));
@@ -57,7 +57,7 @@ export function NotificationsScreen({ onBack }: NotificationsScreenProps) {
     <div className="h-full flex flex-col bg-gray-50">
       <div className="px-6 pt-8 pb-4 bg-white border-b border-gray-200">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors" aria-label="Go back">
+          <button onClick={onBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors" aria-label="Retour">
             <ArrowLeft size={24} className="text-gray-700" />
           </button>
           <h2 className="text-2xl font-bold text-gray-900">Notifications</h2>
@@ -74,14 +74,14 @@ export function NotificationsScreen({ onBack }: NotificationsScreenProps) {
             <AlertTriangle size={40} className="text-red-400" />
             <p className="text-sm text-red-600">{error}</p>
             <button onClick={load} className="flex items-center gap-2 text-sm font-medium text-[#6D28D9] hover:underline">
-              <RefreshCw size={16} /> Retry
+              <RefreshCw size={16} /> Réessayer
             </button>
           </div>
         ) : notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full pb-12 text-center">
             <Bell size={48} className="text-gray-300 mb-4" />
-            <p className="text-lg font-semibold text-gray-700">No notifications</p>
-            <p className="text-sm text-gray-500 mt-2">Your notifications will appear here.</p>
+            <p className="text-lg font-semibold text-gray-700">Aucune notification</p>
+            <p className="text-sm text-gray-500 mt-2">Vos notifications apparaîtront ici.</p>
           </div>
         ) : (
           <div className="space-y-3">

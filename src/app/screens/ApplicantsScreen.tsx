@@ -36,7 +36,7 @@ export function ApplicantsScreen({ taskId, onBack, onSelectTasker, onNegotiate }
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Failed to load applicants');
+        setError(err instanceof Error ? err.message : 'Impossible de charger les candidatures');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -53,7 +53,7 @@ export function ApplicantsScreen({ taskId, onBack, onSelectTasker, onNegotiate }
       await taskService.acceptApplicant(taskId, applicant.taskerId);
       onSelectTasker();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to accept tasker');
+      alert(err instanceof Error ? err.message : 'Impossible d\'accepter le prestataire');
     } finally {
       setAccepting(null);
     }
@@ -67,9 +67,9 @@ export function ApplicantsScreen({ taskId, onBack, onSelectTasker, onNegotiate }
             <ArrowLeft size={24} className="text-gray-700" />
           </button>
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">Applicants</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Candidatures</h2>
             <p className="text-sm text-gray-500">
-              {loading ? 'Loading...' : `${applicants.length} tasker${applicants.length !== 1 ? 's' : ''} applied`}
+              {loading ? 'Chargement…' : `${applicants.length} prestataire${applicants.length !== 1 ? 's' : ''} a postulé`}
             </p>
           </div>
         </div>
@@ -97,8 +97,8 @@ export function ApplicantsScreen({ taskId, onBack, onSelectTasker, onNegotiate }
 
         {!loading && !error && applicants.length === 0 && (
           <div className="bg-gray-100 rounded-2xl p-8 text-center">
-            <p className="text-sm text-gray-500 mb-1">No applications yet.</p>
-            <p className="text-xs text-gray-400">Taskers who apply will appear here.</p>
+            <p className="text-sm text-gray-500 mb-1">Aucune candidature pour l'instant.</p>
+            <p className="text-xs text-gray-400">Les prestataires qui postulent apparaîtront ici.</p>
           </div>
         )}
 
@@ -108,7 +108,7 @@ export function ApplicantsScreen({ taskId, onBack, onSelectTasker, onNegotiate }
               <Avatar name={applicant.taskerName ?? applicant.taskerId.slice(0, 8)} size="lg" />
               <div className="flex-1 min-w-0">
                 <h4 className="font-semibold text-gray-900 mb-1">
-                  {applicant.taskerName ?? `Tasker ${applicant.taskerId.slice(0, 8)}`}
+                  {applicant.taskerName ?? `Prestataire ${applicant.taskerId.slice(0, 8)}`}
                 </h4>
                 {applicant.taskerRating != null && (
                   <div className="flex items-center gap-2 text-sm mb-2">
@@ -126,7 +126,7 @@ export function ApplicantsScreen({ taskId, onBack, onSelectTasker, onNegotiate }
                   applicant.status === 'accepted' ? 'bg-green-50 text-green-700' :
                   'bg-gray-100 text-gray-600'
                 }`}>
-                  {applicant.status}
+                  {applicant.status === 'pending' ? 'En attente' : applicant.status === 'accepted' ? 'Accepté' : 'Refusé'}
                 </span>
               </div>
             </div>
@@ -134,7 +134,7 @@ export function ApplicantsScreen({ taskId, onBack, onSelectTasker, onNegotiate }
             {applicant.proposedPrice != null && (
               <div className="bg-gray-50 rounded-xl p-3 mb-3">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm text-gray-600">Proposed price</span>
+                  <span className="text-sm text-gray-600">Prix proposé</span>
                 </div>
                 <span className="text-2xl font-bold text-gray-900">
                   {applicant.currency} {applicant.proposedPrice.toFixed(2)}
@@ -149,7 +149,7 @@ export function ApplicantsScreen({ taskId, onBack, onSelectTasker, onNegotiate }
                   onClick={() => handleAccept(applicant)}
                   disabled={accepting === applicant.id}
                 >
-                  {accepting === applicant.id ? 'Accepting...' : 'Select tasker'}
+                  {accepting === applicant.id ? 'Acceptation…' : 'Sélectionner le prestataire'}
                 </Button>
                 {applicant.proposedPrice != null && onNegotiate && (
                   <button
@@ -160,7 +160,7 @@ export function ApplicantsScreen({ taskId, onBack, onSelectTasker, onNegotiate }
                     )}
                     className="px-4 py-2 rounded-xl border-2 border-[#6D28D9] text-[#6D28D9] font-semibold text-sm whitespace-nowrap hover:bg-purple-50 transition-colors"
                   >
-                    Negotiate
+                    Négocier
                   </button>
                 )}
               </div>

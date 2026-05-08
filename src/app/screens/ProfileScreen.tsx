@@ -4,13 +4,14 @@ import { Card } from '../components/Card';
 import { Avatar } from '../components/Avatar';
 import {
   ChevronRight, CreditCard, Clock, Settings, HelpCircle, LogOut,
-  Edit, ShieldCheck, ShieldAlert, ShieldOff, AlertCircle,
+  Edit, ShieldCheck, ShieldAlert, ShieldOff, AlertCircle, MapPin,
 } from 'lucide-react';
 
 interface ProfileScreenProps {
   onEditProfile?: () => void;
   onKyc?: () => void;
   onPaymentMethods?: () => void;
+  onAddresses?: () => void;
   onTaskHistory?: () => void;
   onSettings?: () => void;
   onSupport?: () => void;
@@ -38,7 +39,7 @@ function KycBadge({ status }: { status: KycStatus }) {
     return (
       <div className="flex items-center gap-1.5 bg-green-500/20 rounded-full px-3 py-1">
         <ShieldCheck size={14} className="text-green-300" />
-        <span className="text-xs font-semibold text-green-200">Verified</span>
+        <span className="text-xs font-semibold text-green-200">Vérifié</span>
       </div>
     );
   }
@@ -46,14 +47,14 @@ function KycBadge({ status }: { status: KycStatus }) {
     return (
       <div className="flex items-center gap-1.5 bg-amber-500/20 rounded-full px-3 py-1">
         <ShieldAlert size={14} className="text-amber-300" />
-        <span className="text-xs font-semibold text-amber-200">Pending KYC</span>
+        <span className="text-xs font-semibold text-amber-200">KYC en cours</span>
       </div>
     );
   }
   return (
     <div className="flex items-center gap-1.5 bg-red-500/20 rounded-full px-3 py-1">
       <ShieldOff size={14} className="text-red-300" />
-      <span className="text-xs font-semibold text-red-200">Verify ID</span>
+      <span className="text-xs font-semibold text-red-200">Vérifier l'identité</span>
     </div>
   );
 }
@@ -62,6 +63,7 @@ export function ProfileScreen({
   onEditProfile,
   onKyc,
   onPaymentMethods,
+  onAddresses,
   onTaskHistory,
   onSettings,
   onSupport,
@@ -83,7 +85,7 @@ export function ProfileScreen({
         setKycStatus(kycData.status);
       })
       .catch((err) => {
-        setLoadError(err instanceof Error ? err.message : 'Failed to load profile');
+        setLoadError(err instanceof Error ? err.message : 'Impossible de charger le profil');
       });
   }, []);
 
@@ -94,10 +96,11 @@ export function ProfileScreen({
   const avatarName = displayName !== '…' ? displayName : 'U';
 
   const menuItems = [
-    { id: 1, title: 'Payment methods', icon: CreditCard, color: '#6D28D9', onClick: onPaymentMethods },
-    { id: 2, title: 'Task history', icon: Clock, color: '#1E40AF', onClick: onTaskHistory },
-    { id: 3, title: 'Settings', icon: Settings, color: '#64748B', onClick: onSettings },
-    { id: 4, title: 'Help & support', icon: HelpCircle, color: '#22C55E', onClick: onSupport },
+    { id: 1, title: 'Moyens de paiement', icon: CreditCard, color: '#6D28D9', onClick: onPaymentMethods },
+    { id: 2, title: 'Mes adresses', icon: MapPin, color: '#10B981', onClick: onAddresses },
+    { id: 3, title: 'Historique des tâches', icon: Clock, color: '#1E40AF', onClick: onTaskHistory },
+    { id: 4, title: 'Paramètres', icon: Settings, color: '#64748B', onClick: onSettings },
+    { id: 5, title: 'Aide & support', icon: HelpCircle, color: '#22C55E', onClick: onSupport },
   ];
 
   return (
@@ -149,10 +152,10 @@ export function ProfileScreen({
                 </div>
                 <div>
                   <span className="font-medium text-amber-900 text-sm">
-                    {kycStatus === 'pending' ? 'KYC under review' : 'Verify your identity'}
+                    {kycStatus === 'pending' ? 'Vérification KYC en cours' : 'Vérifiez votre identité'}
                   </span>
                   <p className="text-xs text-amber-600">
-                    {kycStatus === 'pending' ? "We'll notify you when done" : 'Required to receive payments'}
+                    {kycStatus === 'pending' ? 'Vous serez notifié dès que c\'est validé' : 'Requis pour recevoir des paiements'}
                   </p>
                 </div>
               </div>
@@ -167,7 +170,7 @@ export function ProfileScreen({
             <p className="text-sm text-red-600">{loadError}</p>
           </div>
         )}
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">Account</h3>
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">Mon compte</h3>
         <div className="space-y-2">
           {menuItems.map(item => {
             const Icon = item.icon;
@@ -197,7 +200,7 @@ export function ProfileScreen({
                 <div className="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center">
                   <LogOut size={18} className="text-red-600" strokeWidth={2.5} />
                 </div>
-                <span className="font-medium text-red-600">Sign out</span>
+                <span className="font-medium text-red-600">Se déconnecter</span>
               </div>
               <ChevronRight size={18} className="text-red-300" />
             </div>

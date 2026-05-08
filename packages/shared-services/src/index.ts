@@ -6,3 +6,4 @@ export * from "./taskService";
 export * from "./paymentService";
 export * from "./walletService";
 export * from "./chatService";
+export * from "./cardService";

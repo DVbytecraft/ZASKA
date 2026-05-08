@@ -11,20 +11,20 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
 
   const screens = [
     {
-      title: 'Post any task',
-      description: 'Get help in minutes',
+      title: 'Publiez n\'importe quelle tâche',
+      description: 'Trouvez de l\'aide en quelques minutes',
       icon: CheckCircle2,
       gradient: 'from-violet-600 to-purple-600'
     },
     {
-      title: 'Instant matching',
-      description: 'Connect with verified taskers',
+      title: 'Mise en relation instantanée',
+      description: 'Connectez-vous avec des prestataires vérifiés',
       icon: Zap,
       gradient: 'from-blue-600 to-indigo-600'
     },
     {
-      title: 'Secure payment',
-      description: 'Safe & protected',
+      title: 'Paiement sécurisé',
+      description: 'Sûr et protégé',
       icon: Shield,
       gradient: 'from-green-600 to-emerald-600'
     }
@@ -40,16 +40,12 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
           <Icon size={56} className="text-white" strokeWidth={2.5} />
         </div>
 
-        <h2 className="text-3xl font-bold text-gray-900 mb-4 leading-tight">
-          {current.title}
-        </h2>
-        <p className="text-base text-gray-600 max-w-xs leading-relaxed">
-          {current.description}
-        </p>
+        <h2 className="text-3xl font-bold text-gray-900 mb-3">{current.title}</h2>
+        <p className="text-gray-500 text-lg">{current.description}</p>
       </div>
 
-      <div className="px-8 pb-12 space-y-6">
-        <div className="flex justify-center gap-2">
+      <div className="px-8 pb-12">
+        <div className="flex justify-center gap-2 mb-8">
           {screens.map((_, index) => (
             <div
               key={index}
@@ -64,7 +60,7 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
           fullWidth
           onClick={() => step < screens.length - 1 ? setStep(step + 1) : onComplete()}
         >
-          {step < screens.length - 1 ? 'Continue' : 'Get started'}
+          {step < screens.length - 1 ? 'Continuer' : 'Commencer'}
         </Button>
 
         {step < screens.length - 1 && (
@@ -72,7 +68,7 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps) {
             onClick={onComplete}
             className="w-full text-gray-500 font-medium py-2"
           >
-            Skip
+            Passer
           </button>
         )}
       </div>

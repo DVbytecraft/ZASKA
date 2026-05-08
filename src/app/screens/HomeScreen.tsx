@@ -15,16 +15,16 @@ interface HomeScreenProps {
 }
 
 const CATEGORIES = [
-  { id: 1, name: 'Cleaning', icon: Sparkles, gradient: 'from-purple-500 to-purple-600' },
-  { id: 2, name: 'Delivery', icon: Package, gradient: 'from-blue-500 to-blue-600' },
+  { id: 1, name: 'Ménage', icon: Sparkles, gradient: 'from-purple-500 to-purple-600' },
+  { id: 2, name: 'Livraison', icon: Package, gradient: 'from-blue-500 to-blue-600' },
   { id: 3, name: 'Assistant', icon: FileText, gradient: 'from-green-500 to-green-600' },
-  { id: 4, name: 'Personal', icon: Users, gradient: 'from-pink-500 to-pink-600' },
+  { id: 4, name: 'Personnel', icon: Users, gradient: 'from-pink-500 to-pink-600' },
 ];
 
 function statusLabel(status: Task['status']) {
-  if (status === 'COMPLETED') return 'Done';
-  if (status === 'ASSIGNED') return 'Active';
-  return 'Open';
+  if (status === 'COMPLETED') return 'Terminé';
+  if (status === 'ASSIGNED') return 'En cours';
+  return 'Ouvert';
 }
 
 function statusClass(status: Task['status']) {
@@ -74,7 +74,7 @@ export function HomeScreen({
       <div className="px-6 pt-8 pb-8 bg-gradient-to-br from-[#6D28D9] to-[#5B21B6]">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-white">What needs to be done?</h1>
+            <h1 className="text-2xl font-bold text-white">Que faut-il faire ?</h1>
           </div>
           <div className="flex items-center gap-2">
             {onSearch && (
@@ -104,10 +104,10 @@ export function HomeScreen({
 
       <div className="px-6 pt-4">
         <div className="flex items-center justify-between mb-3 px-1">
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Popular categories</h3>
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Catégories populaires</h3>
           {onCategories && (
             <button onClick={onCategories} className="text-xs font-semibold text-[#6D28D9] hover:text-[#5B21B6]">
-              View all
+              Voir tout
             </button>
           )}
         </div>
@@ -129,7 +129,7 @@ export function HomeScreen({
       </div>
 
       <div className="px-6 mt-6 pb-6">
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">Recent activity</h3>
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">Activité récente</h3>
 
         {loading && (
           <div className="space-y-2">
@@ -195,7 +195,7 @@ export function HomeScreen({
                     }}
                     className="w-full mt-2 px-4 py-2 bg-[#6D28D9] text-white rounded-lg font-medium text-sm hover:bg-[#5B21B6] transition-colors"
                   >
-                    View applicants
+                    Voir les candidatures
                   </button>
                 )}
               </Card>

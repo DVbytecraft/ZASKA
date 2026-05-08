@@ -100,7 +100,7 @@ export function KycScreen({ onBack, onComplete }: KycScreenProps) {
         onComplete();
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Submission failed');
+      setError(err instanceof Error ? err.message : 'Erreur lors de la soumission');
     } finally {
       setSubmitting(false);
     }
@@ -255,7 +255,7 @@ export function KycScreen({ onBack, onComplete }: KycScreenProps) {
             onClick={handleSubmit}
             disabled={!idFile || !selfieFile || submitting}
           >
-            {submitting ? 'Submitting...' : 'Submit for verification'}
+            {submitting ? 'Envoi en cours…' : 'Soumettre pour vérification'}
           </Button>
         </div>
       )}

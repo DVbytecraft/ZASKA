@@ -1,6 +1,14 @@
 from decimal import Decimal
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class TaskStop(BaseModel):
+    model_config = ConfigDict(strict=False)
+    address: str = Field(max_length=512)
+    latitude: float
+    longitude: float
 
 
 class TaskCreatePayload(BaseModel):
@@ -10,11 +18,14 @@ class TaskCreatePayload(BaseModel):
     description: str = Field(min_length=3, max_length=2000)
     price: Decimal = Field(gt=0)
     currency: str = Field(min_length=3, max_length=8)
-    latitude: float
-    longitude: float
+    # Primary location — derived from stops[0] when stops provided, else required
+    latitude: float | None = None
+    longitude: float | None = None
     address: str | None = Field(default=None, max_length=512)
     mode: str | None = Field(default=None, pattern="^(fast|choose)$")
     status: str = Field(default="OPEN", pattern="^(OPEN|ASSIGNED|COMPLETED)$")
+    # Multi-stop: up to 4 waypoints [{address, latitude, longitude}]
+    stops: Annotated[list[TaskStop], Field(max_length=4)] | None = None
 
 
 class TaskApplyPayload(BaseModel):

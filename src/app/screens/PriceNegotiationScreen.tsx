@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ArrowLeft, DollarSign, TrendingUp, TrendingDown } from 'lucide-react';
+import { ArrowLeft, TrendingUp, TrendingDown } from 'lucide-react';
 import { Button } from '../components/Button';
 import { Avatar } from '../components/Avatar';
 
@@ -7,6 +7,7 @@ interface PriceNegotiationScreenProps {
   taskerName: string;
   originalPrice: number;
   proposedPrice: number;
+  currency?: string;
   onBack: () => void;
   onAccept: () => void;
   onCounter: (price: number) => void;
@@ -17,16 +18,18 @@ export function PriceNegotiationScreen({
   taskerName,
   originalPrice,
   proposedPrice,
+  currency = 'CFA',
   onBack,
   onAccept,
   onCounter,
-  onDecline
+  onDecline,
 }: PriceNegotiationScreenProps) {
   const [counterPrice, setCounterPrice] = useState(originalPrice.toString());
   const [showCounterInput, setShowCounterInput] = useState(false);
 
   const priceDiff = proposedPrice - originalPrice;
   const isHigher = priceDiff > 0;
+  const diffAbs = Math.abs(priceDiff);
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -35,7 +38,7 @@ export function PriceNegotiationScreen({
           <button onClick={onBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors">
             <ArrowLeft size={24} className="text-gray-700" />
           </button>
-          <h2 className="text-2xl font-bold text-gray-900">Price proposal</h2>
+          <h2 className="text-2xl font-bold text-gray-900">Proposition de prix</h2>
         </div>
       </div>
 
@@ -45,20 +48,20 @@ export function PriceNegotiationScreen({
             <Avatar name={taskerName} size="md" />
             <div>
               <h4 className="font-semibold text-gray-900">{taskerName}</h4>
-              <p className="text-sm text-gray-600">Sent a counter offer</p>
+              <p className="text-sm text-gray-600">a envoyé une contre-offre</p>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div className="bg-gray-50 rounded-xl p-4">
-              <p className="text-xs text-gray-500 mb-1">Your budget</p>
-              <p className="text-xl font-bold text-gray-900">${originalPrice}</p>
+              <p className="text-xs text-gray-500 mb-1">Votre budget</p>
+              <p className="text-xl font-bold text-gray-900">{currency} {originalPrice}</p>
             </div>
             <div className={`rounded-xl p-4 ${isHigher ? 'bg-red-50' : 'bg-green-50'}`}>
-              <p className="text-xs text-gray-500 mb-1">Proposed price</p>
+              <p className="text-xs text-gray-500 mb-1">Prix proposé</p>
               <div className="flex items-center gap-2">
                 <p className={`text-xl font-bold ${isHigher ? 'text-red-600' : 'text-green-600'}`}>
-                  ${proposedPrice}
+                  {currency} {proposedPrice}
                 </p>
                 {isHigher ? (
                   <TrendingUp size={16} className="text-red-600" />
@@ -73,7 +76,7 @@ export function PriceNegotiationScreen({
             isHigher ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'
           }`}>
             <p className={`text-sm font-medium ${isHigher ? 'text-red-900' : 'text-green-900'}`}>
-              {isHigher ? '+' : ''}{priceDiff > 0 ? priceDiff : Math.abs(priceDiff)} difference
+              {isHigher ? '+' : '-'}{diffAbs} {currency} de différence
             </p>
           </div>
         </div>
@@ -81,34 +84,42 @@ export function PriceNegotiationScreen({
         {!showCounterInput ? (
           <div className="space-y-3">
             <Button fullWidth onClick={onAccept}>
-              Accept ${proposedPrice}
+              Accepter {currency} {proposedPrice}
             </Button>
             <Button fullWidth variant="outline" onClick={() => setShowCounterInput(true)}>
-              Make counter offer
+              Faire une contre-offre
             </Button>
-            <button onClick={onDecline} className="w-full py-3 text-red-600 font-medium hover:text-red-700 transition-colors">
-              Decline
+            <button
+              onClick={onDecline}
+              className="w-full py-3 text-red-600 font-medium hover:text-red-700 transition-colors"
+            >
+              Refuser
             </button>
           </div>
         ) : (
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Your counter offer</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Votre contre-offre ({currency})</label>
             <div className="relative mb-4">
-              <DollarSign size={20} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold text-sm">
+                {currency}
+              </span>
               <input
                 type="number"
                 value={counterPrice}
                 onChange={(e) => setCounterPrice(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-[#6D28D9]"
+                className="w-full pl-16 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:outline-none focus:border-[#6D28D9] text-lg font-semibold"
                 placeholder="0"
               />
             </div>
             <div className="space-y-3">
               <Button fullWidth onClick={() => onCounter(parseFloat(counterPrice))}>
-                Send offer
+                Envoyer l'offre
               </Button>
-              <button onClick={() => setShowCounterInput(false)} className="w-full py-3 text-gray-600 font-medium hover:text-gray-900 transition-colors">
-                Cancel
+              <button
+                onClick={() => setShowCounterInput(false)}
+                className="w-full py-3 text-gray-600 font-medium hover:text-gray-900 transition-colors"
+              >
+                Annuler
               </button>
             </div>
           </div>

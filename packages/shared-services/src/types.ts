@@ -1,5 +1,11 @@
 export type TaskMode = "fast" | "choose";
 
+export interface TaskStop {
+  address: string;
+  latitude: number;
+  longitude: number;
+}
+
 export interface AuthSession {
   accessToken: string;
   refreshToken: string;
@@ -105,11 +111,12 @@ export interface TaskPayload {
   price?: number;
   budget?: number;
   currency: string;
-  latitude: number;
-  longitude: number;
+  latitude?: number;
+  longitude?: number;
   address?: string;
   mode?: TaskMode;
   status?: string;
+  stops?: TaskStop[];
 }
 
 export interface UserAddress {
@@ -140,8 +147,28 @@ export interface Task {
   createdAt?: string | null;
   negotiationStatus?: string | null;
   negotiatedPrice?: number | null;
+  negotiatedBy?: string | null;
   completionPercent?: number | null;
   distanceKm?: number | null;
+  stops?: TaskStop[] | null;
+}
+
+export interface VirtualCard {
+  id: string;
+  cardType: "visa" | "mastercard";
+  cardNumberMasked: string;
+  expiryMonth: number;
+  expiryYear: number;
+  status: "active" | "frozen" | "cancelled";
+  walletCurrency: string;
+  createdAt: string;
+}
+
+export interface VirtualCardCreateResult extends VirtualCard {
+  cardNumber: string;
+  cvv: string;
+  expiryFormatted: string;
+  notice: string;
 }
 
 export interface TaskApplication {
