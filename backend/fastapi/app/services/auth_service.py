@@ -177,7 +177,9 @@ class AuthService:
 
         provider = str(settings.otp_provider).strip().lower()
         if provider == "smtp":
-            self.email_service.send_otp_email(to_email=email, otp_code=otp_code)
+            delivered = self.email_service.send_password_reset_email(to_email=email, otp_code=otp_code)
+            if not delivered:
+                logger.error("forgot_password:email_failed email={}", email)
         else:
             logger.info("[OTP MOCK] forgot_password email={} code={}", email, otp_code)
 

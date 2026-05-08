@@ -1,5 +1,6 @@
 from app.core.email import send_email as _send_email
 from app.core.email import send_otp_email as _send_otp_email
+from app.core.email import send_password_reset_email as _send_password_reset_email
 
 
 class EmailService:
@@ -19,3 +20,6 @@ class EmailService:
 
     def send_otp_email(self, to_email: str, otp_code: str) -> bool:
         return _send_otp_email(to_email=to_email, otp_code=otp_code)
+
+    def send_password_reset_email(self, to_email: str, otp_code: str) -> bool:
+        return _send_password_reset_email(to_email=to_email, otp_code=otp_code)
