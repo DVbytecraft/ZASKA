@@ -12,15 +12,48 @@ interface PostTaskScreenProps {
   onSubmit: (taskId: string) => void;
 }
 
-async function geocodeCity(city: string): Promise<{ lat: number; lng: number } | null> {
+interface GeoResult {
+  lat: number;
+  lng: number;
+  city: string;
+  country: string;
+  display: string;
+}
+
+async function geocodeAndResolve(query: string): Promise<GeoResult | null> {
   try {
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city)}&format=json&limit=1`,
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1&addressdetails=1`,
       { headers: { 'Accept-Language': 'fr,en' } }
     );
     const data = await res.json();
     if (Array.isArray(data) && data.length > 0) {
-      return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+      const item = data[0];
+      const addr = item.address ?? {};
+      const city = addr.city ?? addr.town ?? addr.village ?? addr.county ?? query;
+      const country = addr.country ?? '';
+      const display = [city, country].filter(Boolean).join(', ') || query;
+      return { lat: parseFloat(item.lat), lng: parseFloat(item.lon), city, country, display };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+async function reverseGeocode(lat: number, lng: number): Promise<{ address: string; city: string; country: string } | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+      { headers: { 'Accept-Language': 'fr,en' } }
+    );
+    const data = await res.json();
+    if (data?.address) {
+      const addr = data.address;
+      const city = addr.city ?? addr.town ?? addr.village ?? addr.county ?? '';
+      const country = addr.country ?? '';
+      const address = [city, country].filter(Boolean).join(', ') || data.display_name || 'Position GPS';
+      return { address, city, country };
     }
   } catch {
     // ignore
@@ -31,7 +64,7 @@ async function geocodeCity(city: string): Promise<{ lat: number; lng: number } |
 // ── Stop picker bottom drawer ─────────────────────────────────────────────────
 interface StopPickerProps {
   savedAddresses: UserAddress[];
-  onConfirm: (stop: TaskStop) => void;
+  onConfirm: (stop: TaskStop, city?: string, country?: string) => void;
   onClose: () => void;
 }
 
@@ -48,8 +81,13 @@ function StopPicker({ savedAddresses, onConfirm, onClose }: StopPickerProps) {
     setGpsLoading(true);
     setGpsError(null);
     requestGeolocation()
-      .then(({ latitude, longitude }) => {
-        onConfirm({ address: 'Position GPS', latitude, longitude });
+      .then(async ({ latitude, longitude }) => {
+        const geo = await reverseGeocode(latitude, longitude);
+        onConfirm(
+          { address: geo?.address ?? 'Position GPS', latitude, longitude },
+          geo?.city,
+          geo?.country,
+        );
       })
       .catch(() => {
         setGpsError('Géolocalisation refusée. Activez-la dans les paramètres.');
@@ -59,21 +97,25 @@ function StopPicker({ savedAddresses, onConfirm, onClose }: StopPickerProps) {
 
   const handleSaved = (addr: UserAddress) => {
     if (!addr.latitude || !addr.longitude) return;
-    onConfirm({
-      address: `${addr.label} · ${addr.city}`,
-      latitude: addr.latitude,
-      longitude: addr.longitude,
-    });
+    onConfirm(
+      { address: `${addr.label} · ${addr.city}`, latitude: addr.latitude, longitude: addr.longitude },
+      addr.city || undefined,
+      addr.country || undefined,
+    );
   };
 
   const handleGeocode = async () => {
     if (!manualCity.trim()) return;
     setGeocoding(true);
     setGeocodeError(null);
-    const result = await geocodeCity(manualCity.trim());
+    const result = await geocodeAndResolve(manualCity.trim());
     setGeocoding(false);
     if (result) {
-      onConfirm({ address: manualCity.trim(), latitude: result.lat, longitude: result.lng });
+      onConfirm(
+        { address: result.display, latitude: result.lat, longitude: result.lng },
+        result.city,
+        result.country,
+      );
     } else {
       setGeocodeError(`Ville introuvable : "${manualCity}". Essayez un nom plus précis.`);
     }
@@ -220,6 +262,9 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
   const [showPicker, setShowPicker] = useState(false);
   const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
   const [addressesLoaded, setAddressesLoaded] = useState(false);
+  // Location metadata from first stop (populated via Nominatim)
+  const [firstStopCity, setFirstStopCity] = useState('');
+  const [firstStopCountry, setFirstStopCountry] = useState('');
 
   // Scheduling state (step 4)
   const [anySchedule, setAnySchedule] = useState(false);
@@ -239,7 +284,11 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
     }
   }, [step, addressesLoaded]);
 
-  const addStop = (stop: TaskStop) => {
+  const addStop = (stop: TaskStop, city?: string, country?: string) => {
+    if (stops.length === 0) {
+      setFirstStopCity(city ?? '');
+      setFirstStopCountry(country ?? '');
+    }
     setStops(prev => [...prev, stop]);
     setShowPicker(false);
   };
@@ -298,6 +347,8 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
         scheduledAt: buildScheduledAt(),
         anySchedule,
         idempotencyKey,
+        city: firstStopCity || undefined,
+        country: firstStopCountry || undefined,
       });
 
       if (!task?.id) throw new Error('Création de tâche échouée — aucun ID retourné');

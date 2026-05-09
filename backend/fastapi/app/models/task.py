@@ -51,3 +51,7 @@ class Task(Base):
 
     # Multi-stop: [{address, latitude, longitude}, ...]
     stops: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+    # Structured location — populated from Nominatim reverse geocoding at creation
+    city: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(64), nullable=True)

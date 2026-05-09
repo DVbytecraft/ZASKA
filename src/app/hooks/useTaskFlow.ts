@@ -15,6 +15,8 @@ interface CreateTaskInput {
   scheduledAt?: string | null;
   anySchedule?: boolean;
   idempotencyKey?: string;
+  city?: string;
+  country?: string;
 }
 
 export function useTaskFlow() {
@@ -36,6 +38,8 @@ export function useTaskFlow() {
         scheduledAt: input.scheduledAt ?? null,
         anySchedule: input.anySchedule ?? false,
         idempotencyKey: input.idempotencyKey,
+        city: input.city,
+        country: input.country,
       });
     } finally {
       setLoading(false);

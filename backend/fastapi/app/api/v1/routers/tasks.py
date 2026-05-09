@@ -90,6 +90,8 @@ def _serialize_task(task: Task) -> dict:
         "anySchedule": bool(task.any_schedule),
         "createdAt": task.created_at.isoformat() if task.created_at else None,
         "stops": task.stops,
+        "city": getattr(task, "city", None),
+        "country": getattr(task, "country", None),
     }
 
 

@@ -39,6 +39,8 @@ class TaskService:
             scheduled_at=payload.get("scheduled_at"),
             any_schedule=bool(payload.get("any_schedule", False)),
             idempotency_key=payload.get("idempotency_key") or None,
+            city=payload.get("city") or None,
+            country=payload.get("country") or None,
         )
         self.db.add(task)
         self.db.commit()

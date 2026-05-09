@@ -17,6 +17,8 @@ export const taskService = {
       scheduled_at: payload.scheduledAt ?? null,
       any_schedule: payload.anySchedule ?? false,
       idempotency_key: payload.idempotencyKey ?? null,
+      city: payload.city ?? null,
+      country: payload.country ?? null,
     });
   },
 

@@ -32,6 +32,9 @@ class TaskCreatePayload(BaseModel):
     stops: Annotated[list[TaskStop], Field(max_length=4)] | None = None
     # Idempotency: client-generated UUID prevents double-submit
     idempotency_key: str | None = Field(default=None, max_length=64)
+    # Structured location from reverse geocoding
+    city: str | None = Field(default=None, max_length=128)
+    country: str | None = Field(default=None, max_length=64)
 
 
 class TaskApplyPayload(BaseModel):

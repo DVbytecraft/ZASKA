@@ -408,7 +408,10 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
   const escrowAmount = escrow
     ? `${task.currency} ${parseFloat(escrow.amount).toFixed(2)}`
     : `${task.currency} ${Number(task.price).toFixed(2)}`;
-  const locationDisplay = task.address || `${task.latitude.toFixed(4)}, ${task.longitude.toFixed(4)}`;
+  const locationCity = task.city
+    ? [task.city, task.country].filter(Boolean).join(', ')
+    : null;
+  const locationDisplay = locationCity ?? task.address ?? `${task.latitude.toFixed(4)}, ${task.longitude.toFixed(4)}`;
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -597,7 +600,12 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
           {task.title && <p className="text-sm text-gray-600 mb-3">{task.description}</p>}
           <div className="flex items-start gap-3 text-sm text-gray-500 mb-2">
             <MapPin size={16} className="mt-0.5 flex-shrink-0 text-[#6D28D9]" />
-            <span>{locationDisplay}</span>
+            <div>
+              <span className="font-medium text-gray-800">{locationDisplay}</span>
+              {locationCity && task.address && task.address !== locationDisplay && (
+                <p className="text-xs text-gray-400 mt-0.5">{task.address}</p>
+              )}
+            </div>
           </div>
           {/* Scheduled time */}
           {task.anySchedule ? (

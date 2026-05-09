@@ -120,6 +120,8 @@ export interface TaskPayload {
   scheduledAt?: string | null;
   anySchedule?: boolean;
   idempotencyKey?: string;
+  city?: string;
+  country?: string;
 }
 
 export interface UserAddress {
@@ -157,6 +159,8 @@ export interface Task {
   scheduledAt?: string | null;
   anySchedule?: boolean | null;
   stops?: TaskStop[] | null;
+  city?: string | null;
+  country?: string | null;
 }
 
 export interface VirtualCard {
