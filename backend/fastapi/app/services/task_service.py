@@ -1,7 +1,6 @@
 from decimal import Decimal
 
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.task import Task
@@ -27,11 +26,15 @@ class TaskService:
             description=payload["description"],
             price=Decimal(str(payload["price"])),
             currency=payload["currency"].upper(),
-            latitude=payload["latitude"],
-            longitude=payload["longitude"],
+            latitude=lat,
+            longitude=lon,
             address=payload.get("address"),
+            mode=payload.get("mode") or "fast",
             status=payload.get("status", "OPEN"),
             created_by=payload["created_by"],
+            stops=payload.get("stops"),
+            scheduled_at=payload.get("scheduled_at"),
+            any_schedule=bool(payload.get("any_schedule", False)),
         )
         self.db.add(task)
         self.db.commit()
@@ -255,22 +258,9 @@ class TaskService:
             message=message,
         )
         self.db.add(application)
-        try:
-            self.db.commit()
-        except IntegrityError:
-            self.db.rollback()
-            # Already applied — return existing application
-            return (
-                self.db.execute(
-                    select(TaskApplication).where(
-                        TaskApplication.task_id == task_id,
-                        TaskApplication.tasker_id == tasker_id,
-                    )
-                )
-                .scalars()
-                .one()
-            )
-        self.db.refresh(application)
+        # IntegrityError (duplicate) is intentionally NOT caught here.
+        # It propagates to the router, which maps it to HTTP 409.
+        self.db.flush()
         return application
 
     def list_applications(self, task_id: str) -> list[tuple[TaskApplication, User]]:

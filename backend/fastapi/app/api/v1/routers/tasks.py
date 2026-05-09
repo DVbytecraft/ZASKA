@@ -27,7 +27,6 @@ from app.schemas.task import (
     TaskStatusPayload,
     TaskUpdatePayload,
 )
-from app.services.email_service import EmailService
 from app.services.task_service import TaskService
 from app.services.wallet_service import EscrowError, WalletService
 
@@ -77,6 +76,7 @@ def _serialize_task(task: Task) -> dict:
         "longitude": task.longitude,
         "address": task.address,
         "status": task.status,
+        "mode": getattr(task, "mode", "fast") or "fast",
         "createdBy": task.created_by,
         "assignedTo": task.assigned_to,
         "completionPercent": task.completion_percent,
@@ -134,12 +134,6 @@ def create_task(
         elif not data.get("latitude") or not data.get("longitude"):
             raise HTTPException(status_code=422, detail="latitude et longitude requis si stops absent")
         task = service.create_task(data)
-        # Notify creator (self-confirmation)
-        try:
-            from app.models.notification import Notification
-            from app.db.session import SessionLocal
-        except Exception:
-            pass
         return success_response(_serialize_task(task))
     except HTTPException:
         raise
@@ -392,6 +386,7 @@ def accept_task(
     task_id: str,
     payload: TaskAcceptPayload,
     service: TaskService = Depends(get_task_service),
+    db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
     try:
@@ -399,7 +394,8 @@ def accept_task(
         if task.status != "OPEN":
             raise HTTPException(status_code=409, detail="Cette tâche n'est plus ouverte")
 
-        if task.created_by == user_id:
+        creator_is_acting = task.created_by == user_id
+        if creator_is_acting:
             if not payload.tasker_id:
                 raise HTTPException(status_code=400, detail="tasker_id requis pour accepter un exécutant")
             tasker_id = payload.tasker_id
@@ -407,6 +403,40 @@ def accept_task(
             tasker_id = user_id
 
         task = service.accept_task(task_id=task_id, tasker_id=tasker_id)
+
+        # In-app + email notifications (best-effort)
+        try:
+            if creator_is_acting:
+                # Choose Mode: notify the accepted tasker
+                tasker = db.get(User, tasker_id)
+                _notify(db, tasker_id, "success", "Candidature acceptée ! 🎉",
+                        f"Le client a accepté votre candidature pour : {task.title}")
+                if tasker and tasker.email:
+                    from app.core.email import send_application_accepted_email
+                    send_application_accepted_email(
+                        to_email=tasker.email,
+                        task_title=task.title,
+                    )
+            else:
+                # Fast Mode: notify the creator that a tasker self-assigned
+                creator = db.get(User, task.created_by)
+                tasker = db.get(User, tasker_id)
+                tasker_name = " ".join(filter(None, [tasker.first_name, tasker.last_name])) if tasker else "Un prestataire"
+                _notify(db, task.created_by, "info", "Prestataire assigné",
+                        f"{tasker_name} a accepté votre tâche : {task.title}")
+                if creator and creator.email:
+                    from app.core.email import send_task_application_email
+                    send_task_application_email(
+                        to_email=creator.email,
+                        task_title=task.title,
+                        tasker_name=tasker_name,
+                        proposed_price=None,
+                        currency=task.currency,
+                    )
+        except Exception:
+            pass
+
+        db.commit()
         return success_response(_serialize_task(task))
     except HTTPException:
         raise
@@ -522,18 +552,25 @@ def respond_to_negotiation(
 
         # Notify negotiator via email if we have their email
         negotiator = db.get(User, task.negotiated_by) if task.negotiated_by else None
-        if negotiator and negotiator.email and not payload.accept:
-            EmailService().send_email(
-                to_email=negotiator.email,
-                subject="ZASKA — Modification de prix refusée",
-                html_content=(
-                    f"<p>Le client a refusé votre demande de modification de prix pour la tâche "
-                    f"<strong>{task.title}</strong>.</p>"
-                    f"<p>Vous pouvez continuer avec le prix initial ({float(task.price)} {task.currency}) "
-                    f"ou abandonner la tâche dans l'application.</p>"
-                ),
-                text_content=f"Modification de prix refusée pour la tâche {task.title}.",
-            )
+        if negotiator and negotiator.email:
+            try:
+                from app.core.email import send_price_accepted_email, send_price_rejected_email
+                if payload.accept:
+                    send_price_accepted_email(
+                        to_email=negotiator.email,
+                        task_title=task.title,
+                        accepted_price=float(task.negotiated_price or task.price),
+                        currency=task.currency,
+                    )
+                else:
+                    send_price_rejected_email(
+                        to_email=negotiator.email,
+                        task_title=task.title,
+                        original_price=float(task.original_price or task.price),
+                        currency=task.currency,
+                    )
+            except Exception:
+                pass
 
         # In-app notification to the executor who proposed the price
         if task.negotiated_by:

@@ -41,5 +41,8 @@ class Task(Base):
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     any_schedule: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Task mode: "fast" (instant accept) | "choose" (applications)
+    mode: Mapped[str] = mapped_column(String(8), default="fast", nullable=False, server_default="fast")
+
     # Multi-stop: [{address, latitude, longitude}, ...]
     stops: Mapped[list | None] = mapped_column(JSON, nullable=True)

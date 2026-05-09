@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
@@ -27,14 +28,19 @@ def list_notifications(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    notifs = (
-        db.query(Notification)
-        .filter(Notification.user_id == user_id)
-        .order_by(Notification.created_at.desc())
-        .limit(50)
-        .all()
-    )
-    return success_response([_serialize(n) for n in notifs])
+    try:
+        notifs = (
+            db.query(Notification)
+            .filter(Notification.user_id == user_id)
+            .order_by(Notification.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        return success_response([_serialize(n) for n in notifs])
+    except (OperationalError, ProgrammingError):
+        # Migration hasn't run yet — return empty list rather than crashing
+        db.rollback()
+        return success_response([])
 
 
 @router.patch("/{notif_id}/read")

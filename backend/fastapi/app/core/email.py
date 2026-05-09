@@ -250,6 +250,76 @@ def send_task_done_email(
     )
 
 
+def send_application_accepted_email(
+    to_email: str,
+    task_title: str,
+) -> bool:
+    from app.core.config import settings as _s
+    body = (
+        f'<p style="margin:0 0 16px;font-size:15px;color:#374151;line-height:1.6;">'
+        f'Le client a accepté votre candidature. Vous êtes maintenant assigné à la tâche.</p>'
+        f'<div style="background:#F0FDF4;border-left:4px solid #22C55E;border-radius:8px;padding:16px 20px;margin-bottom:16px;">'
+        f'<p style="margin:0;font-size:16px;font-weight:700;color:#111827;">{task_title}</p>'
+        f'</div>'
+        f'<p style="margin:0;font-size:14px;color:#6B7280;">Ouvrez l\'application pour commencer la prestation.</p>'
+    )
+    return send_email(
+        to_email=to_email,
+        subject="ZASKA — Votre candidature a été acceptée !",
+        html_content=_notification_html("🎉", "Candidature acceptée", body, "Ouvrir la tâche", _s.app_frontend_url),
+        text_content=f"Votre candidature pour '{task_title}' a été acceptée !",
+    )
+
+
+def send_price_accepted_email(
+    to_email: str,
+    task_title: str,
+    accepted_price: float,
+    currency: str,
+) -> bool:
+    from app.core.config import settings as _s
+    body = (
+        f'<p style="margin:0 0 16px;font-size:15px;color:#374151;line-height:1.6;">'
+        f'Le client a accepté votre proposition de prix. La tâche est maintenant active.</p>'
+        f'<div style="background:#F0FDF4;border-left:4px solid #22C55E;border-radius:8px;padding:16px 20px;margin-bottom:16px;">'
+        f'<p style="margin:0 0 8px;font-size:15px;font-weight:700;color:#111827;">{task_title}</p>'
+        f'<p style="margin:0;font-size:20px;font-weight:800;color:#16A34A;">{accepted_price:,.0f} {currency}</p>'
+        f'</div>'
+        f'<p style="margin:0;font-size:14px;color:#6B7280;">Ouvrez l\'application pour commencer la prestation.</p>'
+    )
+    return send_email(
+        to_email=to_email,
+        subject="ZASKA — Votre prix a été accepté ✓",
+        html_content=_notification_html("✅", "Modification de prix acceptée", body, "Ouvrir la tâche", _s.app_frontend_url),
+        text_content=f"Le client a accepté votre prix de {accepted_price:,.0f} {currency} pour : {task_title}",
+    )
+
+
+def send_price_rejected_email(
+    to_email: str,
+    task_title: str,
+    original_price: float,
+    currency: str,
+) -> bool:
+    from app.core.config import settings as _s
+    body = (
+        f'<p style="margin:0 0 16px;font-size:15px;color:#374151;line-height:1.6;">'
+        f'Le client a refusé votre demande de modification de prix pour cette tâche.</p>'
+        f'<div style="background:#FFF7ED;border-left:4px solid #F59E0B;border-radius:8px;padding:16px 20px;margin-bottom:16px;">'
+        f'<p style="margin:0 0 4px;font-size:16px;font-weight:700;color:#111827;">{task_title}</p>'
+        f'<p style="margin:0;font-size:13px;color:#6B7280;">Prix initial : {original_price:,.0f} {currency}</p>'
+        f'</div>'
+        f'<p style="margin:0;font-size:14px;color:#6B7280;">'
+        f'Vous pouvez continuer avec le prix initial ou abandonner la tâche dans l\'application.</p>'
+    )
+    return send_email(
+        to_email=to_email,
+        subject="ZASKA — Modification de prix refusée",
+        html_content=_notification_html("❌", "Modification de prix refusée", body, "Ouvrir la tâche", _s.app_frontend_url),
+        text_content=f"Modification de prix refusée pour la tâche {task_title}.",
+    )
+
+
 def send_kyc_review_email(
     admin_email: str,
     user_display_name: str,
