@@ -169,6 +169,8 @@ def list_tasks(
     lat: float | None = None,
     lng: float | None = None,
     radius_km: float | None = None,
+    country: str | None = None,
+    city: str | None = None,
     service: TaskService = Depends(get_task_service),
     user_id: str = Depends(get_current_user_id),
 ):
@@ -180,6 +182,8 @@ def list_tasks(
             ref_lat=lat,
             ref_lng=lng,
             radius_km=radius_km,
+            country=country,
+            city=city,
         )
         result = []
         for t, dist in zip(tasks, distances):

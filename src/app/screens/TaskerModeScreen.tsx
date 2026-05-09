@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
-import { MapPin, Clock, RefreshCw, AlertCircle, Loader2, ChevronDown, ChevronUp, Navigation } from 'lucide-react';
+import { MapPin, Clock, RefreshCw, AlertCircle, Loader2, ChevronDown, ChevronUp, Navigation, Search, Globe, X } from 'lucide-react';
 import { taskService, apiClient } from '@zaska/shared-services';
 import type { Task, UserAddress } from '@zaska/shared-services';
 import { requestGeolocation } from '../hooks/useTaskFlow';
@@ -42,36 +42,50 @@ function DistanceBadge({ km }: { km: number | null | undefined }) {
 
 // ── Task card ─────────────────────────────────────────────────────────────────
 function TaskCard({ task, onApply }: { task: Task; onApply: (id: string) => void }) {
+  // Execution location: prefer structured city/country over raw address
+  const execLocation = task.city
+    ? [task.city, task.country].filter(Boolean).join(', ')
+    : task.address ?? null;
+
   return (
     <Card className="hover:shadow-lg transition-all">
       <div className="flex items-start justify-between mb-2">
-        <h3 className="text-base font-semibold text-gray-900 flex-1 pr-2">
+        <h3 className="text-base font-semibold text-gray-900 flex-1 pr-2 leading-snug">
           {task.title || task.description?.slice(0, 60)}
         </h3>
+        <span className="text-base font-bold text-[#1E40AF] whitespace-nowrap">
+          {Number(task.price).toLocaleString()} <span className="text-xs font-semibold text-gray-400">{task.currency}</span>
+        </span>
       </div>
+
+      {/* Execution location — prominently displayed */}
+      {execLocation && (
+        <div className="flex items-center gap-1.5 mb-2">
+          <MapPin size={13} className="text-[#6D28D9] shrink-0" />
+          <span className="text-sm font-medium text-gray-700">{execLocation}</span>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <DistanceBadge km={task.distanceKm} />
-        {task.address && (
-          <span className="inline-flex items-center gap-1 text-xs text-gray-500">
-            <MapPin size={12} /> {task.address}
+        {task.mode === 'choose' && (
+          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 font-medium">Candidature</span>
+        )}
+        {task.scheduledAt && (
+          <span className="inline-flex items-center gap-1 text-xs text-purple-600 bg-purple-50 rounded-full px-2 py-0.5">
+            <Clock size={11} /> {new Date(task.scheduledAt).toLocaleDateString('fr-FR')}
           </span>
         )}
-        {task.createdAt && (
-          <span className="inline-flex items-center gap-1 text-xs text-gray-400">
-            <Clock size={12} /> {new Date(task.createdAt).toLocaleDateString('fr-FR')}
-          </span>
+        {task.anySchedule && (
+          <span className="text-xs text-gray-400 italic">Date flexible</span>
         )}
       </div>
 
       <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-baseline gap-1">
-            <span className="text-xl font-bold text-gray-900">{Number(task.price).toLocaleString()}</span>
-            <span className="text-sm text-gray-500">{task.currency}</span>
-          </div>
-          <p className="text-xs text-gray-400 mt-0.5">Budget · négociable</p>
-        </div>
+        <p className="text-xs text-gray-400">
+          {task.createdAt ? new Date(task.createdAt).toLocaleDateString('fr-FR') : ''}
+          {task.negotiationStatus && task.negotiationStatus !== 'none' ? ' · Prix négociable' : ''}
+        </p>
         <Button size="md" onClick={() => onApply(task.id)}>Postuler</Button>
       </div>
     </Card>
@@ -85,11 +99,17 @@ export function TaskerModeScreen({ onApply }: TaskerModeScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const [showFar, setShowFar] = useState(false);
 
-  // Reference location for sorting
+  // Reference position — used to compute distance from ME to the task's execution location
   const [refLabel, setRefLabel] = useState<string>('Chargement...');
   const [refCoords, setRefCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
   const [showAddressPicker, setShowAddressPicker] = useState(false);
+
+  // Execution-location filters — search by WHERE the task will be performed (independent of user position)
+  const [filterCity, setFilterCity] = useState('');
+  const [filterCountry, setFilterCountry] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const filterDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const myId = apiClient.getUserId();
 
@@ -121,11 +141,16 @@ export function TaskerModeScreen({ onApply }: TaskerModeScreenProps) {
     setLoading(true);
     setError(null);
     taskService
-      .browseAvailableTasks(refCoords?.lat, refCoords?.lng)
+      .browseAvailableTasks(
+        refCoords?.lat,
+        refCoords?.lng,
+        filterCountry.trim() || undefined,
+        filterCity.trim() || undefined,
+      )
       .then((data) => setTasks(data.filter(t => t.createdBy !== myId)))
       .catch((err) => setError(err instanceof Error ? err.message : 'Erreur'))
       .finally(() => setLoading(false));
-  }, [refCoords, myId]);
+  }, [refCoords, myId, filterCountry, filterCity]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -197,6 +222,67 @@ export function TaskerModeScreen({ onApply }: TaskerModeScreenProps) {
             ))}
           </div>
         )}
+
+        {/* Execution-location filter — independent of user position */}
+        <div className="mt-3">
+          <button
+            onClick={() => setShowFilters(v => !v)}
+            className="flex items-center gap-2 text-xs font-semibold text-white/80 hover:text-white"
+          >
+            <Globe size={13} />
+            {(filterCity || filterCountry)
+              ? `Lieu d'exécution : ${[filterCity, filterCountry].filter(Boolean).join(', ')}`
+              : "Filtrer par lieu d'exécution"}
+            {(filterCity || filterCountry) && (
+              <span
+                onClick={e => { e.stopPropagation(); setFilterCity(''); setFilterCountry(''); }}
+                className="ml-1 bg-white/20 hover:bg-white/40 rounded-full px-1.5 py-0.5 text-white text-xs"
+              >✕</span>
+            )}
+          </button>
+
+          {showFilters && (
+            <div className="mt-2 bg-white rounded-xl p-3 space-y-2 shadow-lg">
+              <p className="text-xs text-gray-400 font-medium">Filtrer les tâches par lieu d'exécution (indépendant de votre position)</p>
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Ville (ex : Lomé, Abidjan, Paris…)"
+                  value={filterCity}
+                  onChange={e => {
+                    setFilterCity(e.target.value);
+                    if (filterDebounce.current) clearTimeout(filterDebounce.current);
+                    filterDebounce.current = setTimeout(load, 600);
+                  }}
+                  className="w-full pl-8 pr-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-[#6D28D9] focus:outline-none text-gray-900"
+                />
+              </div>
+              <div className="relative">
+                <Globe size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Pays (ex : Togo, Côte d'Ivoire, France…)"
+                  value={filterCountry}
+                  onChange={e => {
+                    setFilterCountry(e.target.value);
+                    if (filterDebounce.current) clearTimeout(filterDebounce.current);
+                    filterDebounce.current = setTimeout(load, 600);
+                  }}
+                  className="w-full pl-8 pr-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-[#6D28D9] focus:outline-none text-gray-900"
+                />
+              </div>
+              {(filterCity || filterCountry) && (
+                <button
+                  onClick={() => { setFilterCity(''); setFilterCountry(''); setShowFilters(false); }}
+                  className="w-full text-xs text-red-500 hover:text-red-700 font-medium py-1"
+                >
+                  Effacer les filtres
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="px-6 py-4 space-y-3">
@@ -214,10 +300,32 @@ export function TaskerModeScreen({ onApply }: TaskerModeScreenProps) {
           </div>
         )}
 
+        {/* Active filter banner */}
+        {(filterCity || filterCountry) && !loading && (
+          <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-xl border border-blue-100">
+            <Globe size={14} className="text-blue-600 shrink-0" />
+            <span className="text-xs text-blue-800 font-medium flex-1">
+              Lieu d'exécution : <strong>{[filterCity, filterCountry].filter(Boolean).join(', ')}</strong>
+            </span>
+            <button onClick={() => { setFilterCity(''); setFilterCountry(''); }} className="text-blue-400 hover:text-blue-700">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         {!loading && !error && tasks.length === 0 && (
           <div className="flex flex-col items-center justify-center h-48 gap-3 text-gray-400">
             <Clock size={40} className="text-gray-300" />
-            <p className="text-sm font-medium">Aucune tâche disponible pour le moment</p>
+            <p className="text-sm font-medium text-center">
+              {(filterCity || filterCountry)
+                ? `Aucune tâche trouvée à ${[filterCity, filterCountry].filter(Boolean).join(', ')}`
+                : 'Aucune tâche disponible pour le moment'}
+            </p>
+            {(filterCity || filterCountry) && (
+              <button onClick={() => { setFilterCity(''); setFilterCountry(''); }} className="text-xs text-[#6D28D9] font-semibold underline">
+                Voir toutes les tâches
+              </button>
+            )}
           </div>
         )}
 

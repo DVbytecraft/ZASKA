@@ -84,6 +84,8 @@ class TaskService:
         ref_lat: float | None = None,
         ref_lng: float | None = None,
         radius_km: float | None = None,
+        country: str | None = None,
+        city: str | None = None,
     ) -> tuple[list[Task], list[float | None]]:
         """Return (tasks, distances_km) sorted by proximity with automatic radius expansion."""
         base_query = self.db.query(Task)
@@ -93,6 +95,10 @@ class TaskService:
             base_query = base_query.filter(Task.created_by == created_by)
         if assigned_to:
             base_query = base_query.filter(Task.assigned_to == assigned_to)
+        if country:
+            base_query = base_query.filter(Task.country.ilike(f"%{country.strip()}%"))
+        if city:
+            base_query = base_query.filter(Task.city.ilike(f"%{city.strip()}%"))
 
         if ref_lat is not None and ref_lng is not None:
             # Determine which radius steps to try

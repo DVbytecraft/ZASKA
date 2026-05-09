@@ -52,12 +52,14 @@ export const taskService = {
     );
   },
 
-  browseAvailableTasks(lat?: number, lng?: number) {
+  browseAvailableTasks(lat?: number, lng?: number, country?: string, city?: string) {
     const params = new URLSearchParams({ status: "OPEN" });
     if (lat !== undefined && lng !== undefined) {
       params.set("lat", String(lat));
       params.set("lng", String(lng));
     }
+    if (country) params.set("country", country);
+    if (city) params.set("city", city);
     return apiClient.get<Task[]>(`/tasks?${params.toString()}`);
   },
 
