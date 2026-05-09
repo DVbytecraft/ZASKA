@@ -1041,31 +1041,63 @@ def rate_task(
 
 # ─── Tasker abandon ──────────────────────────────────────────────────────────
 
+class TaskerAbandonPayload(BaseModel):
+    completion_percent: int = Field(default=0, ge=0, le=99,
+        description="Pourcentage de travail réellement accompli (0 = rien fait, 1-99 = travail partiel). "
+                    "Détermine le remboursement : 0% → client remboursé intégralement ; "
+                    ">0% → exécutant payé proportionnellement, client remboursé du reste.")
+
+
 @router.post("/{task_id}/tasker-abandon")
 def tasker_abandon(
     task_id: str,
+    payload: TaskerAbandonPayload,
     service: TaskService = Depends(get_task_service),
     wallet_svc: WalletService = Depends(get_wallet_service),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """L'exécutant assigné abandonne la tâche en cours.
-    L'escrow est remboursé au client, la tâche repasse en OPEN.
+    """L'exécutant assigné se désiste.
+
+    - completion_percent == 0 : n'a pas commencé → remboursement intégral au client.
+    - completion_percent 1–99 : travail partiel → exécutant reçoit sa part, client
+      remboursé du reste. Nécessite que l'escrow ait un payee_id (tâche financée).
     """
     try:
         task = _get_task_or_404(task_id, service)
         if task.assigned_to != user_id:
-            raise HTTPException(status_code=403, detail="Seul l'exécutant assigné peut abandonner cette tâche")
+            raise HTTPException(status_code=403, detail="Seul l'exécutant assigné peut se désister")
         if task.status not in ("ASSIGNED", "PAUSED"):
-            raise HTTPException(status_code=409, detail="L'abandon n'est possible que sur une tâche ASSIGNED ou PAUSED")
+            raise HTTPException(status_code=409, detail="Le désistement n'est possible que sur une tâche ASSIGNED ou PAUSED")
 
-        # Refund escrow to client before resetting
+        pct = payload.completion_percent
         escrow = wallet_svc.get_escrow_by_task(task_id)
+
         if escrow and escrow.status in ("funded", "hold"):
             try:
-                wallet_svc.refund_escrow(escrow.id)
+                if pct == 0:
+                    # Hasn't started — full refund to client
+                    wallet_svc.refund_escrow(escrow.id)
+                    payment_msg = "Remboursement intégral effectué au client."
+                else:
+                    # Partial work done — proportional split
+                    if not escrow.payee_id:
+                        # Assign payee so partial_release_escrow can credit the tasker
+                        escrow.payee_id = user_id
+                        db.flush()
+                    _, exec_amt, client_refund = wallet_svc.partial_release_escrow(escrow.id, pct)
+                    payment_msg = (
+                        f"Vous avez été payé {pct}% ({exec_amt} {escrow.currency}). "
+                        f"Le client a été remboursé de {client_refund} {escrow.currency}."
+                    )
             except EscrowError as exc:
-                raise HTTPException(status_code=409, detail=f"Remboursement impossible : {exc}")
+                raise HTTPException(status_code=409, detail=f"Erreur de paiement : {exc}")
+        else:
+            payment_msg = "Aucun paiement actif à rembourser."
+
+        # Record declared completion before resetting the task
+        if pct > 0:
+            service.set_completion_percent(task_id, pct)
 
         task = service.tasker_abandon(task_id=task_id, tasker_id=user_id)
 
@@ -1073,34 +1105,47 @@ def tasker_abandon(
         creator = db.get(User, task.created_by)
         tasker = db.get(User, user_id)
         tasker_name = " ".join(filter(None, [tasker.first_name, tasker.last_name])) if tasker else "Le prestataire"
-        _notify(
-            db, task.created_by, "warning", "Prestataire désisté",
-            f"{tasker_name} a abandonné votre tâche : {task.title}. Elle est de nouveau disponible.",
-        )
+
+        if pct == 0:
+            notif_body = f"{tasker_name} a abandonné votre tâche sans l'avoir commencée : {task.title}. Vous avez été remboursé intégralement."
+            email_body = (
+                f"<p>{tasker_name} a abandonné la tâche <strong>{task.title}</strong> sans l'avoir commencée.</p>"
+                f"<p>Vous avez été remboursé intégralement. La tâche est de nouveau disponible.</p>"
+            )
+        else:
+            notif_body = (
+                f"{tasker_name} a abandonné votre tâche à {pct}% : {task.title}. "
+                f"Remboursement partiel effectué. La tâche est de nouveau disponible."
+            )
+            email_body = (
+                f"<p>{tasker_name} a abandonné la tâche <strong>{task.title}</strong> après en avoir réalisé {pct}%.</p>"
+                f"<p>{payment_msg} La tâche est de nouveau disponible.</p>"
+            )
+
+        _notify(db, task.created_by, "warning", "Prestataire désisté", notif_body)
         if creator and creator.email:
             try:
                 from app.core.email import send_email
                 send_email(
                     to_email=creator.email,
                     subject="ZASKA — Prestataire désisté",
-                    html_content=(
-                        f"<p>{tasker_name} a abandonné la tâche <strong>{task.title}</strong>.</p>"
-                        f"<p>Votre paiement a été remboursé et la tâche est de nouveau disponible.</p>"
-                    ),
-                    text_content=f"{tasker_name} a abandonné : {task.title}. Paiement remboursé.",
+                    html_content=email_body,
+                    text_content=notif_body,
                 )
             except Exception:
                 pass
-        db.commit()
 
+        db.commit()
         return success_response({
             **_serialize_task(task),
-            "message": "Tâche abandonnée. Le client a été remboursé et la tâche est de nouveau ouverte.",
+            "completion_percent_declared": pct,
+            "payment_summary": payment_msg,
+            "message": f"Désistement enregistré. {payment_msg} La tâche est de nouveau ouverte.",
         })
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail="Impossible d'abandonner la tâche") from exc
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le désistement") from exc
 
 
 # ─── Negotiation — multi-round fixes ─────────────────────────────────────────

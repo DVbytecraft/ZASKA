@@ -152,7 +152,15 @@ export const taskService = {
     return apiClient.post<{ rated: boolean; score: number }>(`/tasks/${taskId}/rate`, { score });
   },
 
-  taskerAbandon(taskId: string) {
-    return apiClient.post<Task>(`/tasks/${taskId}/tasker-abandon`, {});
+  /**
+   * Exécutant se désiste.
+   * completionPercent = 0 → remboursement intégral au client.
+   * completionPercent 1–99 → exécutant payé proportionnellement, client remboursé du reste.
+   */
+  taskerAbandon(taskId: string, completionPercent = 0) {
+    return apiClient.post<Task & { completion_percent_declared: number; payment_summary: string; message: string }>(
+      `/tasks/${taskId}/tasker-abandon`,
+      { completion_percent: completionPercent },
+    );
   },
 };
