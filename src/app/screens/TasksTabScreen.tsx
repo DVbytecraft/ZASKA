@@ -1,28 +1,33 @@
-import { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
+import { Avatar } from '../components/Avatar';
 import {
   CheckCircle2, Activity, Clock, AlertCircle, RefreshCw, Users,
-  Briefcase, Send, XCircle, ChevronRight, Pause, Play, Trash2,
+  Briefcase, Send, XCircle, ChevronRight, Pause, Play, Trash2, MessageSquare,
 } from 'lucide-react';
-import { taskService } from '@zaska/shared-services';
+import { taskService, apiClient } from '@zaska/shared-services';
 import type { Task, TaskApplication } from '@zaska/shared-services';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
+import { PriceDisplay } from '../components/PriceDisplay';
 
 interface TasksTabScreenProps {
   onTaskClick: (taskId: string) => void;
   onViewApplicants?: (taskId: string) => void;
   onPostTask?: () => void;
+  onChatOpen?: (taskId: string) => void;
 }
 
-type RootTab = 'client' | 'missions';
+type RootTab = 'client' | 'missions' | 'messages';
 
 // ── Status helpers ────────────────────────────────────────────────────────────
-function taskStatusLabel(status: Task['status']) {
-  if (status === 'COMPLETED') return 'Terminée';
-  if (status === 'ASSIGNED') return 'En cours';
-  if (status === 'PENDING_VALIDATION') return 'En validation';
-  if (status === 'PAUSED') return 'En pause';
-  return 'Ouverte';
+function taskStatusLabel(status: Task['status'], t: TFunction) {
+  if (status === 'COMPLETED') return t('tasks.statusCompleted');
+  if (status === 'ASSIGNED') return t('tasks.statusAssigned');
+  if (status === 'PENDING_VALIDATION') return t('tasks.statusValidation');
+  if (status === 'PAUSED') return t('tasks.statusPaused');
+  return t('tasks.statusOpen');
 }
 
 function taskStatusClass(status: Task['status']) {
@@ -33,10 +38,10 @@ function taskStatusClass(status: Task['status']) {
   return 'bg-purple-50 text-purple-700';
 }
 
-function appStatusLabel(status: TaskApplication['status']) {
-  if (status === 'accepted') return 'Acceptée ✓';
-  if (status === 'rejected') return 'Refusée';
-  return 'En attente';
+function appStatusLabel(status: TaskApplication['status'], t: TFunction) {
+  if (status === 'accepted') return t('tasks.appAccepted');
+  if (status === 'rejected') return t('tasks.appRejected');
+  return t('tasks.appPending');
 }
 
 function appStatusClass(status: TaskApplication['status']) {
@@ -75,12 +80,13 @@ function Empty({ icon, message, cta, onCta }: { icon: React.ReactNode; message: 
 
 // ── Error state ───────────────────────────────────────────────────────────────
 function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center h-48 gap-3">
       <AlertCircle size={40} className="text-red-400" />
       <p className="text-sm text-red-600 text-center">{message}</p>
       <button onClick={onRetry} className="flex items-center gap-2 text-sm font-medium text-[#6D28D9] hover:underline">
-        <RefreshCw size={16} /> Réessayer
+        <RefreshCw size={16} /> {t('common.retry')}
       </button>
     </div>
   );
@@ -92,6 +98,7 @@ function ClientTab({
   onViewApplicants,
   onPostTask,
 }: Pick<TasksTabScreenProps, 'onTaskClick' | 'onViewApplicants' | 'onPostTask'>) {
+  const { t } = useTranslation();
   const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('all');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -158,14 +165,14 @@ function ClientTab({
       {confirmDelete && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-end justify-center pb-8 px-6">
           <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl">
-            <h3 className="font-bold text-gray-900 text-lg mb-2">Supprimer la tâche ?</h3>
-            <p className="text-sm text-gray-500 mb-5">Cette action est irréversible. Les candidatures associées seront aussi supprimées.</p>
+            <h3 className="font-bold text-gray-900 text-lg mb-2">{t('tasks.deleteConfirm')}</h3>
+            <p className="text-sm text-gray-500 mb-5">{t('tasks.deleteWarning')}</p>
             <div className="flex gap-3">
               <button
                 onClick={() => setConfirmDelete(null)}
                 className="flex-1 py-3 border-2 border-gray-200 rounded-xl text-sm font-semibold text-gray-700 hover:bg-gray-50"
               >
-                Annuler
+                {t('common.cancel')}
               </button>
               <button
                 onClick={() => handleDelete(confirmDelete)}
@@ -174,7 +181,7 @@ function ClientTab({
               >
                 {actionTaskId === confirmDelete
                   ? <RefreshCw size={14} className="animate-spin" />
-                  : <><Trash2 size={14} /> Supprimer</>}
+                  : <><Trash2 size={14} /> {t('tasks.delete')}</>}
               </button>
             </div>
           </div>
@@ -191,7 +198,7 @@ function ClientTab({
                 filter === f ? 'bg-[#6D28D9] text-white' : 'bg-white text-gray-600 border border-gray-200'
               }`}
             >
-              {f === 'all' ? 'Toutes' : f === 'active' ? 'Actives' : 'Terminées'}
+              {f === 'all' ? t('common.all') : f === 'active' ? t('common.active') : t('common.completed')}
             </button>
           ))}
         </div>
@@ -205,8 +212,8 @@ function ClientTab({
       ) : filtered.length === 0 ? (
         <Empty
           icon={<Clock size={40} />}
-          message="Vous n'avez pas encore de tâches."
-          cta="Publier une tâche"
+          message={t('tasks.noTasks')}
+          cta={t('tasks.publish')}
           onCta={onPostTask}
         />
       ) : (
@@ -222,13 +229,11 @@ function ClientTab({
                     <p className="font-medium text-gray-900 truncate max-w-[150px]">
                       {task.title || task.description.slice(0, 40)}
                     </p>
-                    <p className="text-xs text-gray-500">
-                      {Number(task.price).toLocaleString()} {task.currency}
-                    </p>
+                    <PriceDisplay amount={Number(task.price)} currency={task.currency} compact className="text-xs text-gray-500" />
                   </div>
                 </div>
                 <span className={`text-xs font-semibold px-2.5 py-1 rounded-lg flex-shrink-0 ${taskStatusClass(task.status)}`}>
-                  {taskStatusLabel(task.status)}
+                  {taskStatusLabel(task.status, t)}
                 </span>
               </div>
 
@@ -238,7 +243,7 @@ function ClientTab({
                   onClick={(e) => { e.stopPropagation(); onViewApplicants(task.id); }}
                   className="w-full mt-2 flex items-center justify-center gap-2 px-4 py-2 bg-[#6D28D9] text-white rounded-lg font-medium text-sm hover:bg-[#5B21B6] transition-colors"
                 >
-                  <Users size={15} /> Voir les candidats
+                  <Users size={15} /> {t('tasks.viewApplicants')}
                 </button>
               )}
 
@@ -253,7 +258,7 @@ function ClientTab({
                     >
                       {actionTaskId === task.id
                         ? <RefreshCw size={12} className="animate-spin" />
-                        : <><Pause size={12} /> Mettre en pause</>}
+                        : <><Pause size={12} /> {t('tasks.pause')}</>}
                     </button>
                   ) : (
                     <button
@@ -263,7 +268,7 @@ function ClientTab({
                     >
                       {actionTaskId === task.id
                         ? <RefreshCw size={12} className="animate-spin" />
-                        : <><Play size={12} /> Republier</>}
+                        : <><Play size={12} /> {t('tasks.republish')}</>}
                     </button>
                   )}
                   <button
@@ -271,7 +276,7 @@ function ClientTab({
                     disabled={actionTaskId === task.id}
                     className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 disabled:opacity-50 transition-colors"
                   >
-                    <Trash2 size={12} /> Supprimer
+                    <Trash2 size={12} /> {t('tasks.delete')}
                   </button>
                 </div>
               )}
@@ -285,6 +290,7 @@ function ClientTab({
 
 // ── Missions tab ──────────────────────────────────────────────────────────────
 function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void }) {
+  const { t } = useTranslation();
   const [assignedTasks, setAssignedTasks] = useState<Task[]>([]);
   const [applications, setApplications] = useState<TaskApplication[]>([]);
   const [loading, setLoading] = useState(true);
@@ -326,7 +332,7 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
       {isEmpty && (
         <Empty
           icon={<Briefcase size={40} />}
-          message="Vous n'avez pas encore de missions. Explorez les tâches disponibles !"
+          message={t('tasks.noMissions')}
         />
       )}
 
@@ -336,7 +342,7 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
           <div className="flex items-center gap-2 mb-3">
             <span className="w-2 h-2 rounded-full bg-blue-500" />
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
-              Missions en cours ({assignedTasks.length})
+              {t('tasks.missionsInProgress', { count: assignedTasks.length })}
             </p>
           </div>
           <div className="space-y-3">
@@ -347,14 +353,14 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
                     <p className="font-semibold text-gray-900 truncate">
                       {task.title || task.description.slice(0, 50)}
                     </p>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {Number(task.price).toLocaleString()} {task.currency}
-                      {task.address ? ` · ${task.address}` : ''}
-                    </p>
+                    <div className="flex items-baseline gap-1 text-xs text-gray-500 mt-0.5">
+                      <PriceDisplay amount={Number(task.price)} currency={task.currency} compact />
+                      {task.address && <span>· {task.address}</span>}
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 ml-2 flex-shrink-0">
                     <span className="text-xs font-semibold px-2 py-1 rounded-lg bg-blue-50 text-blue-700">
-                      En cours
+                      {t('tasks.statusAssigned')}
                     </span>
                     <ChevronRight size={16} className="text-gray-400" />
                   </div>
@@ -371,7 +377,7 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
           <div className="flex items-center gap-2 mb-3">
             <span className="w-2 h-2 rounded-full bg-amber-400" />
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
-              Candidatures en attente ({pendingApps.length})
+              {t('tasks.pendingApps', { count: pendingApps.length })}
             </p>
           </div>
           <div className="space-y-3">
@@ -384,7 +390,7 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
                       <p className="text-sm font-medium text-gray-800 truncate">Tâche #{app.taskId.slice(0, 8)}</p>
                       {app.proposedPrice != null && (
                         <p className="text-xs text-gray-500">
-                          Prix proposé : {Number(app.proposedPrice).toLocaleString()} {app.currency}
+                          {t('tasks.proposedPrice')} : {Number(app.proposedPrice).toLocaleString()} {app.currency}
                         </p>
                       )}
                       {app.message && (
@@ -393,7 +399,7 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
                     </div>
                   </div>
                   <span className={`text-xs font-semibold px-2 py-1 rounded-lg flex-shrink-0 ${appStatusClass(app.status)}`}>
-                    {appStatusLabel(app.status)}
+                    {appStatusLabel(app.status, t)}
                   </span>
                 </div>
               </Card>
@@ -408,7 +414,7 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
           <div className="flex items-center gap-2 mb-3">
             <span className="w-2 h-2 rounded-full bg-gray-400" />
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">
-              Historique des candidatures ({decidedApps.length})
+              {t('tasks.appHistory', { count: decidedApps.length })}
             </p>
           </div>
           <div className="space-y-2">
@@ -428,7 +434,7 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <span className={`text-xs font-semibold px-2 py-1 rounded-lg ${appStatusClass(app.status)}`}>
-                    {appStatusLabel(app.status)}
+                    {appStatusLabel(app.status, t)}
                   </span>
                   {app.status === 'accepted' && <ChevronRight size={14} className="text-green-600" />}
                 </div>
@@ -441,8 +447,125 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
   );
 }
 
+// ── Messages tab ──────────────────────────────────────────────────────────────
+interface ConversationEntry {
+  taskId: string;
+  title: string;
+  status: Task['status'];
+  partnerId: string;
+  partnerName: string;
+  partnerSrc?: string | null;
+  updatedAt?: string | null;
+}
+
+function MessagesTab({ onChatOpen }: { onChatOpen?: (taskId: string) => void }) {
+  const { t } = useTranslation();
+  const [conversations, setConversations] = useState<ConversationEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const myId = apiClient.getUserId() ?? '';
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [mine, assigned] = await Promise.all([
+        taskService.listMyTasks(),
+        taskService.listAssignedToMe(),
+      ]);
+
+      // Tasks I created that have an assigned tasker
+      const fromMine = mine
+        .filter(t => t.assignedTo && !['OPEN', 'CANCELLED'].includes(t.status))
+        .map(t => ({ taskId: t.id, title: t.title || t.description.slice(0, 40), status: t.status, partnerId: t.assignedTo!, partnerName: '', updatedAt: t.createdAt }));
+
+      // Tasks assigned to me (I'm the tasker)
+      const fromAssigned = assigned.map(t => ({
+        taskId: t.id,
+        title: t.title || t.description.slice(0, 40),
+        status: t.status,
+        partnerId: t.createdBy,
+        partnerName: '',
+        updatedAt: t.createdAt,
+      }));
+
+      // Deduplicate by taskId
+      const seen = new Set<string>();
+      const all: ConversationEntry[] = [];
+      for (const c of [...fromMine, ...fromAssigned]) {
+        if (!seen.has(c.taskId)) { seen.add(c.taskId); all.push(c); }
+      }
+
+      // Fetch partner names
+      const enriched = await Promise.all(all.map(async (c) => {
+        try {
+          const profile = await apiClient.get<{ first_name?: string | null; last_name?: string | null; full_name?: string | null; avatar_url?: string | null }>(`/users/${c.partnerId}`);
+          const name = [profile.first_name, profile.last_name].filter(Boolean).join(' ') || profile.full_name || 'Utilisateur';
+          return { ...c, partnerName: name, partnerSrc: profile.avatar_url };
+        } catch {
+          return { ...c, partnerName: 'Utilisateur' };
+        }
+      }));
+
+      setConversations(enriched);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur de chargement');
+    } finally {
+      setLoading(false);
+    }
+  }, [myId]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  if (loading) return <div className="px-6 py-4"><Skeletons /></div>;
+  if (error) return <div className="px-6 py-4"><ErrorState message={error} onRetry={load} /></div>;
+  if (conversations.length === 0) return (
+    <div className="px-6 py-4">
+      <Empty icon={<MessageSquare size={40} />} message={t('tasks.noMessages')} />
+    </div>
+  );
+
+  return (
+    <div className="px-6 py-4 space-y-3">
+      <div className="flex justify-end">
+        <button onClick={load} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors">
+          <RefreshCw size={14} className="text-gray-500" />
+        </button>
+      </div>
+      {conversations.map(conv => (
+        <Card
+          key={conv.taskId}
+          onClick={() => onChatOpen?.(conv.taskId)}
+          className="hover:shadow-lg cursor-pointer transition-all"
+        >
+          <div className="flex items-center gap-3">
+            <Avatar name={conv.partnerName || 'U'} src={conv.partnerSrc ?? undefined} size="md" />
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-gray-900 truncate">{conv.partnerName}</p>
+              <p className="text-xs text-gray-400 truncate">{conv.title}</p>
+            </div>
+            <div className="flex flex-col items-end gap-1 flex-shrink-0">
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${
+                conv.status === 'ASSIGNED' ? 'bg-blue-50 text-blue-700' :
+                conv.status === 'PENDING_VALIDATION' ? 'bg-amber-50 text-amber-700' :
+                conv.status === 'COMPLETED' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'
+              }`}>
+                {conv.status === 'ASSIGNED' ? t('tasks.statusAssigned') :
+                 conv.status === 'PENDING_VALIDATION' ? t('tasks.statusValidation') :
+                 conv.status === 'COMPLETED' ? t('tasks.statusCompleted') : conv.status}
+              </span>
+              <ChevronRight size={16} className="text-gray-400" />
+            </div>
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
-export function TasksTabScreen({ onTaskClick, onViewApplicants, onPostTask }: TasksTabScreenProps) {
+export function TasksTabScreen({ onTaskClick, onViewApplicants, onPostTask, onChatOpen }: TasksTabScreenProps) {
+  const { t } = useTranslation();
   const [rootTab, setRootTab] = useState<RootTab>('client');
 
   return (
@@ -450,10 +573,10 @@ export function TasksTabScreen({ onTaskClick, onViewApplicants, onPostTask }: Ta
       {/* Header */}
       <div className="px-6 pt-8 pb-4 bg-gradient-to-br from-[#6D28D9] to-[#5B21B6]">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-2xl font-bold text-white">Mes tâches</h1>
+          <h1 className="text-2xl font-bold text-white">{t('tasks.myTasks')}</h1>
           {onPostTask && (
             <Button size="sm" onClick={onPostTask}>
-              <Send size={14} className="mr-1" /> Publier
+              <Send size={14} className="mr-1" /> {t('tasks.publish')}
             </Button>
           )}
         </div>
@@ -462,29 +585,42 @@ export function TasksTabScreen({ onTaskClick, onViewApplicants, onPostTask }: Ta
         <div className="flex bg-white/15 rounded-xl p-1 gap-1">
           <button
             onClick={() => setRootTab('client')}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold transition-all ${
               rootTab === 'client' ? 'bg-white text-[#6D28D9] shadow-sm' : 'text-white/80 hover:text-white'
             }`}
           >
-            <Users size={15} />
-            Client
+            <Users size={14} />
+            {t('tasks.client')}
           </button>
           <button
             onClick={() => setRootTab('missions')}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold transition-all ${
               rootTab === 'missions' ? 'bg-white text-[#6D28D9] shadow-sm' : 'text-white/80 hover:text-white'
             }`}
           >
-            <Briefcase size={15} />
-            Missions
+            <Briefcase size={14} />
+            {t('tasks.missions')}
+          </button>
+          <button
+            onClick={() => setRootTab('messages')}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold transition-all ${
+              rootTab === 'messages' ? 'bg-white text-[#6D28D9] shadow-sm' : 'text-white/80 hover:text-white'
+            }`}
+          >
+            <MessageSquare size={14} />
+            {t('tasks.messages')}
           </button>
         </div>
       </div>
 
-      {rootTab === 'client' ? (
+      {rootTab === 'client' && (
         <ClientTab onTaskClick={onTaskClick} onViewApplicants={onViewApplicants} onPostTask={onPostTask} />
-      ) : (
+      )}
+      {rootTab === 'missions' && (
         <MissionsTab onTaskClick={onTaskClick} />
+      )}
+      {rootTab === 'messages' && (
+        <MessagesTab onChatOpen={onChatOpen} />
       )}
     </div>
   );

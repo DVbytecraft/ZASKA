@@ -28,7 +28,7 @@ export function TaskProgressBar({ currentStatus }: TaskProgressBarProps) {
                   ? 'bg-[#6D28D9] text-white ring-4 ring-[#6D28D9]/20'
                   : 'bg-gray-200 text-gray-500'
               }`}>
-                {index < currentIndex ? '✓' : index + 1}
+                {index <= currentIndex ? '✓' : index + 1}
               </div>
               <span className={`text-[10px] mt-1 font-medium text-center leading-tight ${
                 index <= currentIndex ? 'text-gray-900' : 'text-gray-400'

@@ -66,9 +66,13 @@ class Settings(BaseSettings):
     kyc_provider_enabled: bool = True
     otp_provider: Literal["mock", "smtp"] = "mock"
 
-    # ── FX — taux fixes configurables ─────────────────────────────────────
-    # 1 USD = fx_usd_to_xof XOF  (BCEAO officiel ~655, zone pratique ~600-650)
-    fx_usd_to_xof: float = 620.0
+    # ── FX — taux fixes configurables (1 USD = X devise) ─────────────────
+    fx_usd_to_xof: float = 620.0   # BCEAO zone — Togo, CI, SN, BJ, BF, ML, NE
+    fx_usd_to_xaf: float = 620.0   # BEAC zone — Cameroun (quasi-parité XOF)
+    fx_usd_to_ghs: float = 15.5    # Ghana Cedi
+    fx_usd_to_ngn: float = 1650.0  # Nigerian Naira
+    fx_usd_to_kes: float = 130.0   # Kenyan Shilling
+    fx_usd_to_eur: float = 0.92    # Euro
     # Frais de conversion en basis points (50 bps = 0.5 %)
     fx_fee_bps: int = 50
     # Hard cap per single FX transaction (USD-equivalent)
@@ -115,6 +119,12 @@ class Settings(BaseSettings):
     @property
     def admin_email_list(self) -> list[str]:
         return [e.strip() for e in self.admin_notification_emails.split(",") if e.strip()]
+
+    # ── ZASKA Commission ──────────────────────────────────────────────────
+    # Platform commission in basis points (1500 = 15%)
+    zaska_commission_bps: int = 1500
+    # System user ID whose wallet receives commission credits; set in env
+    zaska_wallet_user_id: str = ""
 
     sentry_dsn: str = ""
 

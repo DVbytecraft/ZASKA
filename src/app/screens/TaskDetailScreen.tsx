@@ -3,6 +3,7 @@ import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { TaskProgressBar } from '../components/TaskProgressBar';
 import { TaskStatusBadge } from '../components/TaskStatusBadge';
+import { PriceDisplay } from '../components/PriceDisplay';
 import { EscrowBadge } from '../components/EscrowBadge';
 import { taskService, walletService, apiClient } from '@zaska/shared-services';
 import type { Task, Escrow, NegotiationEvent } from '@zaska/shared-services';
@@ -227,7 +228,7 @@ interface TaskDetailScreenProps {
   taskId: string;
   onBack: () => void;
   onComplete: () => void;   // called after client confirms payment released
-  onChat: (taskerName?: string) => void;
+  onChat: () => void;
   onViewApplicants?: () => void;
 }
 
@@ -653,14 +654,12 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
             <h4 className="font-semibold text-gray-900 mb-3 text-sm uppercase tracking-wide">Prestataire assigné</h4>
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-[#6D28D9] font-bold text-sm">
-                {task.assignedTo.slice(0, 2).toUpperCase()}
+                <Users size={18} />
               </div>
-              <p className="text-sm text-gray-700 font-medium font-mono">
-                {task.assignedTo.length > 20 ? task.assignedTo.slice(0, 20) + '…' : task.assignedTo}
-              </p>
+              <p className="text-sm text-gray-700 font-medium">Prestataire en cours de chargement…</p>
             </div>
             <button
-              onClick={() => onChat(task.assignedTo ?? undefined)}
+              onClick={() => onChat()}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-gray-200 rounded-xl hover:border-[#6D28D9] hover:text-[#6D28D9] transition-colors font-medium text-sm"
             >
               <MessageCircle size={18} /> Envoyer un message au prestataire
@@ -752,7 +751,7 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
               </div>
             </div>
             <button
-              onClick={() => onChat(task.createdBy)}
+              onClick={() => onChat()}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-gray-200 rounded-xl hover:border-blue-500 hover:text-blue-600 transition-colors font-medium text-sm"
             >
               <MessageCircle size={18} /> Envoyer un message au client
@@ -802,9 +801,7 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
           <h4 className="font-semibold text-gray-900 mb-3 text-sm uppercase tracking-wide">Paiement</h4>
           <div className="flex items-baseline justify-between mb-4">
             <span className="text-gray-600 text-sm">Montant total</span>
-            <span className="text-2xl font-bold text-gray-900">
-              {task.currency} {Number(task.price).toFixed(2)}
-            </span>
+            <PriceDisplay amount={Number(task.price)} currency={task.currency} className="items-end" />
           </div>
           <EscrowBadge amount={escrowAmount} status={escrowStatus} />
           {task.status === 'COMPLETED' && (

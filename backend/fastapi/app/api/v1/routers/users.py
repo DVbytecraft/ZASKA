@@ -28,6 +28,25 @@ def get_me(user_id: str = Depends(get_current_user_id), db: Session = Depends(ge
     ).model_dump())
 
 
+@router.get("/{user_id}")
+def get_user_public(
+    user_id: str,
+    _: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Return minimal public profile for any user (name + avatar)."""
+    user = db.query(User).filter(User.id == user_id).one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return success_response({
+        "id": user.id,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "full_name": user.full_name,
+        "avatar_url": user.avatar_url,
+    })
+
+
 @router.patch("/me")
 def update_me(
     payload: UpdateProfilePayload,

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Bell, CheckCircle2, Info, AlertTriangle, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Bell, CheckCircle2, Info, AlertTriangle, RefreshCw, ChevronRight } from 'lucide-react';
 import { Card } from '../components/Card';
 import { apiClient } from '@zaska/shared-services';
+import { useTranslation } from 'react-i18next';
 
 interface Notification {
   id: string;
@@ -9,11 +10,14 @@ interface Notification {
   title: string;
   body: string;
   read: boolean;
+  task_id?: string | null;
   created_at: string;
 }
 
 interface NotificationsScreenProps {
   onBack: () => void;
+  onTaskDetail?: (taskId: string) => void;
+  onTaskChat?: (taskId: string) => void;
 }
 
 function NotifIcon({ type }: { type: Notification['type'] }) {
@@ -30,7 +34,8 @@ function formatDate(iso: string): string {
   }
 }
 
-export function NotificationsScreen({ onBack }: NotificationsScreenProps) {
+export function NotificationsScreen({ onBack, onTaskDetail, onTaskChat }: NotificationsScreenProps) {
+  const { t } = useTranslation();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,13 +50,25 @@ export function NotificationsScreen({ onBack }: NotificationsScreenProps) {
         if (msg.includes('404') || msg.includes('failed: 404')) {
           setNotifications([]);
         } else {
-          setError('Impossible de charger les notifications');
+          setError(t('notifications.errorLoad'));
         }
       })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, []);
+
+  const handleNotifClick = (n: Notification) => {
+    if (!n.task_id) return;
+    apiClient.patch(`/notifications/${n.id}/read`, {}).catch(() => {});
+    setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, read: true } : x));
+    // Message notifications → open chat; all others → open task detail
+    if (n.title.startsWith('Message de') && onTaskChat) {
+      onTaskChat(n.task_id);
+    } else if (onTaskDetail) {
+      onTaskDetail(n.task_id);
+    }
+  };
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -60,7 +77,7 @@ export function NotificationsScreen({ onBack }: NotificationsScreenProps) {
           <button onClick={onBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors" aria-label="Retour">
             <ArrowLeft size={24} className="text-gray-700" />
           </button>
-          <h2 className="text-2xl font-bold text-gray-900">Notifications</h2>
+          <h2 className="text-2xl font-bold text-gray-900">{t('notifications.title')}</h2>
         </div>
       </div>
 
@@ -74,34 +91,44 @@ export function NotificationsScreen({ onBack }: NotificationsScreenProps) {
             <AlertTriangle size={40} className="text-red-400" />
             <p className="text-sm text-red-600">{error}</p>
             <button onClick={load} className="flex items-center gap-2 text-sm font-medium text-[#6D28D9] hover:underline">
-              <RefreshCw size={16} /> Réessayer
+              <RefreshCw size={16} /> {t('common.retry')}
             </button>
           </div>
         ) : notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full pb-12 text-center">
             <Bell size={48} className="text-gray-300 mb-4" />
-            <p className="text-lg font-semibold text-gray-700">Aucune notification</p>
-            <p className="text-sm text-gray-500 mt-2">Vos notifications apparaîtront ici.</p>
+            <p className="text-lg font-semibold text-gray-700">{t('notifications.none')}</p>
+            <p className="text-sm text-gray-500 mt-2">{t('notifications.noneSubtitle')}</p>
           </div>
         ) : (
           <div className="space-y-3">
-            {notifications.map((n) => (
-              <Card key={n.id} className={`transition-all ${n.read ? 'opacity-70' : ''}`}>
-                <div className="flex items-start gap-3">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
-                    n.type === 'success' ? 'bg-green-50' : n.type === 'warning' ? 'bg-amber-50' : 'bg-blue-50'
-                  }`}>
-                    <NotifIcon type={n.type} />
+            {notifications.map((n) => {
+              const clickable = !!(n.task_id && (onTaskDetail || onTaskChat));
+              return (
+                <Card
+                  key={n.id}
+                  className={`transition-all ${n.read ? 'opacity-70' : ''} ${clickable ? 'cursor-pointer hover:shadow-md active:scale-[0.99]' : ''}`}
+                  onClick={clickable ? () => handleNotifClick(n) : undefined}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${
+                      n.type === 'success' ? 'bg-green-50' : n.type === 'warning' ? 'bg-amber-50' : 'bg-blue-50'
+                    }`}>
+                      <NotifIcon type={n.type} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-gray-900 text-sm">{n.title}</p>
+                      <p className="text-sm text-gray-600 mt-0.5">{n.body}</p>
+                      <p className="text-xs text-gray-400 mt-1">{formatDate(n.created_at)}</p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {!n.read && <div className="w-2 h-2 bg-[#6D28D9] rounded-full" />}
+                      {clickable && <ChevronRight size={16} className="text-gray-400" />}
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-gray-900 text-sm">{n.title}</p>
-                    <p className="text-sm text-gray-600 mt-0.5">{n.body}</p>
-                    <p className="text-xs text-gray-400 mt-1">{formatDate(n.created_at)}</p>
-                  </div>
-                  {!n.read && <div className="w-2 h-2 bg-[#6D28D9] rounded-full mt-1 flex-shrink-0" />}
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
           </div>
         )}
       </div>

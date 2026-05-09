@@ -15,8 +15,21 @@ class ChatService:
         if task.created_by != user_id and task.assigned_to != user_id:
             raise PermissionError("Not a participant in this task")
 
-    def create_message(self, task_id: str, sender_id: str, message: str) -> ChatMessage:
-        msg = ChatMessage(task_id=task_id, sender_id=sender_id, message=message)
+    def create_message(
+        self,
+        task_id: str,
+        sender_id: str,
+        message: str,
+        media_url: str | None = None,
+        media_type: str | None = None,
+    ) -> ChatMessage:
+        msg = ChatMessage(
+            task_id=task_id,
+            sender_id=sender_id,
+            message=message,
+            media_url=media_url,
+            media_type=media_type,
+        )
         self.db.add(msg)
         self.db.commit()
         self.db.refresh(msg)

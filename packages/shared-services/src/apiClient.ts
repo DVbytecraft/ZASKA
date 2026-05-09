@@ -131,6 +131,24 @@ export class ApiClient {
     return unwrap<T>(response);
   }
 
+  async postFormData<T>(path: string, formData: FormData): Promise<T> {
+    const buildHeaders = () => ({ ...this.authHeaders() });
+    let response = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: buildHeaders(),
+      body: formData,
+    });
+    if (response.status === 401 && (await this.tryRefresh())) {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        method: "POST",
+        headers: buildHeaders(),
+        body: formData,
+      });
+    }
+    if (!response.ok) throw new Error(await this.extractError(response, `POST ${path} failed: ${response.status}`));
+    return unwrap<T>(response);
+  }
+
   async delete<T>(path: string): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: "DELETE",

@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import App from "./app/App.tsx";
 import "./styles/index.css";
+import "./i18n";
 
 // Register service worker for PWA installability + offline support
 if ("serviceWorker" in navigator) {

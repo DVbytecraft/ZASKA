@@ -4,6 +4,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoadingScreen } from './screens/LoadingScreen';
 import { BottomNav } from './components/BottomNav';
 import { InstallPrompt } from './components/InstallPrompt';
+import { setAppLanguage } from '../i18n';
 
 // Eagerly loaded: needed before any interaction (auth guard, fallback)
 import { SplashScreen } from './screens/SplashScreen';
@@ -134,7 +135,8 @@ export default function App() {
   const [registeredPhone, setRegisteredPhone] = useState<string>('');
   const [registeredEmail, setRegisteredEmail] = useState<string>('');
   const [resetEmail, setResetEmail] = useState<string>('');
-  const [currentChatTaskerName, setCurrentChatTaskerName] = useState<string>('');
+  const [initialDescription, setInitialDescription] = useState<string>('');
+  const [postTaskBack, setPostTaskBack] = useState<Screen>('taskModeSelection');
   const [currentNegotiation, setCurrentNegotiation] = useState<{
     taskerName: string; originalPrice: number; proposedPrice: number;
   }>({ taskerName: '', originalPrice: 0, proposedPrice: 0 });
@@ -155,6 +157,10 @@ export default function App() {
       }
     }
   }, [currentScreen]);
+
+  useEffect(() => {
+    setAppLanguage(apiClient.getCountryCode());
+  }, []);
 
   useEffect(() => {
     const check = async () => {
@@ -281,6 +287,12 @@ export default function App() {
               setCurrentScreen('taskDetail');
             }}
             onCategories={() => setCurrentScreen('categories')}
+            onSelectCategory={(_, description) => {
+              setInitialDescription(description);
+              setTaskMode('fast');
+              setPostTaskBack('home');
+              setCurrentScreen('postTask');
+            }}
             onSearch={() => setCurrentScreen('search')}
             onNotifications={() => setCurrentScreen('notifications')}
           />
@@ -290,7 +302,12 @@ export default function App() {
         return (
           <CategoriesScreen
             onBack={() => setCurrentScreen('home')}
-            onSelectCategory={() => setCurrentScreen('postTask')}
+            onSelectCategory={(_, description) => {
+              setInitialDescription(description);
+              setTaskMode('fast');
+              setPostTaskBack('home');
+              setCurrentScreen('postTask');
+            }}
           />
         );
 
@@ -305,6 +322,14 @@ export default function App() {
         return (
           <NotificationsScreen
             onBack={() => setCurrentScreen('home')}
+            onTaskDetail={(taskId) => {
+              setCurrentTaskId(taskId);
+              setCurrentScreen('taskDetail');
+            }}
+            onTaskChat={(taskId) => {
+              setCurrentTaskId(taskId);
+              setCurrentScreen('taskChat');
+            }}
           />
         );
 
@@ -314,6 +339,8 @@ export default function App() {
             onBack={() => setCurrentScreen('home')}
             onSelect={(mode) => {
               setTaskMode(mode);
+              setInitialDescription('');
+              setPostTaskBack('taskModeSelection');
               setCurrentScreen('postTask');
             }}
           />
@@ -323,9 +350,11 @@ export default function App() {
         return (
           <PostTaskScreen
             taskMode={taskMode}
-            onBack={() => setCurrentScreen('taskModeSelection')}
+            initialDescription={initialDescription}
+            onBack={() => setCurrentScreen(postTaskBack)}
             onSubmit={(taskId) => {
               if (taskId) setCurrentTaskId(taskId);
+              setInitialDescription('');
               setCurrentScreen('taskCreated');
             }}
           />
@@ -373,7 +402,7 @@ export default function App() {
             taskId={currentTaskId}
             onBack={() => setCurrentScreen('home')}
             onComplete={() => setCurrentScreen('paymentSuccess')}
-            onChat={(name) => { setCurrentChatTaskerName(name ?? ''); setCurrentScreen('taskChat'); }}
+            onChat={() => setCurrentScreen('taskChat')}
             onViewApplicants={() => setCurrentScreen('applicants')}
           />
         );
@@ -381,7 +410,6 @@ export default function App() {
       case 'taskChat':
         return (
           <TaskChatScreen
-            taskerName={currentChatTaskerName}
             taskId={currentTaskId}
             onBack={() => setCurrentScreen('taskDetail')}
           />
@@ -443,6 +471,10 @@ export default function App() {
               setCurrentScreen('applicants');
             }}
             onPostTask={() => setCurrentScreen('taskModeSelection')}
+            onChatOpen={(taskId) => {
+              setCurrentTaskId(taskId);
+              setCurrentScreen('taskChat');
+            }}
           />
         );
 

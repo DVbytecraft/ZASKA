@@ -56,10 +56,10 @@ export function WalletScreen({
             ]);
             if (!cancelled) { setWallet(bal); setTransactions(txs); }
           } catch (createErr) {
-            if (!cancelled) setError(createErr instanceof Error ? createErr.message : 'Failed to initialize wallet');
+            if (!cancelled) setError(createErr instanceof Error ? createErr.message : 'Impossible d\'initialiser le portefeuille');
           }
         } else {
-          if (!cancelled) setError(msg || 'Failed to load wallet');
+          if (!cancelled) setError(msg || 'Impossible de charger le portefeuille');
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -81,7 +81,7 @@ export function WalletScreen({
   return (
     <div className="h-full overflow-auto pb-24 bg-gray-50">
       <div className="px-6 pt-8 pb-6 bg-gradient-to-br from-[#6D28D9] to-[#5B21B6]">
-        <p className="text-white/70 text-sm font-medium mb-1">Available balance</p>
+        <p className="text-white/70 text-sm font-medium mb-1">Solde disponible</p>
         <h1 className="text-5xl font-bold text-white mb-8 tracking-tight">
           {loading ? (
             <span className="inline-block w-40 h-10 bg-white/20 rounded-xl animate-pulse" />
@@ -95,29 +95,29 @@ export function WalletScreen({
             <div className="w-11 h-11 bg-white/20 rounded-xl flex items-center justify-center">
               <Send size={20} className="text-white" strokeWidth={2.5} />
             </div>
-            <span className="text-xs font-semibold text-white">Send</span>
+            <span className="text-xs font-semibold text-white">Envoyer</span>
           </button>
           <button onClick={onWithdraw} className="bg-white/15 hover:bg-white/25 backdrop-blur-sm rounded-2xl p-4 flex flex-col items-center gap-2 transition-all border border-white/10 active:scale-95">
             <div className="w-11 h-11 bg-white/20 rounded-xl flex items-center justify-center">
               <Download size={20} className="text-white" strokeWidth={2.5} />
             </div>
-            <span className="text-xs font-semibold text-white">Withdraw</span>
+            <span className="text-xs font-semibold text-white">Retirer</span>
           </button>
           <button onClick={onAddFunds} className="bg-white/15 hover:bg-white/25 backdrop-blur-sm rounded-2xl p-4 flex flex-col items-center gap-2 transition-all border border-white/10 active:scale-95">
             <div className="w-11 h-11 bg-white/20 rounded-xl flex items-center justify-center">
               <CreditCard size={20} className="text-white" strokeWidth={2.5} />
             </div>
-            <span className="text-xs font-semibold text-white">Top up</span>
+            <span className="text-xs font-semibold text-white">Recharger</span>
           </button>
         </div>
       </div>
 
       <div className="px-6 py-4">
         <div className="flex items-center justify-between mb-3 px-1">
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Recent transactions</h3>
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Transactions récentes</h3>
           {onTransactionHistory && (
             <button onClick={onTransactionHistory} className="text-xs font-semibold text-[#6D28D9] hover:text-[#5B21B6]">
-              View all
+              Voir tout
             </button>
           )}
         </div>
@@ -138,7 +138,7 @@ export function WalletScreen({
 
         {!loading && !error && recentTransactions.length === 0 && (
           <div className="bg-gray-100 rounded-2xl p-8 text-center">
-            <p className="text-sm text-gray-500">No transactions yet.</p>
+            <p className="text-sm text-gray-500">Aucune transaction pour l'instant.</p>
           </div>
         )}
 
@@ -159,7 +159,7 @@ export function WalletScreen({
                     </div>
                     <div>
                       <p className="font-medium text-gray-900 capitalize">
-                        {tx.type === 'credit' ? 'Received' : 'Sent'} via {tx.provider}
+                        {tx.type === 'credit' ? 'Reçu via' : 'Envoyé via'} {tx.provider}
                       </p>
                       <p className="text-xs text-gray-500">{formatDate(tx.created_at)}</p>
                     </div>

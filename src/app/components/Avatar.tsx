@@ -1,11 +1,12 @@
 interface AvatarProps {
   src?: string;
   name: string;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 }
 
 export function Avatar({ src, name, size = 'md' }: AvatarProps) {
   const sizes = {
+    xs: 'w-7 h-7 text-xs',
     sm: 'w-10 h-10 text-sm',
     md: 'w-12 h-12 text-base',
     lg: 'w-16 h-16 text-lg',

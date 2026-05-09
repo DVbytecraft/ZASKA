@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Eye, EyeOff, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { setAppLanguage } from '../../i18n';
 
 interface LoginScreenProps {
   onBack: () => void;
@@ -17,7 +18,8 @@ export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword }: Log
 
   const handleContinue = async () => {
     try {
-      await login(email, password);
+      const session = await login(email, password);
+      setAppLanguage(session?.country);
       onLogin();
     } catch {
       // error already set in useAuth

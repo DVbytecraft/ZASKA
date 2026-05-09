@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ArrowLeft, Briefcase, User, Eye, EyeOff, Check, X, ChevronDown } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { SUPPORTED_COUNTRIES, type SupportedCountry } from '../config/countries';
+import { setAppLanguage } from '../../i18n';
 
 interface RegisterScreenProps {
   onBack: () => void;
@@ -70,7 +71,7 @@ export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
               {SUPPORTED_COUNTRIES.map((country) => (
                 <button
                   key={country.code}
-                  onClick={() => { setSelectedCountry(country); setShowCountryPicker(false); }}
+                  onClick={() => { setSelectedCountry(country); setAppLanguage(country.code); setShowCountryPicker(false); }}
                   className={`w-full flex items-center gap-4 px-3 py-3.5 rounded-xl mb-1 transition-colors ${
                     selectedCountry.code === country.code
                       ? 'bg-purple-50 border border-[#6D28D9]'

@@ -4,6 +4,7 @@ export interface SupportedCountry {
   flag: string;
   dialCode: string;
   currency: string;
+  language: "fr" | "en";
   mobileMoneyEnabled: boolean;
 }
 
@@ -14,20 +15,20 @@ export interface MobileMoneyOperator {
 }
 
 export const SUPPORTED_COUNTRIES: SupportedCountry[] = [
-  { code: 'TG', name: 'Togo',          flag: '🇹🇬', dialCode: '+228', currency: 'XOF', mobileMoneyEnabled: true  },
-  { code: 'CI', name: "Côte d'Ivoire", flag: '🇨🇮', dialCode: '+225', currency: 'XOF', mobileMoneyEnabled: true  },
-  { code: 'SN', name: 'Sénégal',       flag: '🇸🇳', dialCode: '+221', currency: 'XOF', mobileMoneyEnabled: true  },
-  { code: 'BJ', name: 'Bénin',         flag: '🇧🇯', dialCode: '+229', currency: 'XOF', mobileMoneyEnabled: true  },
-  { code: 'BF', name: 'Burkina Faso',  flag: '🇧🇫', dialCode: '+226', currency: 'XOF', mobileMoneyEnabled: true  },
-  { code: 'ML', name: 'Mali',          flag: '🇲🇱', dialCode: '+223', currency: 'XOF', mobileMoneyEnabled: true  },
-  { code: 'NE', name: 'Niger',         flag: '🇳🇪', dialCode: '+227', currency: 'XOF', mobileMoneyEnabled: true  },
-  { code: 'CM', name: 'Cameroun',      flag: '🇨🇲', dialCode: '+237', currency: 'XAF', mobileMoneyEnabled: true  },
-  { code: 'GH', name: 'Ghana',         flag: '🇬🇭', dialCode: '+233', currency: 'GHS', mobileMoneyEnabled: true  },
-  { code: 'NG', name: 'Nigeria',       flag: '🇳🇬', dialCode: '+234', currency: 'NGN', mobileMoneyEnabled: true  },
-  { code: 'KE', name: 'Kenya',         flag: '🇰🇪', dialCode: '+254', currency: 'KES', mobileMoneyEnabled: true  },
-  { code: 'FR', name: 'France',        flag: '🇫🇷', dialCode: '+33',  currency: 'EUR', mobileMoneyEnabled: false },
-  { code: 'BE', name: 'Belgique',      flag: '🇧🇪', dialCode: '+32',  currency: 'EUR', mobileMoneyEnabled: false },
-  { code: 'US', name: 'États-Unis',    flag: '🇺🇸', dialCode: '+1',   currency: 'USD', mobileMoneyEnabled: false },
+  { code: 'TG', name: 'Togo',          flag: '🇹🇬', dialCode: '+228', currency: 'XOF', language: 'fr', mobileMoneyEnabled: true  },
+  { code: 'CI', name: "Côte d'Ivoire", flag: '🇨🇮', dialCode: '+225', currency: 'XOF', language: 'fr', mobileMoneyEnabled: true  },
+  { code: 'SN', name: 'Sénégal',       flag: '🇸🇳', dialCode: '+221', currency: 'XOF', language: 'fr', mobileMoneyEnabled: true  },
+  { code: 'BJ', name: 'Bénin',         flag: '🇧🇯', dialCode: '+229', currency: 'XOF', language: 'fr', mobileMoneyEnabled: true  },
+  { code: 'BF', name: 'Burkina Faso',  flag: '🇧🇫', dialCode: '+226', currency: 'XOF', language: 'fr', mobileMoneyEnabled: true  },
+  { code: 'ML', name: 'Mali',          flag: '🇲🇱', dialCode: '+223', currency: 'XOF', language: 'fr', mobileMoneyEnabled: true  },
+  { code: 'NE', name: 'Niger',         flag: '🇳🇪', dialCode: '+227', currency: 'XOF', language: 'fr', mobileMoneyEnabled: true  },
+  { code: 'CM', name: 'Cameroun',      flag: '🇨🇲', dialCode: '+237', currency: 'XAF', language: 'fr', mobileMoneyEnabled: true  },
+  { code: 'GH', name: 'Ghana',         flag: '🇬🇭', dialCode: '+233', currency: 'GHS', language: 'en', mobileMoneyEnabled: true  },
+  { code: 'NG', name: 'Nigeria',       flag: '🇳🇬', dialCode: '+234', currency: 'NGN', language: 'en', mobileMoneyEnabled: true  },
+  { code: 'KE', name: 'Kenya',         flag: '🇰🇪', dialCode: '+254', currency: 'KES', language: 'en', mobileMoneyEnabled: true  },
+  { code: 'FR', name: 'France',        flag: '🇫🇷', dialCode: '+33',  currency: 'EUR', language: 'fr', mobileMoneyEnabled: false },
+  { code: 'BE', name: 'Belgique',      flag: '🇧🇪', dialCode: '+32',  currency: 'EUR', language: 'fr', mobileMoneyEnabled: false },
+  { code: 'US', name: 'United States', flag: '🇺🇸', dialCode: '+1',   currency: 'USD', language: 'en', mobileMoneyEnabled: false },
 ];
 
 export const MOBILE_MONEY_OPERATORS: Record<string, MobileMoneyOperator[]> = {

@@ -226,6 +226,7 @@ class WalletService:
         return escrow
 
     def release_escrow(self, escrow_id: str) -> Escrow:
+        from app.core.config import settings as _cfg
         escrow = self._get_escrow(escrow_id, for_update=True)
         if escrow.status != "funded":
             raise EscrowError(f"Escrow {escrow_id} ne peut etre libere (statut: {escrow.status})")
@@ -234,25 +235,53 @@ class WalletService:
 
         self._audit_transition(escrow, TransactionState.PROCESSING, "release_processing", "internal")
 
-        # Inline credit — single commit encompasses both wallet update and escrow status change.
+        # ZASKA 15% commission
+        commission_bps = _cfg.zaska_commission_bps
+        commission = (escrow.amount * Decimal(str(commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
+        tasker_amount = escrow.amount - commission
+
+        # Credit tasker (85%)
         wallet = self._get_or_create_wallet(escrow.payee_id, escrow.currency, for_update=True)
         tx = Transaction(
             id=_uuid(),
             wallet_id=wallet.id,
             type="credit",
-            amount=escrow.amount,
+            amount=tasker_amount,
             status="completed",
             reference=f"escrow_release:{escrow_id}",
             provider="internal",
-            metadata_json=json.dumps({"escrow_id": escrow_id, "task_id": escrow.task_id}),
+            metadata_json=json.dumps({
+                "escrow_id": escrow_id, "task_id": escrow.task_id,
+                "gross": str(escrow.amount), "commission_bps": commission_bps,
+                "commission": str(commission), "net": str(tasker_amount),
+            }),
         )
-        wallet.balance += escrow.amount
+        wallet.balance += tasker_amount
         self.db.add(tx)
-        self.db.flush()  # obtain tx.id before commit
+        self.db.flush()
+
+        # Credit ZASKA commission wallet (15%)
+        zaska_user_id = _cfg.zaska_wallet_user_id
+        if commission > Decimal("0") and zaska_user_id:
+            zaska_wallet = self._get_or_create_wallet(zaska_user_id, escrow.currency, for_update=True)
+            zaska_tx = Transaction(
+                id=_uuid(),
+                wallet_id=zaska_wallet.id,
+                type="credit",
+                amount=commission,
+                status="completed",
+                reference=f"commission:{escrow_id}",
+                provider="internal",
+                metadata_json=json.dumps({"escrow_id": escrow_id, "task_id": escrow.task_id, "type": "zaska_commission"}),
+            )
+            zaska_wallet.balance += commission
+            self.db.add(zaska_tx)
+        elif commission > Decimal("0"):
+            logger.warning("ZASKA_WALLET_USER_ID not configured — commission {} {} not credited", commission, escrow.currency)
 
         escrow.status = "released"
         escrow.settlement_tx_id = tx.id
-        self.db.commit()  # single atomic commit
+        self.db.commit()
         self.db.refresh(escrow)
         return escrow
 
@@ -423,6 +452,10 @@ class WalletService:
         self.db.refresh(escrow)
         return escrow
 
+    def hold_escrow_6h(self, escrow_id: str) -> Escrow:
+        """Alias for hold_escrow_24h — 6h contestation window."""
+        return self.hold_escrow_24h(escrow_id)
+
     def contest_escrow(self, escrow_id: str, client_user_id: str) -> Escrow:
         """Client contests the work — freezes payment during 6h hold window."""
         from datetime import timedelta
@@ -452,20 +485,28 @@ class WalletService:
         return self.release_escrow(escrow_id)
 
     def partial_release_escrow(self, escrow_id: str, completion_percent: int) -> tuple[Escrow, Decimal, Decimal]:
-        """Proportional release based on completion_percent (1–99).
-        Executor gets completion_percent% of escrow, client gets the remainder back.
+        """Fixed split on partial task abandonment/completion:
+        Tasker 10%, ZASKA 5%, Client 85%. completion_percent is recorded only.
 
         Returns (escrow, executor_amount, client_refund).
         """
+        from app.core.config import settings as _cfg
         escrow = self._get_escrow(escrow_id, for_update=True)
         if escrow.status not in {"funded", "hold"}:
             raise EscrowError(f"Escrow {escrow_id} ne peut être libéré partiellement (statut: {escrow.status})")
         if not escrow.payee_id:
             raise EscrowError(f"Escrow {escrow_id} n'a pas d'exécutant défini")
 
-        pct = max(1, min(99, completion_percent))
-        executor_amount = (escrow.amount * Decimal(str(pct)) / Decimal("100")).quantize(Decimal("0.000001"))
-        client_refund = escrow.amount - executor_amount
+        # Fixed split: tasker 10%, ZASKA 5%, client 85%
+        executor_amount = (escrow.amount * Decimal("10") / Decimal("100")).quantize(Decimal("0.000001"))
+        zaska_commission = (escrow.amount * Decimal("5") / Decimal("100")).quantize(Decimal("0.000001"))
+        client_refund = escrow.amount - executor_amount - zaska_commission
+
+        meta_base = {
+            "escrow_id": escrow_id, "task_id": escrow.task_id,
+            "completion_percent": completion_percent,
+            "gross": str(escrow.amount), "tasker_pct": 10, "zaska_pct": 5, "client_pct": 85,
+        }
 
         # Credit executor (10%)
         exec_wallet = self._get_or_create_wallet(escrow.payee_id, escrow.currency, for_update=True)
@@ -477,12 +518,29 @@ class WalletService:
             status="completed",
             reference=f"partial_release:{escrow_id}",
             provider="internal",
-            metadata_json=json.dumps({"escrow_id": escrow_id, "task_id": escrow.task_id, "type": "partial_payment"}),
+            metadata_json=json.dumps({**meta_base, "type": "partial_payment"}),
         )
         exec_wallet.balance += executor_amount
         self.db.add(exec_tx)
 
-        # Refund client (90%)
+        # Credit ZASKA (5%)
+        zaska_user_id = _cfg.zaska_wallet_user_id
+        if zaska_commission > Decimal("0") and zaska_user_id:
+            zaska_wallet = self._get_or_create_wallet(zaska_user_id, escrow.currency, for_update=True)
+            zaska_tx = Transaction(
+                id=_uuid(),
+                wallet_id=zaska_wallet.id,
+                type="credit",
+                amount=zaska_commission,
+                status="completed",
+                reference=f"partial_commission:{escrow_id}",
+                provider="internal",
+                metadata_json=json.dumps({**meta_base, "type": "zaska_commission"}),
+            )
+            zaska_wallet.balance += zaska_commission
+            self.db.add(zaska_tx)
+
+        # Refund client (85%)
         payer_wallet = self._get_or_create_wallet(escrow.payer_id, escrow.currency, for_update=True)
         refund_tx = Transaction(
             id=_uuid(),
@@ -492,7 +550,7 @@ class WalletService:
             status="completed",
             reference=f"partial_refund:{escrow_id}",
             provider="internal",
-            metadata_json=json.dumps({"escrow_id": escrow_id, "task_id": escrow.task_id, "type": "partial_refund"}),
+            metadata_json=json.dumps({**meta_base, "type": "partial_refund"}),
         )
         payer_wallet.balance += client_refund
         self.db.add(refund_tx)

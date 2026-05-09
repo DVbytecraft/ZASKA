@@ -8,6 +8,7 @@ import type { TaskMode, TaskStop, UserAddress } from '@zaska/shared-services';
 
 interface PostTaskScreenProps {
   taskMode: TaskMode;
+  initialDescription?: string;
   onBack: () => void;
   onSubmit: (taskId: string) => void;
 }
@@ -248,9 +249,9 @@ function StopPicker({ savedAddresses, onConfirm, onClose }: StopPickerProps) {
 }
 
 // ── Main screen ───────────────────────────────────────────────────────────────
-export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenProps) {
+export function PostTaskScreen({ taskMode, initialDescription, onBack, onSubmit }: PostTaskScreenProps) {
   const [step, setStep] = useState(1);
-  const [description, setDescription] = useState('');
+  const [description, setDescription] = useState(initialDescription ?? '');
   const [budget, setBudget] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { createTask, loading } = useTaskFlow();
@@ -471,18 +472,23 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
           </div>
         )}
 
-        {/* ── Step 3: Lieux d'exécution (multi-stop) ── */}
+        {/* ── Step 3: Lieu d'exécution de la tâche ── */}
         {step === 3 && (
           <div>
             <div className="flex items-center justify-between mb-1">
-              <h3 className="text-xl font-bold text-gray-900">Lieux d'exécution</h3>
+              <h3 className="text-xl font-bold text-gray-900">Lieu d'exécution</h3>
               <span className={`text-sm font-semibold ${stops.length >= 4 ? 'text-amber-600' : 'text-gray-400'}`}>
                 {stops.length} / 4
               </span>
             </div>
-            <p className="text-sm text-gray-500 mb-5">
-              Ajoutez jusqu'à 4 points d'arrêt. Le premier sera le point de départ.
+            <p className="text-sm text-gray-500 mb-2">
+              Indiquez où la tâche doit être réalisée (pour trouver des prestataires proches).
             </p>
+            <div className="mb-4 bg-blue-50 border border-blue-100 rounded-xl p-3">
+              <p className="text-xs text-blue-700">
+                Pour les détails de destination (livraisons, multi-stops), précisez-les dans la discussion une fois le prestataire assigné.
+              </p>
+            </div>
 
             {/* Stops list */}
             {stops.length > 0 && (

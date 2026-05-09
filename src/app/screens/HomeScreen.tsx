@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { taskService } from '@zaska/shared-services';
@@ -7,30 +7,25 @@ import {
   Sparkles, Package, FileText, Users, CheckCircle2, Activity,
   Search, Bell, MapPin, Navigation,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { PriceDisplay } from '../components/PriceDisplay';
 
 interface HomeScreenProps {
   onPostTask: () => void;
   onViewApplicants?: (taskId: string) => void;
   onTaskDetail?: (taskId: string) => void;
   onCategories?: () => void;
+  onSelectCategory?: (categoryId: string, description: string) => void;
   onSearch?: () => void;
   onNotifications?: () => void;
 }
 
-const CATEGORIES = [
-  { id: 1, name: 'Ménage', icon: Sparkles, gradient: 'from-purple-500 to-purple-600' },
-  { id: 2, name: 'Livraison', icon: Package, gradient: 'from-blue-500 to-blue-600' },
-  { id: 3, name: 'Assistant', icon: FileText, gradient: 'from-green-500 to-green-600' },
-  { id: 4, name: 'Personnel', icon: Users, gradient: 'from-pink-500 to-pink-600' },
-];
-
-function statusLabel(status: Task['status']) {
-  if (status === 'COMPLETED') return 'Terminé';
-  if (status === 'ASSIGNED') return 'En cours';
-  if (status === 'PENDING_VALIDATION') return 'En validation';
-  if (status === 'PAUSED') return 'En pause';
-  return 'Ouvert';
-}
+const CATEGORY_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>> = {
+  cleaning: Sparkles,
+  delivery: Package,
+  admin: FileText,
+  personal: Users,
+};
 
 function statusClass(status: Task['status']) {
   if (status === 'COMPLETED') return 'bg-green-50 text-green-700';
@@ -80,13 +75,30 @@ export function HomeScreen({
   onViewApplicants,
   onTaskDetail,
   onCategories,
+  onSelectCategory,
   onSearch,
   onNotifications,
 }: HomeScreenProps) {
+  const { t } = useTranslation();
   const [myTasks, setMyTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const position = useGeolocation();
+
+  const CATEGORIES = [
+    { id: 'cleaning', name: t('categories.cleaning'), icon: CATEGORY_ICONS.cleaning, gradient: 'from-purple-500 to-purple-600', description: t('categories.desc_cleaning') },
+    { id: 'delivery', name: t('categories.delivery'), icon: CATEGORY_ICONS.delivery, gradient: 'from-blue-500 to-blue-600',    description: t('categories.desc_delivery') },
+    { id: 'admin',    name: t('categories.admin'),    icon: CATEGORY_ICONS.admin,    gradient: 'from-green-500 to-green-600',  description: t('categories.desc_admin') },
+    { id: 'personal', name: t('categories.personal'), icon: CATEGORY_ICONS.personal, gradient: 'from-pink-500 to-pink-600',    description: t('categories.desc_personal') },
+  ];
+
+  const statusLabel = (status: Task['status']) => {
+    if (status === 'COMPLETED') return t('home.completed_status');
+    if (status === 'ASSIGNED') return t('home.inProgress');
+    if (status === 'PENDING_VALIDATION') return t('home.validation');
+    if (status === 'PAUSED') return t('home.paused');
+    return t('home.open');
+  };
 
   const load = useCallback(() => {
     setLoading(true);
@@ -111,7 +123,7 @@ export function HomeScreen({
       <div className="px-6 pt-8 pb-8 bg-gradient-to-br from-[#6D28D9] to-[#5B21B6]">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-white">Que faut-il faire ?</h1>
+            <h1 className="text-2xl font-bold text-white">{t('home.subtitle')}</h1>
             {position && (
               <p className="text-white/60 text-xs mt-0.5 flex items-center gap-1">
                 <Navigation size={10} />
@@ -140,35 +152,8 @@ export function HomeScreen({
           </div>
         </div>
         <Button fullWidth onClick={onPostTask}>
-          Poster une tâche
+          {t('home.postTask')}
         </Button>
-      </div>
-
-      {/* ── Categories ── */}
-      <div className="px-6 pt-4">
-        <div className="flex items-center justify-between mb-3 px-1">
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Catégories populaires</h3>
-          {onCategories && (
-            <button onClick={onCategories} className="text-xs font-semibold text-[#6D28D9] hover:text-[#5B21B6]">
-              Voir tout
-            </button>
-          )}
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          {CATEGORIES.map((category) => {
-            const Icon = category.icon;
-            return (
-              <Card key={category.id} onClick={onCategories} className="hover:shadow-lg transition-all active:scale-[0.98]">
-                <div className="flex flex-col items-center py-5">
-                  <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${category.gradient} flex items-center justify-center mb-3 shadow-lg`}>
-                    <Icon size={26} className="text-white" strokeWidth={2.5} />
-                  </div>
-                  <span className="font-semibold text-gray-900 text-sm">{category.name}</span>
-                </div>
-              </Card>
-            );
-          })}
-        </div>
       </div>
 
       {/* ── Loading skeleton ── */}
@@ -183,19 +168,19 @@ export function HomeScreen({
       {/* ── Error ── */}
       {error && !loading && (
         <div className="mx-6 mt-6 bg-red-50 border border-red-100 rounded-2xl p-4 text-center">
-          <p className="text-sm text-red-600">Impossible de charger l'activité</p>
+          <p className="text-sm text-red-600">{t('common.error')}</p>
           <button onClick={load} className="mt-2 text-xs text-red-700 font-semibold underline">
-            Réessayer
+            {t('common.retry')}
           </button>
         </div>
       )}
 
       {!loading && !error && (
         <>
-          {/* ── Active tasks (ASSIGNED / PENDING_VALIDATION) — archived ── */}
+          {/* ── Active tasks (ASSIGNED / PENDING_VALIDATION) ── */}
           {activeTasks.length > 0 && (
             <div className="px-6 mt-6">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">Tâches en cours</h3>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">{t('home.activeTasks')}</h3>
               <div className="space-y-2">
                 {activeTasks.map((task) => (
                   <Card
@@ -212,7 +197,7 @@ export function HomeScreen({
                           <p className="font-semibold text-gray-900 truncate">
                             {task.title || task.description.slice(0, 40)}
                           </p>
-                          <p className="text-xs text-gray-500">{formatAmount(task.price, task.currency)}</p>
+                          <PriceDisplay amount={task.price} currency={task.currency} compact className="text-xs text-gray-500" />
                         </div>
                       </div>
                       <span className={`text-xs font-semibold px-2.5 py-1 rounded-lg whitespace-nowrap ml-2 ${statusClass(task.status)}`}>
@@ -228,7 +213,7 @@ export function HomeScreen({
           {/* ── Open tasks ── */}
           {openTasks.length > 0 && (
             <div className="px-6 mt-6">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">Mes tâches ouvertes</h3>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">{t('home.openTasks')}</h3>
               <div className="space-y-2">
                 {openTasks.map((task) => (
                   <Card
@@ -246,7 +231,7 @@ export function HomeScreen({
                             {task.title || task.description.slice(0, 40)}
                           </p>
                           <div className="flex items-center gap-2">
-                            <p className="text-xs text-gray-500">{formatAmount(task.price, task.currency)}</p>
+                            <PriceDisplay amount={task.price} currency={task.currency} compact className="text-xs text-gray-500" />
                             {(task.city || task.address) && (
                               <p className="text-xs text-gray-400 flex items-center gap-0.5 truncate max-w-[120px]">
                                 <MapPin size={10} />
@@ -267,7 +252,7 @@ export function HomeScreen({
                         onClick={(e) => { e.stopPropagation(); onViewApplicants(task.id); }}
                         className="w-full mt-1 px-4 py-2 bg-[#6D28D9] text-white rounded-lg font-medium text-sm hover:bg-[#5B21B6] transition-colors"
                       >
-                        Voir les candidatures
+                        {t('home.viewApplicants')}
                       </button>
                     )}
                   </Card>
@@ -279,7 +264,7 @@ export function HomeScreen({
           {/* ── Recent completed ── */}
           {recentCompleted.length > 0 && (
             <div className="px-6 mt-6">
-              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">Récemment terminées</h3>
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3 px-1">{t('home.recentCompleted')}</h3>
               <div className="space-y-2">
                 {recentCompleted.map((task) => (
                   <Card
@@ -296,11 +281,11 @@ export function HomeScreen({
                           <p className="font-medium text-gray-700 truncate max-w-[180px]">
                             {task.title || task.description.slice(0, 40)}
                           </p>
-                          <p className="text-xs text-gray-400">{formatAmount(task.price, task.currency)}</p>
+                          <PriceDisplay amount={task.price} currency={task.currency} compact className="text-xs text-gray-400" />
                         </div>
                       </div>
                       <span className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-green-50 text-green-700">
-                        Terminé
+                        {t('home.completed_status')}
                       </span>
                     </div>
                   </Card>
@@ -312,12 +297,43 @@ export function HomeScreen({
           {/* ── Empty state ── */}
           {myTasks.length === 0 && (
             <div className="mx-6 mt-6 bg-gray-100 rounded-2xl p-8 text-center">
-              <p className="text-sm text-gray-500 mb-4">Aucune activité. Publiez votre première tâche !</p>
-              <Button onClick={onPostTask}>Poster une tâche</Button>
+              <p className="text-sm text-gray-500 mb-4">{t('home.noTasksSubtitle')}</p>
+              <Button onClick={onPostTask}>{t('home.postTask')}</Button>
             </div>
           )}
         </>
       )}
+
+      {/* ── Categories ── */}
+      <div className="px-6 pt-4">
+        <div className="flex items-center justify-between mb-3 px-1">
+          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{t('home.categories')}</h3>
+          {onCategories && (
+            <button onClick={onCategories} className="text-xs font-semibold text-[#6D28D9] hover:text-[#5B21B6]">
+              {t('home.viewAll')}
+            </button>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {CATEGORIES.map((category) => {
+            const Icon = category.icon;
+            return (
+              <Card
+                key={category.id}
+                onClick={() => onSelectCategory ? onSelectCategory(category.id, category.description) : onCategories?.()}
+                className="hover:shadow-lg transition-all active:scale-[0.98]"
+              >
+                <div className="flex flex-col items-center py-5">
+                  <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${category.gradient} flex items-center justify-center mb-3 shadow-lg`}>
+                    <Icon size={26} className="text-white" strokeWidth={2.5} />
+                  </div>
+                  <span className="font-semibold text-gray-900 text-sm">{category.name}</span>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Bottom padding */}
       <div className="h-6" />

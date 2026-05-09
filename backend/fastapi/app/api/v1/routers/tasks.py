@@ -30,18 +30,18 @@ from app.schemas.task import (
     TaskUpdatePayload,
 )
 from app.services.task_service import TaskService
-from app.services.wallet_service import EscrowError, WalletService
+from app.services.wallet_service import EscrowError, InsufficientFundsError, WalletService
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
 # ─── In-app notification helper ───────────────────────────────────────────────
 
-def _notify(db: Session, user_id: str, type_: str, title: str, body: str) -> None:
+def _notify(db: Session, user_id: str, type_: str, title: str, body: str, task_id: str | None = None) -> None:
     """Persist a single in-app notification. Never raises."""
     try:
         from app.models.notification import Notification
-        notif = Notification(user_id=user_id, type=type_, title=title, body=body)
+        notif = Notification(user_id=user_id, type=type_, title=title, body=body, task_id=task_id)
         db.add(notif)
         db.flush()
     except Exception:
@@ -365,7 +365,7 @@ def cancel_task(
             msg = ("Le client a annulé cette tâche et l'a republiée. Votre paiement a été remboursé."
                    if payload.republish else
                    "Le client a annulé définitivement cette tâche. Votre paiement a été remboursé.")
-            _notify(db, tasker_id, "warning", "Tâche annulée", msg)
+            _notify(db, tasker_id, "warning", "Tâche annulée", msg, task_id=task_id)
         db.commit()
 
         out_msg = ("Tâche republiée. Le paiement a été remboursé." if payload.republish
@@ -428,7 +428,7 @@ def apply_task(
             pass  # email is best-effort — never block the response
 
         _notify(db, task.created_by, "info", "Nouvelle candidature",
-                f"Un prestataire a postulé à votre tâche : {task.title}")
+                f"Un prestataire a postulé à votre tâche : {task.title}", task_id=task_id)
         db.commit()
 
         return success_response({
@@ -499,7 +499,7 @@ def accept_task(
                 # Choose Mode: notify the accepted tasker
                 tasker = db.get(User, tasker_id)
                 _notify(db, tasker_id, "success", "Candidature acceptée ! 🎉",
-                        f"Le client a accepté votre candidature pour : {task.title}")
+                        f"Le client a accepté votre candidature pour : {task.title}", task_id=task_id)
                 if tasker and tasker.email:
                     from app.core.email import send_application_accepted_email
                     send_application_accepted_email(
@@ -512,7 +512,7 @@ def accept_task(
                 tasker = db.get(User, tasker_id)
                 tasker_name = " ".join(filter(None, [tasker.first_name, tasker.last_name])) if tasker else "Un prestataire"
                 _notify(db, task.created_by, "info", "Prestataire assigné",
-                        f"{tasker_name} a accepté votre tâche : {task.title}")
+                        f"{tasker_name} a accepté votre tâche : {task.title}", task_id=task_id)
                 if creator and creator.email:
                     from app.core.email import send_task_application_email
                     send_task_application_email(
@@ -599,7 +599,7 @@ def negotiate_price(
             pass
 
         _notify(db, task.created_by, "warning", "Modification de prix demandée",
-                f"Un prestataire propose un nouveau prix pour : {task.title}")
+                f"Un prestataire propose un nouveau prix pour : {task.title}", task_id=task_id)
         _record_neg_event(db, task_id, user_id, "proposed", payload.proposed_price, task.currency)
         db.commit()
 
@@ -622,6 +622,7 @@ def respond_to_negotiation(
     task_id: str,
     payload: NegotiationResponsePayload,
     service: TaskService = Depends(get_task_service),
+    wallet_svc: WalletService = Depends(get_wallet_service),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
@@ -635,6 +636,35 @@ def respond_to_negotiation(
 
         if payload.accept:
             task = service.accept_negotiation(task_id)
+            # Adjust escrow amount to match the newly accepted price
+            try:
+                escrow = wallet_svc.get_escrow_by_task(task_id)
+                if escrow and task.price and escrow.status in ("funded", "hold"):
+                    diff = task.price - escrow.amount
+                    if diff < Decimal("0"):
+                        # Negotiated price is lower — refund surplus to client
+                        wallet_svc.credit_wallet(
+                            user_id=escrow.payer_id, currency=escrow.currency,
+                            amount=-diff, reference=f"neg_refund:{escrow.id}",
+                            metadata={"type": "negotiation_refund", "task_id": task_id},
+                        )
+                        escrow.amount = task.price
+                        db.flush()
+                    elif diff > Decimal("0"):
+                        # Negotiated price is higher — debit client if they have funds
+                        try:
+                            wallet_svc.debit_wallet(
+                                user_id=escrow.payer_id, currency=escrow.currency,
+                                amount=diff, reference=f"neg_topup:{escrow.id}",
+                                metadata={"type": "negotiation_topup", "task_id": task_id},
+                            )
+                            escrow.amount = task.price
+                            db.flush()
+                        except InsufficientFundsError:
+                            # Client can't afford the increase — escrow stays at original amount
+                            pass
+            except Exception:
+                pass  # escrow adjustment is best-effort
         else:
             task = service.reject_negotiation(task_id)
 
@@ -664,10 +694,10 @@ def respond_to_negotiation(
         if task.negotiated_by:
             if payload.accept:
                 _notify(db, task.negotiated_by, "success", "Modification de prix acceptée ✓",
-                        f"Le client a accepté votre prix pour : {task.title}")
+                        f"Le client a accepté votre prix pour : {task.title}", task_id=task_id)
             else:
                 _notify(db, task.negotiated_by, "warning", "Modification de prix refusée",
-                        f"Le client a refusé votre demande de prix pour : {task.title}")
+                        f"Le client a refusé votre demande de prix pour : {task.title}", task_id=task_id)
         ev_type = "accepted" if payload.accept else "rejected"
         ev_price = task.negotiated_price if payload.accept else None
         _record_neg_event(db, task_id, user_id, ev_type, ev_price, task.currency)
@@ -815,7 +845,7 @@ def mark_task_complete(
             notif_body = f"Votre prestataire a déclaré la tâche terminée à {pct}% : {task.title}. Vous avez 6h pour confirmer."
         else:
             notif_body = f"Votre prestataire a déclaré la tâche terminée : {task.title}. Vous avez 6h pour confirmer."
-        _notify(db, task.created_by, "success", "Prestation déclarée terminée", notif_body)
+        _notify(db, task.created_by, "success", "Prestation déclarée terminée", notif_body, task_id=task_id)
         db.commit()
 
         logger.info("task:pending_validation task_id={} pct={}", task_id, pct)
@@ -884,10 +914,28 @@ def confirm_task_complete(
 
         if task.assigned_to:
             pct = task.completion_percent if task.completion_percent is not None else 100
-            pay_msg = (f"Le client a confirmé la réalisation à {pct}% de : {task.title}. Votre paiement ({pct}%) est disponible."
-                       if pct < 100 else
-                       f"Le client a confirmé la réalisation de : {task.title}. Votre paiement est disponible.")
-            _notify(db, task.assigned_to, "success", "Paiement libéré 🎉", pay_msg)
+            gross = float(escrow.amount) if escrow else 0.0
+            if pct < 100:
+                net = round(gross * 0.10, 2)
+                zaska_cut = round(gross * 0.05, 2)
+                client_back = round(gross * 0.85, 2)
+                pay_msg = (
+                    f"Paiement libéré pour {task.title}. "
+                    f"Brut : {gross:.2f} {task.currency}. "
+                    f"Votre part (10%) : {net:.2f} — Commission ZASKA (5%) : {zaska_cut:.2f} — "
+                    f"Remboursement client (85%) : {client_back:.2f} {task.currency}."
+                )
+            else:
+                commission_bps = settings.zaska_commission_bps
+                zaska_cut = round(gross * commission_bps / 10000, 2)
+                net = round(gross - zaska_cut, 2)
+                pay_msg = (
+                    f"Paiement libéré pour {task.title}. "
+                    f"Brut : {gross:.2f} {task.currency}. "
+                    f"Commission ZASKA (15%) : {zaska_cut:.2f} — "
+                    f"Net reçu : {net:.2f} {task.currency}."
+                )
+            _notify(db, task.assigned_to, "success", "Paiement libéré 🎉", pay_msg, task_id=task_id)
         db.commit()
 
         logger.info("task:confirmed task_id={}", task_id)
@@ -1087,8 +1135,8 @@ def tasker_abandon(
                         db.flush()
                     _, exec_amt, client_refund = wallet_svc.partial_release_escrow(escrow.id, pct)
                     payment_msg = (
-                        f"Vous avez été payé {pct}% ({exec_amt} {escrow.currency}). "
-                        f"Le client a été remboursé de {client_refund} {escrow.currency}."
+                        f"Désistement à {pct}% : votre part (10%) = {exec_amt} {escrow.currency}. "
+                        f"Commission ZASKA (5%) déduite. Client remboursé (85%) : {client_refund} {escrow.currency}."
                     )
             except EscrowError as exc:
                 raise HTTPException(status_code=409, detail=f"Erreur de paiement : {exc}")
@@ -1122,7 +1170,7 @@ def tasker_abandon(
                 f"<p>{payment_msg} La tâche est de nouveau disponible.</p>"
             )
 
-        _notify(db, task.created_by, "warning", "Prestataire désisté", notif_body)
+        _notify(db, task.created_by, "warning", "Prestataire désisté", notif_body, task_id=task_id)
         if creator and creator.email:
             try:
                 from app.core.email import send_email
@@ -1179,7 +1227,7 @@ def counter_propose(
         other_id = task.assigned_to if task.created_by == user_id else task.created_by
         if other_id:
             _notify(db, other_id, "warning", "Contre-proposition de prix",
-                    f"Nouvelle proposition de prix pour : {task.title}")
+                    f"Nouvelle proposition de prix pour : {task.title}", task_id=task_id)
         db.commit()
 
         return success_response({

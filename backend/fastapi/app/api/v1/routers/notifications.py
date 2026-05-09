@@ -19,6 +19,7 @@ def _serialize(n: Notification) -> dict:
         "title": n.title,
         "body": n.body,
         "read": n.read,
+        "task_id": getattr(n, "task_id", None),
         "created_at": n.created_at.isoformat(),
     }
 
