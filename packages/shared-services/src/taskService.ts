@@ -16,6 +16,7 @@ export const taskService = {
       stops: payload.stops,
       scheduled_at: payload.scheduledAt ?? null,
       any_schedule: payload.anySchedule ?? false,
+      idempotency_key: payload.idempotencyKey ?? null,
     });
   },
 
@@ -86,15 +87,19 @@ export const taskService = {
     return apiClient.get<TaskApplication[]>('/tasks/my-applications');
   },
 
-  completeTask(taskId: string) {
-    return apiClient.post<{ task_id: string; status: string; message: string }>(
+  completeTask(taskId: string, partial?: boolean, completionPercent?: number) {
+    return apiClient.post<{ task_id: string; status: string; completion_percent: number; partial: boolean; message: string }>(
       `/tasks/${taskId}/complete`,
-      {},
+      { partial: partial ?? false, completion_percent: completionPercent ?? 100 },
     );
   },
 
   confirmTask(taskId: string) {
     return apiClient.post<{ message: string }>(`/tasks/${taskId}/confirm`, {});
+  },
+
+  cancelTask(taskId: string, republish: boolean, reason?: string) {
+    return apiClient.post<Task>(`/tasks/${taskId}/cancel`, { republish, reason: reason ?? null });
   },
 
   contestTask(taskId: string, reason: string) {

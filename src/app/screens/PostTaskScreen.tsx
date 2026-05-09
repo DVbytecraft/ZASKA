@@ -212,6 +212,8 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
   const [budget, setBudget] = useState('');
   const [submitError, setSubmitError] = useState<string | null>(null);
   const { createTask, loading } = useTaskFlow();
+  // Stable idempotency key for the lifetime of this form — prevents double-submit
+  const [idempotencyKey] = useState(() => crypto.randomUUID());
 
   // Multi-stop state
   const [stops, setStops] = useState<TaskStop[]>([]);
@@ -295,6 +297,7 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
         currency,
         scheduledAt: buildScheduledAt(),
         anySchedule,
+        idempotencyKey,
       });
 
       if (!task?.id) throw new Error('Création de tâche échouée — aucun ID retourné');

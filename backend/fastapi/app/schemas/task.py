@@ -30,6 +30,8 @@ class TaskCreatePayload(BaseModel):
     any_schedule: bool = False
     # Multi-stop: up to 4 waypoints [{address, latitude, longitude}]
     stops: Annotated[list[TaskStop], Field(max_length=4)] | None = None
+    # Idempotency: client-generated UUID prevents double-submit
+    idempotency_key: str | None = Field(default=None, max_length=64)
 
 
 class TaskApplyPayload(BaseModel):
@@ -52,6 +54,20 @@ class TaskStatusPayload(BaseModel):
     model_config = ConfigDict(strict=False)
 
     status: str = Field(pattern="^(OPEN|ASSIGNED|COMPLETED)$")
+
+
+class CompleteTaskPayload(BaseModel):
+    model_config = ConfigDict(strict=False)
+
+    partial: bool = False
+    completion_percent: int = Field(default=100, ge=1, le=100)
+
+
+class CancelTaskPayload(BaseModel):
+    model_config = ConfigDict(strict=False)
+
+    republish: bool = True
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class TaskNegotiationPayload(BaseModel):

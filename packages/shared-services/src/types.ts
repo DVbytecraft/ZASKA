@@ -119,6 +119,7 @@ export interface TaskPayload {
   stops?: TaskStop[];
   scheduledAt?: string | null;
   anySchedule?: boolean;
+  idempotencyKey?: string;
 }
 
 export interface UserAddress {
@@ -142,7 +143,7 @@ export interface Task {
   latitude: number;
   longitude: number;
   address?: string | null;
-  status: "OPEN" | "ASSIGNED" | "PENDING_VALIDATION" | "COMPLETED" | "PAUSED";
+  status: "OPEN" | "ASSIGNED" | "PENDING_VALIDATION" | "COMPLETED" | "PAUSED" | "CANCELLED";
   createdBy: string;
   assignedTo: string | null;
   mode?: TaskMode;
@@ -156,6 +157,7 @@ export interface Task {
   scheduledAt?: string | null;
   anySchedule?: boolean | null;
   stops?: TaskStop[] | null;
+  completionPercent?: number | null;
 }
 
 export interface VirtualCard {

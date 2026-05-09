@@ -14,6 +14,9 @@ class TaskService:
 
     # ─── Tasks ──────────────────────────────────────────────────────────────
 
+    def find_by_idempotency_key(self, key: str) -> Task | None:
+        return self.db.query(Task).filter(Task.idempotency_key == key).one_or_none()
+
     def create_task(self, payload: dict) -> Task:
         lat = float(payload["latitude"])
         lon = float(payload["longitude"])
@@ -35,6 +38,7 @@ class TaskService:
             stops=payload.get("stops"),
             scheduled_at=payload.get("scheduled_at"),
             any_schedule=bool(payload.get("any_schedule", False)),
+            idempotency_key=payload.get("idempotency_key") or None,
         )
         self.db.add(task)
         self.db.commit()
@@ -191,6 +195,18 @@ class TaskService:
         """Client rejects the proposed price."""
         task = self.db.query(Task).filter(Task.id == task_id).one()
         task.negotiation_status = "rejected"
+        self.db.commit()
+        self.db.refresh(task)
+        return task
+
+    def cancel_task(self, task_id: str, new_status: str) -> Task:
+        """Cancel an assigned/active task. new_status is OPEN (republish) or CANCELLED."""
+        task = self.db.query(Task).filter(Task.id == task_id).one()
+        task.status = new_status
+        task.assigned_to = None
+        task.negotiation_status = "none"
+        task.negotiated_price = None
+        task.negotiated_by = None
         self.db.commit()
         self.db.refresh(task)
         return task

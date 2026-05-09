@@ -20,6 +20,8 @@ from app.core.responses import success_response
 from app.models.task import Task
 from app.models.user import User
 from app.schemas.task import (
+    CancelTaskPayload,
+    CompleteTaskPayload,
     MatchQueryPayload,
     TaskAcceptPayload,
     TaskApplyPayload,
@@ -125,6 +127,12 @@ def create_task(
     try:
         data = payload.model_dump()
         data["created_by"] = user_id
+        # Idempotency: return existing task if this key was already used
+        idem_key = data.get("idempotency_key")
+        if idem_key:
+            existing = service.find_by_idempotency_key(idem_key)
+            if existing:
+                return success_response(_serialize_task(existing))
         # When stops provided, derive primary coords from first stop
         if data.get("stops"):
             first = data["stops"][0]
@@ -139,6 +147,14 @@ def create_task(
         raise
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except IntegrityError:
+        # Race condition on idempotency key — return the already-created task
+        idem_key = payload.idempotency_key
+        if idem_key:
+            existing = service.find_by_idempotency_key(idem_key)
+            if existing:
+                return success_response(_serialize_task(existing))
+        raise HTTPException(status_code=409, detail="Tâche déjà créée (clé d'idempotence)")
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de créer la tâche") from exc
 
@@ -293,6 +309,57 @@ def reactivate_task(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de réactiver la tâche") from exc
+
+
+@router.post("/{task_id}/cancel")
+def cancel_task(
+    task_id: str,
+    payload: CancelTaskPayload,
+    service: TaskService = Depends(get_task_service),
+    wallet_svc: WalletService = Depends(get_wallet_service),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Client annule une tâche ASSIGNED ou PAUSED.
+    - republish=True → tâche republiée (OPEN), escrow remboursé
+    - republish=False → tâche annulée définitivement (CANCELLED), escrow remboursé
+    """
+    try:
+        task = _get_task_or_404(task_id, service)
+        if task.created_by != user_id:
+            raise HTTPException(status_code=403, detail="Non autorisé")
+        if task.status not in ("ASSIGNED", "PAUSED", "OPEN"):
+            raise HTTPException(status_code=409, detail="La tâche ne peut être annulée dans cet état")
+
+        tasker_id = task.assigned_to
+        new_status = "OPEN" if payload.republish else "CANCELLED"
+
+        # Refund escrow if funded (only relevant when ASSIGNED)
+        if tasker_id:
+            escrow = wallet_svc.get_escrow_by_task(task_id)
+            if escrow and escrow.status in ("funded", "hold"):
+                try:
+                    wallet_svc.refund_escrow(escrow.id)
+                except EscrowError:
+                    pass  # already refunded or not cancellable — proceed anyway
+
+        updated = service.cancel_task(task_id, new_status)
+
+        # Notify tasker
+        if tasker_id:
+            msg = ("Le client a annulé cette tâche et l'a republiée. Votre paiement a été remboursé."
+                   if payload.republish else
+                   "Le client a annulé définitivement cette tâche. Votre paiement a été remboursé.")
+            _notify(db, tasker_id, "warning", "Tâche annulée", msg)
+        db.commit()
+
+        out_msg = ("Tâche republiée. Le paiement a été remboursé." if payload.republish
+                   else "Tâche annulée définitivement. Le paiement a été remboursé.")
+        return success_response({**_serialize_task(updated), "message": out_msg})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible d'annuler la tâche") from exc
 
 
 # ─── Choose Mode — Applications ──────────────────────────────────────────────
@@ -681,14 +748,15 @@ def get_negotiation_history(
 @router.post("/{task_id}/complete")
 def mark_task_complete(
     task_id: str,
+    payload: CompleteTaskPayload,
     service: TaskService = Depends(get_task_service),
     wallet_svc: WalletService = Depends(get_wallet_service),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Exécutant déclare la prestation terminée.
+    """Exécutant déclare la prestation terminée (totalement ou partiellement).
     Passe la tâche en PENDING_VALIDATION et ouvre une fenêtre de 6h.
-    Le client confirme ou conteste directement dans l'app — aucun code email requis.
+    Le client confirme ou conteste directement dans l'app.
     """
     try:
         task = _get_task_or_404(task_id, service)
@@ -697,6 +765,8 @@ def mark_task_complete(
         if task.status != "ASSIGNED":
             raise HTTPException(status_code=409, detail="La tâche doit être ASSIGNED pour être déclarée terminée")
 
+        pct = payload.completion_percent if payload.partial else 100
+        service.set_completion_percent(task_id, pct)
         service.update_status(task_id, "PENDING_VALIDATION")
 
         # Put escrow on 6h hold — auto-released if client doesn't act
@@ -719,15 +789,22 @@ def mark_task_complete(
         except Exception:
             pass
 
-        _notify(db, task.created_by, "success", "Prestation déclarée terminée",
-                f"Votre prestataire a déclaré la tâche terminée : {task.title}. Vous avez 6h pour confirmer.")
+        if pct < 100:
+            notif_body = f"Votre prestataire a déclaré la tâche terminée à {pct}% : {task.title}. Vous avez 6h pour confirmer."
+        else:
+            notif_body = f"Votre prestataire a déclaré la tâche terminée : {task.title}. Vous avez 6h pour confirmer."
+        _notify(db, task.created_by, "success", "Prestation déclarée terminée", notif_body)
         db.commit()
 
-        logger.info("task:pending_validation task_id={}", task_id)
+        logger.info("task:pending_validation task_id={} pct={}", task_id, pct)
         return success_response({
             "task_id": task_id,
             "status": "PENDING_VALIDATION",
-            "message": "Prestation déclarée terminée. Le client a 6h pour confirmer ou contester.",
+            "completion_percent": pct,
+            "partial": pct < 100,
+            "message": (f"Prestation déclarée terminée à {pct}%. Le client a 6h pour confirmer."
+                        if pct < 100 else
+                        "Prestation déclarée terminée. Le client a 6h pour confirmer ou contester."),
         })
     except HTTPException:
         raise
@@ -754,11 +831,15 @@ def confirm_task_complete(
 
         service.update_status(task_id, "COMPLETED")
 
-        # Release escrow immediately — client explicitly confirmed
+        # Release escrow — proportionally if partial, fully if complete
         escrow = wallet_svc.get_escrow_by_task(task_id)
         if escrow and escrow.status in ("funded", "hold"):
             try:
-                wallet_svc.release_escrow(escrow.id)
+                pct = task.completion_percent if task.completion_percent is not None else 100
+                if pct < 100:
+                    wallet_svc.partial_release_escrow(escrow.id, pct)
+                else:
+                    wallet_svc.release_escrow(escrow.id)
             except EscrowError as exc:
                 logger.error("task:confirm_escrow_error task_id={} error={}", task_id, exc)
 
@@ -780,8 +861,11 @@ def confirm_task_complete(
             pass
 
         if task.assigned_to:
-            _notify(db, task.assigned_to, "success", "Paiement libéré 🎉",
-                    f"Le client a confirmé la réalisation de : {task.title}. Votre paiement est disponible.")
+            pct = task.completion_percent if task.completion_percent is not None else 100
+            pay_msg = (f"Le client a confirmé la réalisation à {pct}% de : {task.title}. Votre paiement ({pct}%) est disponible."
+                       if pct < 100 else
+                       f"Le client a confirmé la réalisation de : {task.title}. Votre paiement est disponible.")
+            _notify(db, task.assigned_to, "success", "Paiement libéré 🎉", pay_msg)
         db.commit()
 
         logger.info("task:confirmed task_id={}", task_id)

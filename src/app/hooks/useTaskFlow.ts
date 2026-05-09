@@ -14,6 +14,7 @@ interface CreateTaskInput {
   stops?: TaskStop[];
   scheduledAt?: string | null;
   anySchedule?: boolean;
+  idempotencyKey?: string;
 }
 
 export function useTaskFlow() {
@@ -34,6 +35,7 @@ export function useTaskFlow() {
         stops: input.stops,
         scheduledAt: input.scheduledAt ?? null,
         anySchedule: input.anySchedule ?? false,
+        idempotencyKey: input.idempotencyKey,
       });
     } finally {
       setLoading(false);

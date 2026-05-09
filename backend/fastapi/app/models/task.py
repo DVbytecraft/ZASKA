@@ -44,5 +44,8 @@ class Task(Base):
     # Task mode: "fast" (instant accept) | "choose" (applications)
     mode: Mapped[str] = mapped_column(String(8), default="fast", nullable=False, server_default="fast")
 
+    # Creation idempotency — prevents double-submit
+    idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+
     # Multi-stop: [{address, latitude, longitude}, ...]
     stops: Mapped[list | None] = mapped_column(JSON, nullable=True)

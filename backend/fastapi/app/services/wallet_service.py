@@ -451,8 +451,9 @@ class WalletService:
             raise EscrowError(f"Paiement disponible dans ~{remaining}h — la période de contestation n'est pas terminée")
         return self.release_escrow(escrow_id)
 
-    def partial_release_escrow(self, escrow_id: str, task_price: Decimal) -> tuple[Escrow, Decimal, Decimal]:
-        """Partial work release: executor gets 10% of escrow, client gets 90% back.
+    def partial_release_escrow(self, escrow_id: str, completion_percent: int) -> tuple[Escrow, Decimal, Decimal]:
+        """Proportional release based on completion_percent (1–99).
+        Executor gets completion_percent% of escrow, client gets the remainder back.
 
         Returns (escrow, executor_amount, client_refund).
         """
@@ -462,7 +463,8 @@ class WalletService:
         if not escrow.payee_id:
             raise EscrowError(f"Escrow {escrow_id} n'a pas d'exécutant défini")
 
-        executor_amount = (escrow.amount * Decimal("0.10")).quantize(Decimal("0.000001"))
+        pct = max(1, min(99, completion_percent))
+        executor_amount = (escrow.amount * Decimal(str(pct)) / Decimal("100")).quantize(Decimal("0.000001"))
         client_refund = escrow.amount - executor_amount
 
         # Credit executor (10%)

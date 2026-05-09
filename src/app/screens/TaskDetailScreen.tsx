@@ -253,6 +253,13 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
   const [contestReason, setContestReason] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Cancel modal
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  // Partial completion
+  const [showCompleteModal, setShowCompleteModal] = useState(false);
+  const [isPartial, setIsPartial] = useState(false);
+  const [completionPct, setCompletionPct] = useState(80);
 
   const currentUserId = apiClient.getUserId();
 
@@ -289,12 +296,32 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
     }
   };
 
-  const handleExecutorDone = async () => {
-    setActionLoading(true);
+  const handleCancel = async (republish: boolean) => {
+    setCancelling(true);
     setActionError(null);
     try {
-      await taskService.completeTask(taskId);
-      load(); // task status → PENDING_VALIDATION
+      await taskService.cancelTask(taskId, republish);
+      setShowCancelModal(false);
+      if (republish) load(); else onBack();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Impossible d\'annuler la tâche');
+      setShowCancelModal(false);
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  const handleExecutorDone = async () => {
+    setShowCompleteModal(true);
+  };
+
+  const submitCompletion = async () => {
+    setActionLoading(true);
+    setActionError(null);
+    setShowCompleteModal(false);
+    try {
+      await taskService.completeTask(taskId, isPartial, isPartial ? completionPct : 100);
+      load();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Erreur lors de la déclaration');
     } finally {
@@ -385,6 +412,106 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
+      {/* Cancel task modal */}
+      {showCancelModal && task && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm">
+            <h3 className="font-bold text-gray-900 text-lg mb-2">Annuler la tâche ?</h3>
+            <p className="text-sm text-gray-500 mb-5">
+              Le prestataire sera notifié et le paiement vous sera remboursé.
+              Que souhaitez-vous faire ?
+            </p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => handleCancel(true)}
+                disabled={cancelling}
+                className="w-full py-3 rounded-xl bg-[#6D28D9] font-semibold text-white flex items-center justify-center gap-2"
+              >
+                {cancelling ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                Republier la tâche
+              </button>
+              <button
+                onClick={() => handleCancel(false)}
+                disabled={cancelling}
+                className="w-full py-3 rounded-xl bg-red-500 font-semibold text-white flex items-center justify-center gap-2"
+              >
+                {cancelling ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                Annuler définitivement
+              </button>
+              <button
+                onClick={() => setShowCancelModal(false)}
+                disabled={cancelling}
+                className="w-full py-2.5 rounded-xl border-2 border-gray-200 font-semibold text-gray-700"
+              >
+                Retour
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Partial/complete completion modal */}
+      {showCompleteModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm">
+            <h3 className="font-bold text-gray-900 text-lg mb-1">Déclarer la prestation</h3>
+            <p className="text-sm text-gray-500 mb-4">Le client sera notifié et aura 6h pour confirmer.</p>
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => setIsPartial(false)}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border-2 transition-colors ${
+                  !isPartial ? 'bg-green-600 border-green-600 text-white' : 'border-gray-200 text-gray-600'
+                }`}
+              >
+                ✓ Totalement terminée
+              </button>
+              <button
+                onClick={() => setIsPartial(true)}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-semibold border-2 transition-colors ${
+                  isPartial ? 'bg-amber-500 border-amber-500 text-white' : 'border-gray-200 text-gray-600'
+                }`}
+              >
+                ~ Partiellement
+              </button>
+            </div>
+            {isPartial && (
+              <div className="mb-4">
+                <div className="flex justify-between text-sm text-gray-600 mb-2">
+                  <span>Avancement</span>
+                  <span className="font-bold text-amber-600">{completionPct}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={10} max={99} step={5}
+                  value={completionPct}
+                  onChange={(e) => setCompletionPct(Number(e.target.value))}
+                  className="w-full accent-amber-500"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  Vous recevrez {completionPct}% du montant convenu. Le client sera remboursé du reste.
+                </p>
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCompleteModal(false)}
+                className="flex-1 py-3 rounded-xl border-2 border-gray-200 font-semibold text-gray-700"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={submitCompletion}
+                className={`flex-1 py-3 rounded-xl font-semibold text-white ${
+                  isPartial ? 'bg-amber-500 hover:bg-amber-600' : 'bg-green-600 hover:bg-green-700'
+                }`}
+              >
+                Confirmer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete confirmation modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6">
@@ -433,6 +560,16 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
               size="md"
             />
           </div>
+          {/* Cancel ASSIGNED task — republish or cancel permanently */}
+          {isClient && task.status === 'ASSIGNED' && (
+            <button
+              onClick={() => setShowCancelModal(true)}
+              className="p-2 hover:bg-red-50 rounded-full transition-colors"
+              title="Annuler la tâche"
+            >
+              <Trash2 size={20} className="text-red-500" />
+            </button>
+          )}
           {/* Delete button — only creator, only on deletable statuses */}
           {isClient && (task.status === 'OPEN' || task.status === 'PAUSED') && (
             <button
@@ -531,10 +668,15 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
                 <CheckCircle2 size={20} className="text-green-600" />
               </div>
               <div>
-                <h4 className="font-semibold text-gray-900">Prestation déclarée terminée</h4>
+                <h4 className="font-semibold text-gray-900">
+                  {task.completionPercent != null && task.completionPercent < 100
+                    ? `Prestation déclarée à ${task.completionPercent}%`
+                    : 'Prestation déclarée terminée'}
+                </h4>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Confirmez si le travail est satisfaisant, ou contestez si ce n'est pas le cas.
-                  Sans action de votre part, le paiement sera libéré dans 6h.
+                  {task.completionPercent != null && task.completionPercent < 100
+                    ? `Le prestataire déclare avoir réalisé ${task.completionPercent}% du travail. En confirmant, vous payez ${task.completionPercent}% et êtes remboursé du reste.`
+                    : 'Confirmez si le travail est satisfaisant, ou contestez si ce n\'est pas le cas. Sans action de votre part, le paiement sera libéré dans 6h.'}
                 </p>
               </div>
             </div>
@@ -618,10 +760,15 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
                 <Clock size={20} className="text-amber-600" />
               </div>
               <div>
-                <h4 className="font-semibold text-gray-900">En attente de validation</h4>
+                <h4 className="font-semibold text-gray-900">
+                  {task.completionPercent != null && task.completionPercent < 100
+                    ? `Prestation déclarée à ${task.completionPercent}%`
+                    : 'En attente de validation'}
+                </h4>
                 <p className="text-sm text-gray-600 mt-0.5">
-                  Votre prestation a été déclarée terminée. Le client a été notifié et dispose de 6h pour confirmer.
-                  Sans action de sa part, le paiement vous sera libéré automatiquement.
+                  {task.completionPercent != null && task.completionPercent < 100
+                    ? `Vous avez déclaré avoir réalisé ${task.completionPercent}% de la tâche. Le client dispose de 6h pour confirmer. Vous recevrez ${task.completionPercent}% du montant.`
+                    : 'Votre prestation a été déclarée terminée. Le client a été notifié et dispose de 6h pour confirmer. Sans action de sa part, le paiement vous sera libéré automatiquement.'}
                 </p>
               </div>
             </div>
