@@ -143,4 +143,16 @@ export const taskService = {
   getNegotiationHistory(taskId: string) {
     return apiClient.get<NegotiationEvent[]>(`/tasks/${taskId}/negotiate/history`);
   },
+
+  counterPropose(taskId: string, proposedPrice: number) {
+    return apiClient.post<Task>(`/tasks/${taskId}/negotiate/counter`, { proposed_price: proposedPrice });
+  },
+
+  rateTask(taskId: string, score: number) {
+    return apiClient.post<{ rated: boolean; score: number }>(`/tasks/${taskId}/rate`, { score });
+  },
+
+  taskerAbandon(taskId: string) {
+    return apiClient.post<Task>(`/tasks/${taskId}/tasker-abandon`, {});
+  },
 };

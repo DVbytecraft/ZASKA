@@ -2,15 +2,18 @@ import { useState } from 'react';
 import { Button } from '../components/Button';
 import { Avatar } from '../components/Avatar';
 import { CheckCircle2, Star } from 'lucide-react';
+import { taskService } from '@zaska/shared-services';
 
 interface CompletionScreenProps {
   onDone: () => void;
   taskerName?: string;
+  taskId?: string;
 }
 
-export function CompletionScreen({ onDone, taskerName = 'Votre prestataire' }: CompletionScreenProps) {
+export function CompletionScreen({ onDone, taskerName = 'Votre prestataire', taskId }: CompletionScreenProps) {
   const [rating, setRating] = useState(0);
   const [hoveredRating, setHoveredRating] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
 
   return (
     <div className="h-full bg-white flex flex-col items-center justify-center px-8">
@@ -62,8 +65,23 @@ export function CompletionScreen({ onDone, taskerName = 'Votre prestataire' }: C
       </div>
 
       <div className="w-full max-w-sm space-y-3">
-        <Button fullWidth onClick={onDone} disabled={rating === 0}>
-          Envoyer l'avis
+        <Button
+          fullWidth
+          onClick={async () => {
+            if (!taskId || rating === 0 || submitting) return;
+            setSubmitting(true);
+            try {
+              await taskService.rateTask(taskId, rating);
+            } catch {
+              // best-effort — don't block navigation on rating failure
+            } finally {
+              setSubmitting(false);
+              onDone();
+            }
+          }}
+          disabled={rating === 0 || submitting}
+        >
+          {submitting ? 'Envoi…' : 'Envoyer l\'avis'}
         </Button>
         <button onClick={onDone} className="w-full text-gray-500 font-medium py-3 hover:text-gray-700 transition-colors">
           Passer

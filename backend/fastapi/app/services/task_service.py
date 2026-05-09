@@ -60,8 +60,20 @@ class TaskService:
         return task
 
     def delete_task(self, task_id: str) -> None:
+        from app.models.chat_message import ChatMessage
+        from app.models.task_application import TaskApplication
+        from app.models.wallet import Escrow
+        active = (
+            self.db.query(Escrow)
+            .filter(Escrow.task_id == task_id, Escrow.status.in_(["funded", "hold"]))
+            .first()
+        )
+        if active:
+            raise ValueError("Impossible de supprimer une tâche avec un paiement actif (escrow)")
+        self.db.query(ChatMessage).filter(ChatMessage.task_id == task_id).delete(synchronize_session=False)
+        self.db.query(TaskApplication).filter(TaskApplication.task_id == task_id).delete(synchronize_session=False)
         task = self.db.query(Task).filter(Task.id == task_id).one()
-        self.db.delete(task)
+        self.db.delete(task)  # NegotiationEvent already has ondelete=CASCADE
         self.db.commit()
 
     def get_user_applications(self, user_id: str) -> list[TaskApplication]:
@@ -200,9 +212,10 @@ class TaskService:
         return task
 
     def reject_negotiation(self, task_id: str) -> Task:
-        """Client rejects the proposed price."""
+        """Reject the proposed price — resets to 'none' so a new round can start."""
         task = self.db.query(Task).filter(Task.id == task_id).one()
-        task.negotiation_status = "rejected"
+        task.negotiation_status = "none"
+        # Keep negotiated_price / negotiated_by so NegotiationEvent can reference them
         self.db.commit()
         self.db.refresh(task)
         return task
@@ -238,6 +251,44 @@ class TaskService:
         self.db.refresh(task)
         return task
 
+    def rate_task(self, task_id: str, score: int, rater_id: str) -> Task:
+        """Creator rates the tasker (1-5). Can only be done once per completed task."""
+        if not (1 <= score <= 5):
+            raise ValueError("La note doit être entre 1 et 5")
+        task = self.db.query(Task).filter(Task.id == task_id).one()
+        if task.status != "COMPLETED":
+            raise ValueError("Impossible de noter une tâche non terminée")
+        if task.created_by != rater_id:
+            raise ValueError("Seul le créateur de la tâche peut noter le prestataire")
+        if task.creator_rated:
+            raise ValueError("Cette tâche a déjà été notée")
+        if not task.assigned_to:
+            raise ValueError("Aucun prestataire à noter")
+        tasker = self.db.query(User).filter(User.id == task.assigned_to).one_or_none()
+        if tasker:
+            tasker.rating_sum += score
+            tasker.rating_count += 1
+        task.creator_rated = True
+        self.db.commit()
+        self.db.refresh(task)
+        return task
+
+    def tasker_abandon(self, task_id: str, tasker_id: str) -> Task:
+        """Assigned tasker abandons the task — returns it to OPEN, resets assignment."""
+        task = self.db.query(Task).filter(Task.id == task_id).one()
+        if task.assigned_to != tasker_id:
+            raise ValueError("Non autorisé")
+        if task.status not in ("ASSIGNED", "PAUSED"):
+            raise ValueError("L'abandon n'est possible que sur une tâche ASSIGNED ou PAUSED")
+        task.status = "OPEN"
+        task.assigned_to = None
+        task.negotiation_status = "none"
+        task.negotiated_price = None
+        task.negotiated_by = None
+        self.db.commit()
+        self.db.refresh(task)
+        return task
+
     def match_tasks(self, latitude: float, longitude: float, radius_km: float) -> list[Task]:
         if not (-90.0 <= latitude <= 90.0):
             raise ValueError(f"Invalid latitude {latitude}: must be between -90 and 90")
@@ -264,6 +315,13 @@ class TaskService:
         return self.db.query(Task).filter(Task.id.in_(ids)).all()
 
     # ─── Applications (Choose Mode) ─────────────────────────────────────────
+
+    def count_pending_applications(self, task_id: str) -> int:
+        return (
+            self.db.query(TaskApplication)
+            .filter(TaskApplication.task_id == task_id, TaskApplication.status == "pending")
+            .count()
+        )
 
     def apply_task(
         self,

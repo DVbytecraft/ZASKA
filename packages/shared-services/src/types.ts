@@ -161,6 +161,7 @@ export interface Task {
   stops?: TaskStop[] | null;
   city?: string | null;
   country?: string | null;
+  creatorRated?: boolean;
 }
 
 export interface VirtualCard {

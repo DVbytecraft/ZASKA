@@ -92,6 +92,7 @@ def _serialize_task(task: Task) -> dict:
         "stops": task.stops,
         "city": getattr(task, "city", None),
         "country": getattr(task, "country", None),
+        "creatorRated": bool(getattr(task, "creator_rated", False)),
     }
 
 
@@ -100,14 +101,17 @@ def _serialize_application(app, user: User) -> dict:
         " ".join(filter(None, [user.first_name, user.last_name]))
         or (user.email.split("@")[0] if user.email else user.id[:8])
     )
+    rating_count = getattr(user, "rating_count", 0) or 0
+    rating_sum = getattr(user, "rating_sum", 0.0) or 0.0
+    rating = round(rating_sum / rating_count, 1) if rating_count > 0 else None
     return {
         "id": app.id,
         "taskId": app.task_id,
         "taskerId": app.tasker_id,
         "taskerName": display_name,
         "taskerEmail": user.email,
-        "taskerRating": None,
-        "taskerReviews": None,
+        "taskerRating": rating,
+        "taskerReviews": rating_count if rating_count > 0 else None,
         "proposedPrice": float(app.proposed_price) if app.proposed_price is not None else None,
         "currency": app.currency,
         "status": app.status,
@@ -390,6 +394,13 @@ def apply_task(
         if task.status != "OPEN":
             raise HTTPException(status_code=409, detail="Cette tâche n'est plus disponible")
 
+        # Freeze: one active application at a time (first-come, first-served)
+        if service.count_pending_applications(task_id) > 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Cette tâche est déjà en cours de traitement par un prestataire. Réessayez plus tard.",
+            )
+
         currency = (payload.currency or task.currency or "USD").upper()
         application = service.apply_task(
             task_id=task_id,
@@ -560,14 +571,13 @@ def negotiate_price(
     """Exécutant soumet un contre-prix. Le client reçoit la demande à valider."""
     try:
         task = _get_task_or_404(task_id, service)
-        if task.assigned_to == user_id or task.created_by == user_id:
-            pass
-        else:
+        if task.assigned_to != user_id and task.created_by != user_id:
             raise HTTPException(status_code=403, detail="Non autorisé à négocier cette tâche")
-        if task.created_by == user_id:
-            raise HTTPException(status_code=400, detail="Le créateur ne peut pas négocier son propre prix")
         if task.status not in ("OPEN", "ASSIGNED"):
             raise HTTPException(status_code=409, detail="La négociation n'est possible que sur une tâche en cours ou ouverte")
+        # Prevent proposing when you're already the proposer (wait for other party)
+        if task.negotiation_status == "pending" and task.negotiated_by == user_id:
+            raise HTTPException(status_code=409, detail="Vous avez déjà soumis un prix. Attendez la réponse de l'autre partie.")
 
         task = service.propose_price(task_id=task_id, proposer_id=user_id, proposed_price=payload.proposed_price)
 
@@ -685,10 +695,11 @@ def abandon_negotiation(
     """Exécutant abandonne après refus du prix → tâche republié (OPEN)."""
     try:
         task = _get_task_or_404(task_id, service)
-        if task.negotiated_by != user_id:
-            raise HTTPException(status_code=403, detail="Seul l'exécutant ayant proposé le prix peut abandonner")
-        if task.negotiation_status != "rejected":
-            raise HTTPException(status_code=409, detail="L'abandon n'est possible qu'après un refus de prix")
+        if task.created_by != user_id and task.assigned_to != user_id:
+            raise HTTPException(status_code=403, detail="Non autorisé")
+        # Either party can abandon a pending or open negotiation
+        if task.negotiation_status not in ("pending", "none") or task.status not in ("OPEN", "ASSIGNED"):
+            raise HTTPException(status_code=409, detail="Aucune négociation active à abandonner")
 
         task = service.abandon_and_republish(task_id)
         _record_neg_event(db, task_id, user_id, "abandoned", None, task.currency)
@@ -1001,3 +1012,136 @@ def match_tasks(
         return success_response([_serialize_task(t) for t in tasks])
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de rechercher les tâches") from exc
+
+
+# ─── Rating ───────────────────────────────────────────────────────────────────
+
+class RateTaskPayload(BaseModel):
+    score: int = Field(ge=1, le=5)
+
+
+@router.post("/{task_id}/rate")
+def rate_task(
+    task_id: str,
+    payload: RateTaskPayload,
+    service: TaskService = Depends(get_task_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Créateur note le prestataire (1–5) après la fin de la tâche. Une seule fois par tâche."""
+    try:
+        service.rate_task(task_id=task_id, score=payload.score, rater_id=user_id)
+        return success_response({"rated": True, "score": payload.score})
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer la note") from exc
+
+
+# ─── Tasker abandon ──────────────────────────────────────────────────────────
+
+@router.post("/{task_id}/tasker-abandon")
+def tasker_abandon(
+    task_id: str,
+    service: TaskService = Depends(get_task_service),
+    wallet_svc: WalletService = Depends(get_wallet_service),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    """L'exécutant assigné abandonne la tâche en cours.
+    L'escrow est remboursé au client, la tâche repasse en OPEN.
+    """
+    try:
+        task = _get_task_or_404(task_id, service)
+        if task.assigned_to != user_id:
+            raise HTTPException(status_code=403, detail="Seul l'exécutant assigné peut abandonner cette tâche")
+        if task.status not in ("ASSIGNED", "PAUSED"):
+            raise HTTPException(status_code=409, detail="L'abandon n'est possible que sur une tâche ASSIGNED ou PAUSED")
+
+        # Refund escrow to client before resetting
+        escrow = wallet_svc.get_escrow_by_task(task_id)
+        if escrow and escrow.status in ("funded", "hold"):
+            try:
+                wallet_svc.refund_escrow(escrow.id)
+            except EscrowError as exc:
+                raise HTTPException(status_code=409, detail=f"Remboursement impossible : {exc}")
+
+        task = service.tasker_abandon(task_id=task_id, tasker_id=user_id)
+
+        # Notify creator
+        creator = db.get(User, task.created_by)
+        tasker = db.get(User, user_id)
+        tasker_name = " ".join(filter(None, [tasker.first_name, tasker.last_name])) if tasker else "Le prestataire"
+        _notify(
+            db, task.created_by, "warning", "Prestataire désisté",
+            f"{tasker_name} a abandonné votre tâche : {task.title}. Elle est de nouveau disponible.",
+        )
+        if creator and creator.email:
+            try:
+                from app.core.email import send_email
+                send_email(
+                    to_email=creator.email,
+                    subject="ZASKA — Prestataire désisté",
+                    html_content=(
+                        f"<p>{tasker_name} a abandonné la tâche <strong>{task.title}</strong>.</p>"
+                        f"<p>Votre paiement a été remboursé et la tâche est de nouveau disponible.</p>"
+                    ),
+                    text_content=f"{tasker_name} a abandonné : {task.title}. Paiement remboursé.",
+                )
+            except Exception:
+                pass
+        db.commit()
+
+        return success_response({
+            **_serialize_task(task),
+            "message": "Tâche abandonnée. Le client a été remboursé et la tâche est de nouveau ouverte.",
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible d'abandonner la tâche") from exc
+
+
+# ─── Negotiation — multi-round fixes ─────────────────────────────────────────
+
+class CounterProposePayload(BaseModel):
+    proposed_price: Decimal = Field(gt=0)
+
+
+@router.post("/{task_id}/negotiate/counter")
+def counter_propose(
+    task_id: str,
+    payload: CounterProposePayload,
+    service: TaskService = Depends(get_task_service),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    """L'une ou l'autre partie soumet un contre-prix. Interdit à l'auteur de la proposition en cours."""
+    try:
+        task = _get_task_or_404(task_id, service)
+        if task.created_by != user_id and task.assigned_to != user_id:
+            raise HTTPException(status_code=403, detail="Non autorisé")
+        if task.negotiation_status == "pending" and task.negotiated_by == user_id:
+            raise HTTPException(status_code=409, detail="Vous avez déjà soumis un prix, attendez la réponse de l'autre partie")
+
+        task = service.propose_price(
+            task_id=task_id, proposer_id=user_id,
+            proposed_price=payload.proposed_price,
+        )
+        _record_neg_event(db, task_id, user_id, "counter", payload.proposed_price, task.currency)
+
+        other_id = task.assigned_to if task.created_by == user_id else task.created_by
+        if other_id:
+            _notify(db, other_id, "warning", "Contre-proposition de prix",
+                    f"Nouvelle proposition de prix pour : {task.title}")
+        db.commit()
+
+        return success_response({
+            **_serialize_task(task),
+            "message": "Contre-proposition envoyée. En attente de réponse.",
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible d'envoyer la contre-proposition") from exc

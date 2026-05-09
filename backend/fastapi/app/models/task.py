@@ -55,3 +55,6 @@ class Task(Base):
     # Structured location — populated from Nominatim reverse geocoding at creation
     city: Mapped[str | None] = mapped_column(String(128), nullable=True)
     country: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Rating — True once the creator has rated the tasker for this task
+    creator_rated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")

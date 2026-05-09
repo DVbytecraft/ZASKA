@@ -406,7 +406,7 @@ export default function App() {
         );
 
       case 'completion':
-        return <CompletionScreen onDone={() => setCurrentScreen('home')} />;
+        return <CompletionScreen taskId={currentTaskId || undefined} onDone={() => setCurrentScreen('home')} />;
 
       case 'taskerMode':
         return (
