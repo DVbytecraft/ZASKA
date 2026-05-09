@@ -96,13 +96,18 @@ def _serialize_task(task: Task) -> dict:
 
 
 def _serialize_application(app, user: User) -> dict:
-    display_name = user.email.split("@")[0] if user.email else user.id[:8]
+    display_name = (
+        " ".join(filter(None, [user.first_name, user.last_name]))
+        or (user.email.split("@")[0] if user.email else user.id[:8])
+    )
     return {
         "id": app.id,
         "taskId": app.task_id,
         "taskerId": app.tasker_id,
         "taskerName": display_name,
         "taskerEmail": user.email,
+        "taskerRating": None,
+        "taskerReviews": None,
         "proposedPrice": float(app.proposed_price) if app.proposed_price is not None else None,
         "currency": app.currency,
         "status": app.status,
