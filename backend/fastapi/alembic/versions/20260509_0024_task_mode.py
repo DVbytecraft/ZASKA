@@ -4,8 +4,8 @@ Revision ID: 20260509_0024
 Revises: 20260508_0023
 Create Date: 2026-05-09
 """
+
 from alembic import op
-import sqlalchemy as sa
 
 revision = "20260509_0024"
 down_revision = "20260508_0023"
@@ -14,11 +14,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "tasks",
-        sa.Column("mode", sa.String(8), nullable=False, server_default="fast"),
-    )
+    op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS mode VARCHAR(8) NOT NULL DEFAULT 'fast'")
 
 
 def downgrade() -> None:
-    op.drop_column("tasks", "mode")
+    op.execute("ALTER TABLE tasks DROP COLUMN IF EXISTS mode")

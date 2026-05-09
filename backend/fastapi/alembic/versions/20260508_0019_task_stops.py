@@ -6,7 +6,6 @@ Create Date: 2026-05-08
 """
 
 from alembic import op
-import sqlalchemy as sa
 
 revision = "20260508_0019"
 down_revision = "20260508_0018"
@@ -15,8 +14,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("tasks", sa.Column("stops", sa.JSON(), nullable=True))
+    op.execute("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS stops JSON")
 
 
 def downgrade() -> None:
-    op.drop_column("tasks", "stops")
+    op.execute("ALTER TABLE tasks DROP COLUMN IF EXISTS stops")

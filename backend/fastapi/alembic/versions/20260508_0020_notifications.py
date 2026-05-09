@@ -6,7 +6,6 @@ Create Date: 2026-05-08
 """
 
 from alembic import op
-import sqlalchemy as sa
 
 revision = "20260508_0020"
 down_revision = "20260508_0019"
@@ -15,17 +14,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "notifications",
-        sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False, index=True),
-        sa.Column("type", sa.String(16), nullable=False, server_default="info"),
-        sa.Column("title", sa.String(128), nullable=False),
-        sa.Column("body", sa.String(512), nullable=False),
-        sa.Column("read", sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id VARCHAR(36) NOT NULL PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL REFERENCES users(id),
+            type VARCHAR(16) NOT NULL DEFAULT 'info',
+            title VARCHAR(128) NOT NULL,
+            body VARCHAR(512) NOT NULL,
+            read BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS ix_notifications_user_id ON notifications(user_id)")
 
 
 def downgrade() -> None:
-    op.drop_table("notifications")
+    op.execute("DROP INDEX IF EXISTS ix_notifications_user_id")
+    op.execute("DROP TABLE IF EXISTS notifications")
