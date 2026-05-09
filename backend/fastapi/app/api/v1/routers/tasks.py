@@ -340,8 +340,8 @@ def cancel_task(
             if escrow and escrow.status in ("funded", "hold"):
                 try:
                     wallet_svc.refund_escrow(escrow.id)
-                except EscrowError:
-                    pass  # already refunded or not cancellable — proceed anyway
+                except EscrowError as exc:
+                    raise HTTPException(status_code=409, detail=f"Remboursement impossible : {exc}. Annulation refusée.")
 
         updated = service.cancel_task(task_id, new_status)
 

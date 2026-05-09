@@ -157,7 +157,6 @@ export interface Task {
   scheduledAt?: string | null;
   anySchedule?: boolean | null;
   stops?: TaskStop[] | null;
-  completionPercent?: number | null;
 }
 
 export interface VirtualCard {

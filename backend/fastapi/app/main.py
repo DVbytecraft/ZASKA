@@ -89,6 +89,7 @@ async def security_headers_middleware(request, call_next):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none';"
     # HSTS only on production (requires HTTPS)
     if env_norm == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"

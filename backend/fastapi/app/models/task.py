@@ -13,6 +13,8 @@ class Task(Base):
     __table_args__ = (
         Index("ix_task_assigned_to", "assigned_to"),
         Index("ix_task_status", "status"),
+        Index("ix_task_status_created_by", "status", "created_by"),
+        Index("ix_task_negotiation_status", "negotiation_status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

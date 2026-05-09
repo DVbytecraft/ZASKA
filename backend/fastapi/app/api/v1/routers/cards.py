@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import random
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -32,16 +31,15 @@ def _luhn_checksum(number: str) -> int:
 
 
 def _generate_card_number(card_type: str) -> str:
-    """Generate a valid Luhn card number."""
+    """Generate a valid Luhn card number using a CSPRNG."""
     if card_type == "visa":
-        prefix = random.choice(_VISA_PREFIXES)
+        prefix = secrets.choice(_VISA_PREFIXES)
         length = 16
     else:
-        prefix = random.choice(_MASTERCARD_PREFIXES)
+        prefix = secrets.choice(_MASTERCARD_PREFIXES)
         length = 16
 
-    partial = prefix + "".join([str(random.randint(0, 9)) for _ in range(length - len(prefix) - 1)])
-    # Compute check digit
+    partial = prefix + "".join([str(secrets.randbelow(10)) for _ in range(length - len(prefix) - 1)])
     check = (10 - _luhn_checksum(partial + "0")) % 10
     return partial + str(check)
 
@@ -62,7 +60,7 @@ def _generate_expiry() -> tuple[int, int]:
 
 
 def _generate_cvv() -> str:
-    return str(random.randint(100, 999))
+    return str(100 + secrets.randbelow(900))
 
 
 def _serialize_card(card: VirtualCard, show_full: bool = False) -> dict:

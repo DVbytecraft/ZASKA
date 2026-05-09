@@ -523,10 +523,16 @@ class WalletService:
             .all()
         )
 
-    def list_transactions(self, user_id: str, currency: str) -> list[Transaction]:
+    def list_transactions(self, user_id: str, currency: str, limit: int = 50, offset: int = 0) -> list[Transaction]:
         wallet = self.get_wallet(user_id, currency)
         return (
-            self.db.execute(select(Transaction).where(Transaction.wallet_id == wallet.id).order_by(Transaction.created_at.desc()))
+            self.db.execute(
+                select(Transaction)
+                .where(Transaction.wallet_id == wallet.id)
+                .order_by(Transaction.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
             .scalars()
             .all()
         )

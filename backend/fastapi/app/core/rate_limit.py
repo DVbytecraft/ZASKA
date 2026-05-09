@@ -7,9 +7,19 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.redis_client import redis_sync
 from app.core.responses import error_response
 
+# Atomic INCR + conditional EXPIRE — eliminates the TOCTOU window where a crash
+# between INCR and EXPIRE would leave the key without a TTL (permanent lock).
+_LUA_RATE_LIMIT = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+"""
+
 
 class RedisRateLimitMiddleware(BaseHTTPMiddleware):
-    """Fixed-window rate limiting per client IP via Redis."""
+    """Fixed-window rate limiting per client IP via Redis (atomic Lua)."""
 
     def __init__(self, app, prefix: str = "rl:http", max_requests: int = 180, window_seconds: int = 60):
         super().__init__(app)
@@ -22,13 +32,10 @@ class RedisRateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client = request.client.host if request.client else "unknown"
-        now = time.time()
-        window = int(now // self.window_seconds)
+        window = int(time.time() // self.window_seconds)
         key = f"{self.prefix}:{client}:{window}"
 
-        n = redis_sync.incr(key)
-        if n == 1:
-            redis_sync.expire(key, self.window_seconds + 5)
+        n = redis_sync.eval(_LUA_RATE_LIMIT, 1, key, str(self.window_seconds + 5))
 
         if n > self.max_requests:
             return JSONResponse(

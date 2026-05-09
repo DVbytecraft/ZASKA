@@ -157,12 +157,10 @@ def list_transactions(
     _wallet_rate_limit(user_id)
     currency_upper = currency.upper()
     try:
-        txs = svc.list_transactions(user_id, currency_upper)
+        page = svc.list_transactions(user_id, currency_upper, limit=limit, offset=offset)
     except WalletNotFoundError:
         svc.create_wallet(user_id=user_id, currency=currency_upper)
-        txs = []
-    # Apply pagination in Python (simple approach for now)
-    page = txs[offset: offset + limit]
+        page = []
     return success_response(
         [
             {
