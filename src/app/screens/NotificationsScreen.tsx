@@ -18,6 +18,7 @@ interface NotificationsScreenProps {
   onBack: () => void;
   onTaskDetail?: (taskId: string) => void;
   onTaskChat?: (taskId: string) => void;
+  onViewApplicants?: (taskId: string) => void;
 }
 
 function NotifIcon({ type }: { type: Notification['type'] }) {
@@ -34,7 +35,7 @@ function formatDate(iso: string): string {
   }
 }
 
-export function NotificationsScreen({ onBack, onTaskDetail, onTaskChat }: NotificationsScreenProps) {
+export function NotificationsScreen({ onBack, onTaskDetail, onTaskChat, onViewApplicants }: NotificationsScreenProps) {
   const { t } = useTranslation();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,9 +63,11 @@ export function NotificationsScreen({ onBack, onTaskDetail, onTaskChat }: Notifi
     if (!n.task_id) return;
     apiClient.patch(`/notifications/${n.id}/read`, {}).catch(() => {});
     setNotifications(prev => prev.map(x => x.id === n.id ? { ...x, read: true } : x));
-    // Message notifications → open chat; all others → open task detail
+    // Route based on notification type
     if (n.title.startsWith('Message de') && onTaskChat) {
       onTaskChat(n.task_id);
+    } else if (n.title === 'Nouvelle candidature' && onViewApplicants) {
+      onViewApplicants(n.task_id);
     } else if (onTaskDetail) {
       onTaskDetail(n.task_id);
     }
@@ -103,7 +106,7 @@ export function NotificationsScreen({ onBack, onTaskDetail, onTaskChat }: Notifi
         ) : (
           <div className="space-y-3">
             {notifications.map((n) => {
-              const clickable = !!(n.task_id && (onTaskDetail || onTaskChat));
+              const clickable = !!(n.task_id && (onTaskDetail || onTaskChat || onViewApplicants));
               return (
                 <Card
                   key={n.id}

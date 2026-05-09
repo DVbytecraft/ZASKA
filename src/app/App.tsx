@@ -140,12 +140,13 @@ export default function App() {
   const [currentNegotiation, setCurrentNegotiation] = useState<{
     taskerName: string; originalPrice: number; proposedPrice: number;
   }>({ taskerName: '', originalPrice: 0, proposedPrice: 0 });
+  const [tasksDefaultTab, setTasksDefaultTab] = useState<'client' | 'missions' | 'messages'>('client');
   const publicScreens: Screen[] = ['splash', 'onboarding', 'login', 'register', 'otp', 'setPassword', 'profileSetup', 'forgotPassword', 'resetPassword', 'loading', 'error', 'noInternet'];
 
   useEffect(() => {
     if (activeTab === 'home') setCurrentScreen('home');
-    else if (activeTab === 'explore') setCurrentScreen('taskerMode');
-    else if (activeTab === 'tasks') setCurrentScreen('tasksTab');
+    else if (activeTab === 'tasks') { setTasksDefaultTab('client'); setCurrentScreen('tasksTab'); }
+    else if (activeTab === 'messages') { setTasksDefaultTab('messages'); setCurrentScreen('tasksTab'); }
     else if (activeTab === 'wallet') setCurrentScreen('wallet');
     else if (activeTab === 'profile') setCurrentScreen('profile');
   }, [activeTab]);
@@ -190,7 +191,7 @@ export default function App() {
   }, []);
 
   const isAuthenticated = !!apiClient.getAccessToken();
-  const showBottomNav = isAuthenticated && ['home', 'taskerMode', 'tasksTab', 'wallet', 'profile', 'categories', 'search', 'admin', 'callCenter'].includes(currentScreen);
+  const showBottomNav = isAuthenticated && ['home', 'taskerMode', 'tasksTab', 'wallet', 'profile', 'categories', 'search', 'admin', 'callCenter', 'taskerApply', 'applicants'].includes(currentScreen);
 
   const renderScreen = () => {
     if (!publicScreens.includes(currentScreen) && !isAuthenticated) {
@@ -330,6 +331,10 @@ export default function App() {
               setCurrentTaskId(taskId);
               setCurrentScreen('taskChat');
             }}
+            onViewApplicants={(taskId) => {
+              setCurrentTaskId(taskId);
+              setCurrentScreen('applicants');
+            }}
           />
         );
 
@@ -462,6 +467,7 @@ export default function App() {
       case 'tasksTab':
         return (
           <TasksTabScreen
+            defaultTab={tasksDefaultTab}
             onTaskClick={(taskId) => {
               setCurrentTaskId(taskId);
               setCurrentScreen('taskDetail');
@@ -475,6 +481,7 @@ export default function App() {
               setCurrentTaskId(taskId);
               setCurrentScreen('taskChat');
             }}
+            onExplore={() => setCurrentScreen('taskerMode')}
           />
         );
 

@@ -4,7 +4,7 @@ import { Button } from '../components/Button';
 import { Avatar } from '../components/Avatar';
 import {
   CheckCircle2, Activity, Clock, AlertCircle, RefreshCw, Users,
-  Briefcase, Send, XCircle, ChevronRight, Pause, Play, Trash2, MessageSquare,
+  Briefcase, Send, XCircle, ChevronRight, Pause, Play, Trash2, MessageSquare, Compass,
 } from 'lucide-react';
 import { taskService, apiClient } from '@zaska/shared-services';
 import type { Task, TaskApplication } from '@zaska/shared-services';
@@ -17,6 +17,8 @@ interface TasksTabScreenProps {
   onViewApplicants?: (taskId: string) => void;
   onPostTask?: () => void;
   onChatOpen?: (taskId: string) => void;
+  onExplore?: () => void;
+  defaultTab?: RootTab;
 }
 
 type RootTab = 'client' | 'missions' | 'messages';
@@ -289,7 +291,7 @@ function ClientTab({
 }
 
 // ── Missions tab ──────────────────────────────────────────────────────────────
-function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void }) {
+function MissionsTab({ onTaskClick, onExplore }: { onTaskClick: (taskId: string) => void; onExplore?: () => void }) {
   const { t } = useTranslation();
   const [assignedTasks, setAssignedTasks] = useState<Task[]>([]);
   const [applications, setApplications] = useState<TaskApplication[]>([]);
@@ -323,7 +325,15 @@ function MissionsTab({ onTaskClick }: { onTaskClick: (taskId: string) => void })
 
   return (
     <div className="px-6 py-4 space-y-4">
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between">
+        {onExplore ? (
+          <button
+            onClick={onExplore}
+            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#6D28D9]/8 text-[#6D28D9] text-xs font-semibold hover:bg-[#6D28D9]/15 transition-colors"
+          >
+            <Compass size={14} /> Explorer des tâches
+          </button>
+        ) : <div />}
         <button onClick={load} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors">
           <RefreshCw size={14} className="text-gray-500" />
         </button>
@@ -564,9 +574,13 @@ function MessagesTab({ onChatOpen }: { onChatOpen?: (taskId: string) => void }) 
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export function TasksTabScreen({ onTaskClick, onViewApplicants, onPostTask, onChatOpen }: TasksTabScreenProps) {
+export function TasksTabScreen({ onTaskClick, onViewApplicants, onPostTask, onChatOpen, onExplore, defaultTab }: TasksTabScreenProps) {
   const { t } = useTranslation();
-  const [rootTab, setRootTab] = useState<RootTab>('client');
+  const [rootTab, setRootTab] = useState<RootTab>(defaultTab ?? 'client');
+
+  useEffect(() => {
+    if (defaultTab) setRootTab(defaultTab);
+  }, [defaultTab]);
 
   return (
     <div className="h-full overflow-auto pb-24 bg-gray-50">
@@ -617,7 +631,7 @@ export function TasksTabScreen({ onTaskClick, onViewApplicants, onPostTask, onCh
         <ClientTab onTaskClick={onTaskClick} onViewApplicants={onViewApplicants} onPostTask={onPostTask} />
       )}
       {rootTab === 'missions' && (
-        <MissionsTab onTaskClick={onTaskClick} />
+        <MissionsTab onTaskClick={onTaskClick} onExplore={onExplore} />
       )}
       {rootTab === 'messages' && (
         <MessagesTab onChatOpen={onChatOpen} />

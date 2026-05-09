@@ -1,4 +1,4 @@
-import { Home, Briefcase, Wallet, User, Compass } from 'lucide-react';
+import { Home, Briefcase, Wallet, User, MessageSquare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 interface BottomNavProps {
@@ -10,11 +10,11 @@ export function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
   const { t } = useTranslation();
 
   const tabs = [
-    { id: 'home',    label: t('nav.home'),    icon: Home },
-    { id: 'explore', label: t('nav.explore'), icon: Compass },
-    { id: 'tasks',   label: t('nav.tasks'),   icon: Briefcase },
-    { id: 'wallet',  label: t('nav.wallet'),  icon: Wallet },
-    { id: 'profile', label: t('nav.profile'), icon: User },
+    { id: 'home',     label: t('nav.home'),     icon: Home },
+    { id: 'tasks',    label: t('nav.tasks'),    icon: Briefcase },
+    { id: 'messages', label: t('nav.messages'), icon: MessageSquare },
+    { id: 'wallet',   label: t('nav.wallet'),   icon: Wallet },
+    { id: 'profile',  label: t('nav.profile'),  icon: User },
   ];
 
   return (
