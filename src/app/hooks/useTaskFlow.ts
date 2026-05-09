@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { taskService, apiClient } from "@zaska/shared-services";
-import type { TaskMode } from "@zaska/shared-services";
+import type { TaskMode, TaskStop } from "@zaska/shared-services";
 
 interface CreateTaskInput {
   description: string;
@@ -11,6 +11,9 @@ interface CreateTaskInput {
   currency?: string;
   title?: string;
   address?: string;
+  stops?: TaskStop[];
+  scheduledAt?: string | null;
+  anySchedule?: boolean;
 }
 
 export function useTaskFlow() {
@@ -28,6 +31,9 @@ export function useTaskFlow() {
         longitude: input.longitude,
         address: input.address,
         mode: input.mode,
+        stops: input.stops,
+        scheduledAt: input.scheduledAt ?? null,
+        anySchedule: input.anySchedule ?? false,
       });
     } finally {
       setLoading(false);

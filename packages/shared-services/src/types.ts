@@ -117,6 +117,8 @@ export interface TaskPayload {
   mode?: TaskMode;
   status?: string;
   stops?: TaskStop[];
+  scheduledAt?: string | null;
+  anySchedule?: boolean;
 }
 
 export interface UserAddress {
@@ -146,10 +148,13 @@ export interface Task {
   mode?: TaskMode;
   createdAt?: string | null;
   negotiationStatus?: string | null;
+  originalPrice?: number | null;
   negotiatedPrice?: number | null;
   negotiatedBy?: string | null;
   completionPercent?: number | null;
   distanceKm?: number | null;
+  scheduledAt?: string | null;
+  anySchedule?: boolean | null;
   stops?: TaskStop[] | null;
 }
 

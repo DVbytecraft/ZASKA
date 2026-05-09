@@ -2,7 +2,7 @@ import uuid
 from decimal import Decimal
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -33,8 +33,13 @@ class Task(Base):
 
     # Price negotiation
     negotiation_status: Mapped[str] = mapped_column(String(16), default="none", nullable=False)
+    original_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     negotiated_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
     negotiated_by: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+
+    # Scheduling
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    any_schedule: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Multi-stop: [{address, latitude, longitude}, ...]
     stops: Mapped[list | None] = mapped_column(JSON, nullable=True)

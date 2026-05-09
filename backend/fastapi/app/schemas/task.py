@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import Annotated
 
@@ -24,6 +25,9 @@ class TaskCreatePayload(BaseModel):
     address: str | None = Field(default=None, max_length=512)
     mode: str | None = Field(default=None, pattern="^(fast|choose)$")
     status: str = Field(default="OPEN", pattern="^(OPEN|ASSIGNED|COMPLETED)$")
+    # Scheduling
+    scheduled_at: datetime | None = None
+    any_schedule: bool = False
     # Multi-stop: up to 4 waypoints [{address, latitude, longitude}]
     stops: Annotated[list[TaskStop], Field(max_length=4)] | None = None
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
-import { ArrowLeft, MapPin, Loader, AlertCircle, Navigation, Plus, X, GripVertical } from 'lucide-react';
+import { ArrowLeft, MapPin, Loader, AlertCircle, Navigation, Plus, X, GripVertical, Calendar, Clock, Infinity } from 'lucide-react';
 import { useTaskFlow, requestGeolocation } from '../hooks/useTaskFlow';
 import { paymentService, apiClient } from '@zaska/shared-services';
 import type { TaskMode, TaskStop, UserAddress } from '@zaska/shared-services';
@@ -219,6 +219,11 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
   const [savedAddresses, setSavedAddresses] = useState<UserAddress[]>([]);
   const [addressesLoaded, setAddressesLoaded] = useState(false);
 
+  // Scheduling state (step 4)
+  const [anySchedule, setAnySchedule] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleTime, setScheduleTime] = useState('');
+
   const currency = apiClient.getCurrency() ?? 'USD';
 
   // Load saved addresses when reaching step 3
@@ -256,11 +261,18 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
     if (step === 1) return description.length >= 10;
     if (step === 2) return budget.length > 0 && !isNaN(budgetNum) && budgetNum >= 1;
     if (step === 3) return stops.length >= 1;
+    if (step === 4) return anySchedule || scheduleDate.length > 0;
     return false;
   };
 
+  const buildScheduledAt = (): string | null => {
+    if (anySchedule || !scheduleDate) return null;
+    const time = scheduleTime || '08:00';
+    return new Date(`${scheduleDate}T${time}`).toISOString();
+  };
+
   const handleNext = async () => {
-    if (step < 3) {
+    if (step < 4) {
       setStep(step + 1);
       return;
     }
@@ -276,13 +288,13 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
         description,
         budget,
         mode: taskMode,
-        // Primary from first stop (backward compat)
         latitude: stops[0].latitude,
         longitude: stops[0].longitude,
         address: stops[0].address,
-        // Full stops array
         stops,
         currency,
+        scheduledAt: buildScheduledAt(),
+        anySchedule,
       });
 
       if (!task?.id) throw new Error('Création de tâche échouée — aucun ID retourné');
@@ -301,7 +313,7 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
     }
   };
 
-  const stepLabels = ['Description', 'Budget', 'Lieux d\'exécution'];
+  const stepLabels = ['Description', 'Budget', 'Lieux', 'Planification'];
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -325,13 +337,13 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
           <div className="flex-1">
             <h2 className="text-2xl font-bold text-gray-900">Publier une tâche</h2>
             <p className="text-sm text-gray-500">
-              Étape {step} / 3 — {stepLabels[step - 1]}
+              Étape {step} / 4 — {stepLabels[step - 1]}
             </p>
           </div>
         </div>
 
         <div className="flex gap-1.5">
-          {[1, 2, 3].map((s) => (
+          {[1, 2, 3, 4].map((s) => (
             <div
               key={s}
               className={`h-1.5 flex-1 rounded-full transition-all ${
@@ -480,6 +492,104 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
             )}
           </div>
         )}
+
+        {/* ── Step 4: Planification ── */}
+        {step === 4 && (
+          <div>
+            <h3 className="text-xl font-bold text-gray-900 mb-1">Quand ?</h3>
+            <p className="text-sm text-gray-500 mb-6">Choisissez une date et une heure, ou laissez le prestataire s'organiser.</p>
+
+            {/* Toggle "N'importe quand" */}
+            <button
+              onClick={() => { setAnySchedule(true); setScheduleDate(''); setScheduleTime(''); }}
+              className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 transition-all mb-3 ${
+                anySchedule ? 'border-[#6D28D9] bg-purple-50' : 'border-gray-200 hover:border-[#6D28D9]/40'
+              }`}
+            >
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+                anySchedule ? 'bg-[#6D28D9]' : 'bg-gray-100'
+              }`}>
+                <Infinity size={20} className={anySchedule ? 'text-white' : 'text-gray-500'} />
+              </div>
+              <div className="text-left">
+                <p className={`font-semibold text-sm ${anySchedule ? 'text-[#6D28D9]' : 'text-gray-800'}`}>
+                  N'importe quand
+                </p>
+                <p className="text-xs text-gray-400">Le prestataire propose une disponibilité</p>
+              </div>
+              {anySchedule && <div className="ml-auto w-5 h-5 rounded-full bg-[#6D28D9] flex items-center justify-center">
+                <div className="w-2 h-2 rounded-full bg-white" />
+              </div>}
+            </button>
+
+            {/* Date/time picker */}
+            <button
+              onClick={() => setAnySchedule(false)}
+              className={`w-full flex items-center gap-4 p-4 rounded-2xl border-2 transition-all mb-4 ${
+                !anySchedule ? 'border-[#6D28D9] bg-purple-50' : 'border-gray-200 hover:border-[#6D28D9]/40'
+              }`}
+            >
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+                !anySchedule ? 'bg-[#6D28D9]' : 'bg-gray-100'
+              }`}>
+                <Calendar size={20} className={!anySchedule ? 'text-white' : 'text-gray-500'} />
+              </div>
+              <div className="text-left">
+                <p className={`font-semibold text-sm ${!anySchedule ? 'text-[#6D28D9]' : 'text-gray-800'}`}>
+                  Date précise
+                </p>
+                <p className="text-xs text-gray-400">Choisir une date et heure</p>
+              </div>
+              {!anySchedule && <div className="ml-auto w-5 h-5 rounded-full bg-[#6D28D9] flex items-center justify-center">
+                <div className="w-2 h-2 rounded-full bg-white" />
+              </div>}
+            </button>
+
+            {!anySchedule && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                    Date
+                  </label>
+                  <div className="relative">
+                    <Calendar size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <input
+                      type="date"
+                      value={scheduleDate}
+                      min={new Date().toISOString().split('T')[0]}
+                      onChange={(e) => setScheduleDate(e.target.value)}
+                      className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-gray-200 focus:border-[#6D28D9] focus:outline-none text-gray-900 bg-white"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                    Heure <span className="font-normal normal-case text-gray-400">(optionnelle)</span>
+                  </label>
+                  <div className="relative">
+                    <Clock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <input
+                      type="time"
+                      value={scheduleTime}
+                      onChange={(e) => setScheduleTime(e.target.value)}
+                      className="w-full pl-10 pr-4 py-3 rounded-xl border-2 border-gray-200 focus:border-[#6D28D9] focus:outline-none text-gray-900 bg-white"
+                    />
+                  </div>
+                  {!scheduleTime && (
+                    <p className="text-xs text-gray-400 mt-1">Si non renseignée, l'heure sera flexible.</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {submitError && (
+              <div className="mt-4 flex items-center gap-2 bg-red-50 border border-red-100 rounded-xl px-3 py-2">
+                <AlertCircle size={15} className="text-red-500 shrink-0" />
+                <p className="text-sm text-red-600">{submitError}</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Bottom CTA */}
@@ -492,7 +602,7 @@ export function PostTaskScreen({ taskMode, onBack, onSubmit }: PostTaskScreenPro
         >
           {loading
             ? 'Création en cours…'
-            : step < 3
+            : step < 4
             ? 'Continuer'
             : 'Publier la tâche'}
         </Button>

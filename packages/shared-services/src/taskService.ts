@@ -14,6 +14,8 @@ export const taskService = {
       mode: payload.mode,
       status: payload.status,
       stops: payload.stops,
+      scheduled_at: payload.scheduledAt ?? null,
+      any_schedule: payload.anySchedule ?? false,
     });
   },
 

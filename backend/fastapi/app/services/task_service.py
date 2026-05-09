@@ -164,6 +164,9 @@ class TaskService:
     def propose_price(self, task_id: str, proposer_id: str, proposed_price: Decimal) -> Task:
         """Executor proposes a new price. Sets negotiation_status='pending'."""
         task = self.db.query(Task).filter(Task.id == task_id).one()
+        # Capture original price once (before any negotiation changes task.price)
+        if task.original_price is None:
+            task.original_price = task.price
         task.negotiated_price = proposed_price
         task.negotiated_by = proposer_id
         task.negotiation_status = "pending"

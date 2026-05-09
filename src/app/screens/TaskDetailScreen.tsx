@@ -77,14 +77,18 @@ function NegotiationPanel({ task, currentUserId, onReload }: NegotiationPanelPro
       <div className="flex gap-3 mb-3">
         <div className="flex-1 bg-white rounded-xl p-3 border border-gray-100">
           <p className="text-xs text-gray-400 mb-1">Prix initial</p>
-          <p className="font-bold text-gray-900 text-sm">{task.currency} {Number(task.price).toFixed(2)}</p>
+          <p className="font-bold text-gray-900 text-sm">
+            {task.currency} {Number(task.originalPrice ?? task.price).toFixed(2)}
+          </p>
         </div>
         <div className={`flex-1 rounded-xl p-3 border ${
           status === 'accepted' ? 'bg-green-50 border-green-200' :
           status === 'rejected' ? 'bg-red-50 border-red-200' :
           'bg-amber-50 border-amber-200'
         }`}>
-          <p className="text-xs text-gray-400 mb-1">Proposé</p>
+          <p className="text-xs text-gray-400 mb-1">
+            {status === 'accepted' ? 'Accepté' : 'Proposé'}
+          </p>
           <p className={`font-bold text-sm ${
             status === 'accepted' ? 'text-green-700' :
             status === 'rejected' ? 'text-red-600' : 'text-amber-800'
@@ -419,7 +423,13 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
               {isClient ? 'Ma tâche' : isExecutor ? 'Ma mission' : 'Détail de la tâche'}
             </h2>
             <TaskStatusBadge
-              status={progressStatus === 'paid' ? 'completed' : progressStatus === 'posted' ? 'posted' : progressStatus}
+              status={
+                progressStatus === 'paid' ? 'completed' :
+                progressStatus === 'validation' ? 'awaiting_payment' :
+                progressStatus === 'applications' ? 'accepted' :
+                progressStatus === 'in_progress' ? 'in_progress' :
+                'posted'
+              }
               size="md"
             />
           </div>
@@ -448,10 +458,27 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
             {task.title || task.description.slice(0, 60)}
           </h3>
           {task.title && <p className="text-sm text-gray-600 mb-3">{task.description}</p>}
-          <div className="flex items-start gap-3 text-sm text-gray-500">
+          <div className="flex items-start gap-3 text-sm text-gray-500 mb-2">
             <MapPin size={16} className="mt-0.5 flex-shrink-0 text-[#6D28D9]" />
             <span>{locationDisplay}</span>
           </div>
+          {/* Scheduled time */}
+          {task.anySchedule ? (
+            <div className="flex items-center gap-2 text-sm text-gray-400 mt-1">
+              <Clock size={14} className="text-gray-300" />
+              <span>Horaire flexible — le prestataire s'organise</span>
+            </div>
+          ) : task.scheduledAt ? (
+            <div className="flex items-center gap-2 text-sm text-[#6D28D9] mt-1">
+              <Clock size={14} />
+              <span className="font-medium">
+                {new Date(task.scheduledAt).toLocaleString('fr-FR', {
+                  weekday: 'short', day: 'numeric', month: 'short',
+                  hour: '2-digit', minute: '2-digit',
+                })}
+              </span>
+            </div>
+          ) : null}
         </Card>
 
         {/* ── CLIENT: applicants CTA (OPEN) ── */}
@@ -602,7 +629,7 @@ export function TaskDetailScreen({ taskId, onBack, onComplete, onChat, onViewApp
         )}
 
         {/* ── Negotiation panel ── */}
-        {task.negotiatedPrice && task.negotiationStatus && task.negotiationStatus !== 'none' && (
+        {task.negotiationStatus && task.negotiationStatus !== 'none' && (
           <NegotiationPanel
             task={task}
             currentUserId={currentUserId ?? ''}

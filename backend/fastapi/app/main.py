@@ -19,19 +19,25 @@ from app.core.ws_ticket import consume_ws_ticket
 from app.db.base import Base
 from app.db.session import engine
 from app.models import (  # noqa: F401
+    audit_log,
     chat_message,
+    dispute,
     feature_flag,
     kyc,
     location_config,
+    negotiation_event,
+    notification,
     payment_method,
     payout,
-    dispute,
+    support_ticket,
     task,
+    task_application,
     task_completion_code,
     user,
     user_address,
     virtual_card,
     wallet,
+    webhook_idempotency,
 )
 
 

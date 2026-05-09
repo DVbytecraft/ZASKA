@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -80,8 +81,11 @@ def _serialize_task(task: Task) -> dict:
         "assignedTo": task.assigned_to,
         "completionPercent": task.completion_percent,
         "negotiationStatus": task.negotiation_status,
+        "originalPrice": float(task.original_price) if task.original_price else None,
         "negotiatedPrice": float(task.negotiated_price) if task.negotiated_price else None,
         "negotiatedBy": task.negotiated_by,
+        "scheduledAt": task.scheduled_at.isoformat() if task.scheduled_at else None,
+        "anySchedule": bool(task.any_schedule),
         "createdAt": task.created_at.isoformat() if task.created_at else None,
         "stops": task.stops,
     }
@@ -130,6 +134,12 @@ def create_task(
         elif not data.get("latitude") or not data.get("longitude"):
             raise HTTPException(status_code=422, detail="latitude et longitude requis si stops absent")
         task = service.create_task(data)
+        # Notify creator (self-confirmation)
+        try:
+            from app.models.notification import Notification
+            from app.db.session import SessionLocal
+        except Exception:
+            pass
         return success_response(_serialize_task(task))
     except HTTPException:
         raise
@@ -350,6 +360,9 @@ def apply_task(
         })
     except HTTPException:
         raise
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Vous avez déjà postulé à cette tâche")
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de postuler à la tâche") from exc
 
