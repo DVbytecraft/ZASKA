@@ -247,9 +247,12 @@ export function HomeScreen({
                           </p>
                           <div className="flex items-center gap-2">
                             <p className="text-xs text-gray-500">{formatAmount(task.price, task.currency)}</p>
-                            {task.address && (
+                            {(task.city || task.address) && (
                               <p className="text-xs text-gray-400 flex items-center gap-0.5 truncate max-w-[120px]">
-                                <MapPin size={10} />{task.address}
+                                <MapPin size={10} />
+                                {task.city
+                                  ? [task.city, task.country].filter(Boolean).join(', ')
+                                  : task.address}
                               </p>
                             )}
                           </div>

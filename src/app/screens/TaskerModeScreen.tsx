@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { MapPin, Clock, RefreshCw, AlertCircle, Loader2, ChevronDown, ChevronUp, Navigation, Search, Globe, X } from 'lucide-react';
@@ -108,8 +108,18 @@ export function TaskerModeScreen({ onApply }: TaskerModeScreenProps) {
   // Execution-location filters — search by WHERE the task will be performed (independent of user position)
   const [filterCity, setFilterCity] = useState('');
   const [filterCountry, setFilterCountry] = useState('');
+  const [debouncedCity, setDebouncedCity] = useState('');
+  const [debouncedCountry, setDebouncedCountry] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-  const filterDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounce filter inputs: update debounced values 600ms after typing stops
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedCity(filterCity);
+      setDebouncedCountry(filterCountry);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [filterCity, filterCountry]);
 
   const myId = apiClient.getUserId();
 
@@ -144,13 +154,13 @@ export function TaskerModeScreen({ onApply }: TaskerModeScreenProps) {
       .browseAvailableTasks(
         refCoords?.lat,
         refCoords?.lng,
-        filterCountry.trim() || undefined,
-        filterCity.trim() || undefined,
+        debouncedCountry.trim() || undefined,
+        debouncedCity.trim() || undefined,
       )
       .then((data) => setTasks(data.filter(t => t.createdBy !== myId)))
       .catch((err) => setError(err instanceof Error ? err.message : 'Erreur'))
       .finally(() => setLoading(false));
-  }, [refCoords, myId, filterCountry, filterCity]);
+  }, [refCoords, myId, debouncedCountry, debouncedCity]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -250,11 +260,7 @@ export function TaskerModeScreen({ onApply }: TaskerModeScreenProps) {
                   type="text"
                   placeholder="Ville (ex : Lomé, Abidjan, Paris…)"
                   value={filterCity}
-                  onChange={e => {
-                    setFilterCity(e.target.value);
-                    if (filterDebounce.current) clearTimeout(filterDebounce.current);
-                    filterDebounce.current = setTimeout(load, 600);
-                  }}
+                  onChange={e => setFilterCity(e.target.value)}
                   className="w-full pl-8 pr-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-[#6D28D9] focus:outline-none text-gray-900"
                 />
               </div>
@@ -264,11 +270,7 @@ export function TaskerModeScreen({ onApply }: TaskerModeScreenProps) {
                   type="text"
                   placeholder="Pays (ex : Togo, Côte d'Ivoire, France…)"
                   value={filterCountry}
-                  onChange={e => {
-                    setFilterCountry(e.target.value);
-                    if (filterDebounce.current) clearTimeout(filterDebounce.current);
-                    filterDebounce.current = setTimeout(load, 600);
-                  }}
+                  onChange={e => setFilterCountry(e.target.value)}
                   className="w-full pl-8 pr-3 py-2 text-sm rounded-lg border border-gray-200 focus:border-[#6D28D9] focus:outline-none text-gray-900"
                 />
               </div>

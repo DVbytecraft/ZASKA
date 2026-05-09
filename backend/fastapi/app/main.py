@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.observability import RequestIDMiddleware, logger
 from app.core.rate_limit import RedisRateLimitMiddleware
 from app.core.responses import error_response, success_response
+from app.core.scheduler import start_scheduler, stop_scheduler
 from app.core.ws_ticket import consume_ws_ticket
 from app.db.base import Base
 from app.db.session import engine
@@ -106,6 +107,12 @@ async def startup() -> None:
         sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1, environment=settings.env)
     _validate_production_hard_lock()
     await chat_ws_manager.start()
+    start_scheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    stop_scheduler()
 
 
 @app.get("/health")

@@ -1,16 +1,43 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 
-  <!DOCTYPE html>
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>ZASKA Mobile App UI</title>
-      <style>html, body { height: 100%; margin: 0; } #root { height: 100%; }</style>
-    </head>
+    <title>Zaska — Services à la demande</title>
+    <meta name="description" content="Publiez ou acceptez des tâches près de chez vous en quelques secondes." />
+    <meta name="theme-color" content="#6D28D9" />
 
-    <body>
-      <div id="root"></div>
-      <script type="module" src="/src/main.tsx"></script>
-    </body>
-  </html>
-  
+    <!-- PWA / installable -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- iOS Safari "Ajouter à l'écran d'accueil" -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Zaska" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+
+    <!-- Open Graph (partage de liens) -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Zaska — Services à la demande" />
+    <meta property="og:description" content="Publiez ou acceptez des tâches près de chez vous en quelques secondes." />
+    <meta property="og:image" content="/pwa-512x512.png" />
+
+    <!-- Empêche le zoom involontaire sur double-tap (mobile) -->
+    <style>
+      html, body { height: 100%; margin: 0; }
+      #root { height: 100%; }
+      html { touch-action: manipulation; }
+      body { -webkit-tap-highlight-color: transparent; background-color: #f9fafb; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
