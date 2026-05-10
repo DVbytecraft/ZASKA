@@ -4,6 +4,7 @@ from app.api.v1.routers import (
     addresses,
     admin,
     auth,
+    calls,
     cards,
     chat,
     feature_flags,
@@ -25,6 +26,7 @@ api_router.include_router(users.router)
 api_router.include_router(tasks.router)
 api_router.include_router(payments.router)
 api_router.include_router(chat.router)
+api_router.include_router(calls.router)
 api_router.include_router(feature_flags.router)
 api_router.include_router(kyc.router)
 api_router.include_router(wallet.router)

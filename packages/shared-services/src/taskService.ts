@@ -91,10 +91,14 @@ export const taskService = {
     return apiClient.get<TaskApplication[]>('/tasks/my-applications');
   },
 
-  completeTask(taskId: string, partial?: boolean, completionPercent?: number) {
+  completeTask(taskId: string, partial?: boolean, completionPercent?: number, proofPhotoUrl?: string) {
     return apiClient.post<{ task_id: string; status: string; completion_percent: number; partial: boolean; message: string }>(
       `/tasks/${taskId}/complete`,
-      { partial: partial ?? false, completion_percent: completionPercent ?? 100 },
+      {
+        partial: partial ?? false,
+        completion_percent: completionPercent ?? 100,
+        proof_photo_url: proofPhotoUrl ?? null,
+      },
     );
   },
 

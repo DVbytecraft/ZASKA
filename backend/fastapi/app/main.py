@@ -10,7 +10,14 @@ from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.api import api_router
-from app.api.websocket import chat_ws_manager, websocket_loop
+from app.api.websocket import (
+    call_signaling_loop,
+    call_signaling_manager,
+    chat_ws_manager,
+    user_call_notification_loop,
+    user_call_notification_manager,
+    websocket_loop,
+)
 from app.core.config import settings
 from app.core.observability import RequestIDMiddleware, logger
 from app.core.rate_limit import RedisRateLimitMiddleware
@@ -21,6 +28,7 @@ from app.db.base import Base
 from app.db.session import engine
 from app.models import (  # noqa: F401
     audit_log,
+    call_session,
     chat_message,
     dispute,
     feature_flag,
@@ -165,6 +173,56 @@ async def websocket_task_chat(websocket: WebSocket, task_id: str) -> None:
     except (TimeoutError, asyncio.TimeoutError, json.JSONDecodeError):
         await websocket.close(code=1008, reason="Unauthorized")
     except Exception:
+        await websocket.close(code=1011, reason="Server error")
+
+
+@app.websocket("/ws/calls/{call_id}")
+async def websocket_call_signaling(websocket: WebSocket, call_id: str) -> None:
+    """WebRTC signaling relay: forwards offer/answer/ice/hangup between call participants."""
+    await websocket.accept()
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)
+        data = json.loads(raw)
+        if data.get("type") != "auth" or not data.get("ticket"):
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+        user_id = consume_ws_ticket(str(data["ticket"]), expected_task_id=call_id)
+        if not user_id:
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+        accepted = await call_signaling_manager.connect(call_id, websocket)
+        if not accepted:
+            await websocket.close(code=1008, reason="Call room full")
+            return
+        await call_signaling_loop(call_id=call_id, websocket=websocket)
+    except (TimeoutError, asyncio.TimeoutError, json.JSONDecodeError):
+        await websocket.close(code=1008, reason="Unauthorized")
+    except Exception:
+        call_signaling_manager.disconnect(call_id, websocket)
+        await websocket.close(code=1011, reason="Server error")
+
+
+@app.websocket("/ws/users/{user_id}/calls")
+async def websocket_user_call_notifications(websocket: WebSocket, user_id: str) -> None:
+    """Push channel for incoming call events to a specific user."""
+    await websocket.accept()
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=15.0)
+        data = json.loads(raw)
+        if data.get("type") != "auth" or not data.get("ticket"):
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+        # Ticket was scoped with task_id=user_id
+        authenticated_user = consume_ws_ticket(str(data["ticket"]), expected_task_id=user_id)
+        if not authenticated_user or authenticated_user != user_id:
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+        await user_call_notification_manager.connect(user_id, websocket)
+        await user_call_notification_loop(user_id=user_id, websocket=websocket)
+    except (TimeoutError, asyncio.TimeoutError, json.JSONDecodeError):
+        await websocket.close(code=1008, reason="Unauthorized")
+    except Exception:
+        user_call_notification_manager.disconnect(user_id, websocket)
         await websocket.close(code=1011, reason="Server error")
 
 

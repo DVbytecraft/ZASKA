@@ -93,6 +93,7 @@ def _serialize_task(task: Task) -> dict:
         "city": getattr(task, "city", None),
         "country": getattr(task, "country", None),
         "creatorRated": bool(getattr(task, "creator_rated", False)),
+        "proofPhotoUrl": getattr(task, "proof_photo_url", None),
     }
 
 
@@ -819,6 +820,8 @@ def mark_task_complete(
 
         pct = payload.completion_percent if payload.partial else 100
         service.set_completion_percent(task_id, pct)
+        if payload.proof_photo_url:
+            task.proof_photo_url = payload.proof_photo_url
         service.update_status(task_id, "PENDING_VALIDATION")
 
         # Put escrow on 6h hold — auto-released if client doesn't act

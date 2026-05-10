@@ -5,7 +5,28 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
 from app.db.base import Base
-from app.models import audit_log, chat_message, dispute, feature_flag, kyc, location_config, payment_method, payout, task, task_application, user, wallet, webhook_idempotency  # noqa: F401
+from app.models import (  # noqa: F401
+    audit_log,
+    call_session,
+    chat_message,
+    dispute,
+    feature_flag,
+    kyc,
+    location_config,
+    negotiation_event,
+    notification,
+    payment_method,
+    payout,
+    support_ticket,
+    task,
+    task_application,
+    task_completion_code,
+    user,
+    user_address,
+    virtual_card,
+    wallet,
+    webhook_idempotency,
+)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

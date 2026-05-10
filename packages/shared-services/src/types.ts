@@ -162,6 +162,7 @@ export interface Task {
   city?: string | null;
   country?: string | null;
   creatorRated?: boolean;
+  proofPhotoUrl?: string | null;
 }
 
 export interface VirtualCard {
@@ -206,6 +207,7 @@ export interface Transaction {
   id: string;
   type: "credit" | "debit";
   amount: string;
+  currency: string;
   status: "pending" | "completed" | "failed" | "reversed";
   reference: string;
   provider: string;

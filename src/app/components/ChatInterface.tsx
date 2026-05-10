@@ -12,7 +12,7 @@ interface ChatInterfaceProps {
   taskerName: string;
   taskId?: string;
   partnerSrc?: string | null;
-  onCall?: () => void;
+  onCall?: (type: 'audio' | 'video') => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -30,24 +30,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// ── Call Modal ────────────────────────────────────────────────────────────────
-function CallModal({ type, onClose }: { type: 'audio' | 'video'; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-6" onClick={onClose}>
-      <div className="bg-white rounded-3xl p-8 text-center max-w-xs w-full shadow-2xl" onClick={e => e.stopPropagation()}>
-        {type === 'video'
-          ? <Video size={48} className="text-[#6D28D9] mx-auto mb-4" />
-          : <Phone size={48} className="text-[#6D28D9] mx-auto mb-4" />
-        }
-        <h3 className="text-lg font-bold text-gray-900 mb-2">
-          {type === 'video' ? 'Appel vidéo' : 'Appel audio'}
-        </h3>
-        <p className="text-sm text-gray-500 mb-6">Cette fonctionnalité sera disponible prochainement.</p>
-        <button onClick={onClose} className="w-full py-3 bg-[#6D28D9] text-white rounded-2xl font-semibold text-sm">OK</button>
-      </div>
-    </div>
-  );
-}
 
 // ── Location Drawer ───────────────────────────────────────────────────────────
 interface LocationDrawerProps { onSend: (text: string) => void; onClose: () => void; }
@@ -186,7 +168,6 @@ export function ChatInterface({ taskerName, taskId, partnerSrc, onCall }: ChatIn
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
-  const [callModal, setCallModal] = useState<'audio' | 'video' | null>(null);
   const [showLocationDrawer, setShowLocationDrawer] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -255,7 +236,6 @@ export function ChatInterface({ taskerName, taskId, partnerSrc, onCall }: ChatIn
 
   return (
     <div className="flex flex-col h-full">
-      {callModal && <CallModal type={callModal} onClose={() => setCallModal(null)} />}
       {showLocationDrawer && (
         <LocationDrawer
           onSend={t => { void sendMessage(t); }}
@@ -285,15 +265,17 @@ export function ChatInterface({ taskerName, taskId, partnerSrc, onCall }: ChatIn
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setCallModal('audio')}
-            className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center hover:bg-gray-200 transition-colors"
+            onClick={() => onCall?.('audio')}
+            disabled={!taskId}
+            className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center hover:bg-gray-200 transition-colors disabled:opacity-40"
             title="Appel audio"
           >
             <Phone size={18} className="text-gray-600" />
           </button>
           <button
-            onClick={() => setCallModal('video')}
-            className="w-10 h-10 bg-[#6D28D9] rounded-full flex items-center justify-center hover:bg-[#5B21B6] transition-colors"
+            onClick={() => onCall?.('video')}
+            disabled={!taskId}
+            className="w-10 h-10 bg-[#6D28D9] rounded-full flex items-center justify-center hover:bg-[#5B21B6] transition-colors disabled:opacity-40"
             title="Appel vidéo"
           >
             <Video size={18} className="text-white" />

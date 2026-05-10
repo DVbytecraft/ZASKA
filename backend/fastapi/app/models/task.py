@@ -58,3 +58,6 @@ class Task(Base):
 
     # Rating — True once the creator has rated the tasker for this task
     creator_rated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+
+    # Proof photo submitted by the tasker when declaring completion
+    proof_photo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)

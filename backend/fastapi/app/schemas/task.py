@@ -64,6 +64,7 @@ class CompleteTaskPayload(BaseModel):
 
     partial: bool = False
     completion_percent: int = Field(default=100, ge=1, le=100)
+    proof_photo_url: str | None = Field(default=None, max_length=512)
 
 
 class CancelTaskPayload(BaseModel):
