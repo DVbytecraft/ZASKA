@@ -124,9 +124,13 @@ export default function App() {
   const isAuthenticated = !!apiClient.getAccessToken();
 
   // ── Navigate to a screen, tracking previous for smart back ────────────────
+  // Uses a ref so goTo is always stable without stale-closure issues.
+  const currentScreenRef = useRef<Screen>('splash');
+  useEffect(() => { currentScreenRef.current = currentScreen; }, [currentScreen]);
+
   const goTo = useCallback((screen: Screen) => {
-    setPrevScreen((prev) => prev);
-    setCurrentScreen((prev) => { setPrevScreen(prev); return screen; });
+    setPrevScreen(currentScreenRef.current);
+    setCurrentScreen(screen);
   }, []);
 
   // ── Global call notification WebSocket ────────────────────────────────────
@@ -196,10 +200,9 @@ export default function App() {
 
   // ── Bottom nav tab switch ─────────────────────────────────────────────────
   useEffect(() => {
-    const k = screenKey; // reference to trigger re-render
-    if (activeTab === 'home') { setCurrentScreen('home'); setScreenKey(k + 1); }
-    else if (activeTab === 'tasks') { setTasksDefaultTab('client'); setCurrentScreen('tasksTab'); setScreenKey(k + 1); }
-    else if (activeTab === 'messages') { setCurrentScreen('messages'); setScreenKey(k + 1); }
+    if (activeTab === 'home') { setCurrentScreen('home'); setScreenKey((k) => k + 1); }
+    else if (activeTab === 'tasks') { setTasksDefaultTab('client'); setCurrentScreen('tasksTab'); setScreenKey((k) => k + 1); }
+    else if (activeTab === 'messages') { setCurrentScreen('messages'); setScreenKey((k) => k + 1); }
     else if (activeTab === 'wallet') setCurrentScreen('wallet');
     else if (activeTab === 'profile') setCurrentScreen('profile');
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
