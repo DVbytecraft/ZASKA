@@ -66,6 +66,7 @@ const CallCenterScreen = lazy(() => import('./screens/CallCenterScreen').then(m 
 const AdminApp = lazy(() => import('../admin/AdminApp').then(m => ({ default: m.AdminApp })));
 const ForgotPasswordScreen = lazy(() => import('./screens/ForgotPasswordScreen').then(m => ({ default: m.ForgotPasswordScreen })));
 const ResetPasswordScreen = lazy(() => import('./screens/ResetPasswordScreen').then(m => ({ default: m.ResetPasswordScreen })));
+const MessagesScreen = lazy(() => import('./screens/MessagesScreen').then(m => ({ default: m.MessagesScreen })));
 
 type Screen =
   | 'splash'
@@ -125,7 +126,8 @@ type Screen =
   | 'callCenter'
   | 'kyc'
   | 'forgotPassword'
-  | 'resetPassword';
+  | 'resetPassword'
+  | 'messages';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('splash');
@@ -146,7 +148,7 @@ export default function App() {
   useEffect(() => {
     if (activeTab === 'home') setCurrentScreen('home');
     else if (activeTab === 'tasks') { setTasksDefaultTab('client'); setCurrentScreen('tasksTab'); }
-    else if (activeTab === 'messages') { setTasksDefaultTab('messages'); setCurrentScreen('tasksTab'); }
+    else if (activeTab === 'messages') setCurrentScreen('messages');
     else if (activeTab === 'wallet') setCurrentScreen('wallet');
     else if (activeTab === 'profile') setCurrentScreen('profile');
   }, [activeTab]);
@@ -191,7 +193,7 @@ export default function App() {
   }, []);
 
   const isAuthenticated = !!apiClient.getAccessToken();
-  const showBottomNav = isAuthenticated && ['home', 'taskerMode', 'tasksTab', 'wallet', 'profile', 'categories', 'search', 'admin', 'callCenter', 'taskerApply', 'applicants'].includes(currentScreen);
+  const showBottomNav = isAuthenticated && ['home', 'taskerMode', 'tasksTab', 'messages', 'wallet', 'profile', 'categories', 'search', 'admin', 'callCenter', 'taskerApply', 'applicants'].includes(currentScreen);
 
   const renderScreen = () => {
     if (!publicScreens.includes(currentScreen) && !isAuthenticated) {
@@ -416,7 +418,11 @@ export default function App() {
         return (
           <TaskChatScreen
             taskId={currentTaskId}
-            onBack={() => setCurrentScreen('taskDetail')}
+            onBack={() => {
+              // Return to messages if we came from there, otherwise taskDetail
+              if (activeTab === 'messages') setCurrentScreen('messages');
+              else setCurrentScreen('taskDetail');
+            }}
           />
         );
 
@@ -693,6 +699,17 @@ export default function App() {
 
       case 'callCenter':
         return <CallCenterScreen />;
+
+      case 'messages':
+        return (
+          <MessagesScreen
+            onOpenChat={(taskId) => {
+              setCurrentTaskId(taskId);
+              setCurrentScreen('taskChat');
+            }}
+            onPostTask={() => setCurrentScreen('taskModeSelection')}
+          />
+        );
 
       default:
         return <HomeScreen onPostTask={() => setCurrentScreen('taskModeSelection')} />;
