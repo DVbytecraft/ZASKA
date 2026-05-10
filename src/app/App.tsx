@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { authService, apiClient } from '@zaska/shared-services';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoadingScreen } from './screens/LoadingScreen';
@@ -6,9 +6,12 @@ import { BottomNav } from './components/BottomNav';
 import { InstallPrompt } from './components/InstallPrompt';
 import { setAppLanguage } from '../i18n';
 
-// Eagerly loaded: needed before any interaction (auth guard, fallback)
+// Eagerly loaded: needed immediately (auth guard, call overlays)
 import { SplashScreen } from './screens/SplashScreen';
 import { LoginScreen } from './screens/LoginScreen';
+import { CallScreen } from './screens/CallScreen';
+import { IncomingCallScreen } from './screens/IncomingCallScreen';
+import type { IncomingCallData } from './screens/IncomingCallScreen';
 
 // Lazily loaded: deferred until navigation reaches these screens
 const OnboardingScreen = lazy(() => import('./screens/OnboardingScreen').then(m => ({ default: m.OnboardingScreen })));
@@ -69,102 +72,151 @@ const ResetPasswordScreen = lazy(() => import('./screens/ResetPasswordScreen').t
 const MessagesScreen = lazy(() => import('./screens/MessagesScreen').then(m => ({ default: m.MessagesScreen })));
 
 type Screen =
-  | 'splash'
-  | 'onboarding'
-  | 'login'
-  | 'register'
-  | 'otp'
-  | 'setPassword'
-  | 'profileSetup'
-  | 'demoNav'
-  | 'home'
-  | 'categories'
-  | 'search'
-  | 'notifications'
-  | 'taskModeSelection'
-  | 'postTask'
-  | 'taskCreated'
-  | 'fastMatching'
-  | 'matching'
-  | 'taskerList'
-  | 'applicants'
-  | 'taskDetail'
-  | 'taskChat'
-  | 'confirmCompletion'
-  | 'completion'
-  | 'paymentSuccess'
-  | 'taskerMode'
-  | 'taskerFastMode'
-  | 'taskerApply'
-  | 'tasksTab'
-  | 'wallet'
-  | 'sendMoney'
-  | 'withdraw'
-  | 'addFunds'
-  | 'transactionHistory'
-  | 'profile'
-  | 'editProfile'
-  | 'paymentMethods'
-  | 'addresses'
-  | 'virtualCard'
-  | 'taskHistory'
-  | 'settings'
-  | 'support'
-  | 'faq'
-  | 'reportIssue'
-  | 'loading'
-  | 'skeletonLoading'
-  | 'error'
-  | 'noInternet'
-  | 'paymentFailed'
-  | 'taskCancelled'
-  | 'noTaskersAvailable'
-  | 'taskExpired'
-  | 'priceNegotiation'
-  | 'admin'
-  | 'adminDashboard'
-  | 'callCenter'
-  | 'kyc'
-  | 'forgotPassword'
-  | 'resetPassword'
-  | 'messages';
+  | 'splash' | 'onboarding' | 'login' | 'register' | 'otp' | 'setPassword'
+  | 'profileSetup' | 'demoNav' | 'home' | 'categories' | 'search'
+  | 'notifications' | 'taskModeSelection' | 'postTask' | 'taskCreated'
+  | 'fastMatching' | 'matching' | 'taskerList' | 'applicants' | 'taskDetail'
+  | 'taskChat' | 'confirmCompletion' | 'completion' | 'paymentSuccess'
+  | 'taskerMode' | 'taskerFastMode' | 'taskerApply' | 'tasksTab' | 'messages'
+  | 'wallet' | 'sendMoney' | 'withdraw' | 'addFunds' | 'transactionHistory'
+  | 'profile' | 'editProfile' | 'paymentMethods' | 'addresses' | 'virtualCard'
+  | 'taskHistory' | 'settings' | 'support' | 'faq' | 'reportIssue' | 'loading'
+  | 'skeletonLoading' | 'error' | 'noInternet' | 'paymentFailed' | 'taskCancelled'
+  | 'noTaskersAvailable' | 'taskExpired' | 'priceNegotiation' | 'admin'
+  | 'adminDashboard' | 'callCenter' | 'kyc' | 'forgotPassword' | 'resetPassword';
+
+interface GlobalCall {
+  callId: string;
+  isCaller: boolean;
+  mediaType: 'audio' | 'video';
+  partnerName: string;
+  partnerAvatar?: string | null;
+}
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('splash');
+  const [prevScreen, setPrevScreen] = useState<Screen>('home');
   const [activeTab, setActiveTab] = useState('home');
   const [taskMode, setTaskMode] = useState<'fast' | 'choose'>('fast');
-  const [currentTaskId, setCurrentTaskId] = useState<string>('');
-  const [registeredPhone, setRegisteredPhone] = useState<string>('');
-  const [registeredEmail, setRegisteredEmail] = useState<string>('');
-  const [resetEmail, setResetEmail] = useState<string>('');
-  const [initialDescription, setInitialDescription] = useState<string>('');
+  const [currentTaskId, setCurrentTaskId] = useState('');
+  const [registeredPhone, setRegisteredPhone] = useState('');
+  const [registeredEmail, setRegisteredEmail] = useState('');
+  const [resetEmail, setResetEmail] = useState('');
+  const [initialDescription, setInitialDescription] = useState('');
   const [postTaskBack, setPostTaskBack] = useState<Screen>('taskModeSelection');
-  const [currentNegotiation, setCurrentNegotiation] = useState<{
-    taskerName: string; originalPrice: number; proposedPrice: number;
-  }>({ taskerName: '', originalPrice: 0, proposedPrice: 0 });
+  const [currentNegotiation, setCurrentNegotiation] = useState({
+    taskerName: '', originalPrice: 0, proposedPrice: 0,
+  });
   const [tasksDefaultTab, setTasksDefaultTab] = useState<'client' | 'missions' | 'messages'>('client');
-  const publicScreens: Screen[] = ['splash', 'onboarding', 'login', 'register', 'otp', 'setPassword', 'profileSetup', 'forgotPassword', 'resetPassword', 'loading', 'error', 'noInternet'];
+  // Incremented on every tab switch to force fresh data in list screens
+  const [screenKey, setScreenKey] = useState(0);
 
-  useEffect(() => {
-    if (activeTab === 'home') setCurrentScreen('home');
-    else if (activeTab === 'tasks') { setTasksDefaultTab('client'); setCurrentScreen('tasksTab'); }
-    else if (activeTab === 'messages') setCurrentScreen('messages');
-    else if (activeTab === 'wallet') setCurrentScreen('wallet');
-    else if (activeTab === 'profile') setCurrentScreen('profile');
-  }, [activeTab]);
+  // ── Global call state ──────────────────────────────────────────────────────
+  const [incomingCall, setIncomingCall] = useState<IncomingCallData | null>(null);
+  const [activeGlobalCall, setActiveGlobalCall] = useState<GlobalCall | null>(null);
+  const callWsRef = useRef<WebSocket | null>(null);
 
+  const publicScreens: Screen[] = [
+    'splash', 'onboarding', 'login', 'register', 'otp', 'setPassword',
+    'profileSetup', 'forgotPassword', 'resetPassword', 'loading', 'error', 'noInternet',
+  ];
+
+  const isAuthenticated = !!apiClient.getAccessToken();
+
+  // ── Navigate to a screen, tracking previous for smart back ────────────────
+  const goTo = useCallback((screen: Screen) => {
+    setPrevScreen((prev) => prev);
+    setCurrentScreen((prev) => { setPrevScreen(prev); return screen; });
+  }, []);
+
+  // ── Global call notification WebSocket ────────────────────────────────────
   useEffect(() => {
-    if (!publicScreens.includes(currentScreen)) {
-      if (!apiClient.getAccessToken()) {
-        setCurrentScreen('login');
+    const myId = apiClient.getUserId();
+    if (!isAuthenticated || !myId) return;
+
+    let closed = false;
+    let ws: WebSocket | null = null;
+
+    async function connect() {
+      try {
+        const res = await apiClient.post<{ ticket: string }>('/calls/user/ws-ticket', {});
+        if (closed) return;
+
+        const wsBase =
+          (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_WS_URL ??
+          'ws://localhost:6969';
+        ws = new WebSocket(`${wsBase}/ws/users/${myId}/calls`);
+        callWsRef.current = ws;
+
+        ws.onopen = () => {
+          ws!.send(JSON.stringify({ type: 'auth', ticket: res.ticket }));
+        };
+
+        ws.onmessage = ({ data }) => {
+          try {
+            const msg = JSON.parse(data as string) as {
+              type: string;
+              call_id: string;
+              caller_name: string;
+              caller_avatar?: string;
+              media_type: 'audio' | 'video';
+            };
+            if (msg.type === 'incoming_call') {
+              setIncomingCall({
+                callId: msg.call_id,
+                callerName: msg.caller_name,
+                callerAvatar: msg.caller_avatar ?? null,
+                mediaType: msg.media_type,
+              });
+            }
+          } catch { /* ignore malformed frames */ }
+        };
+
+        ws.onerror = () => {};
+        ws.onclose = () => {
+          // Auto-reconnect after 5s if still authenticated
+          if (!closed) {
+            setTimeout(() => { if (!closed) void connect(); }, 5000);
+          }
+        };
+      } catch {
+        // ticket fetch failed — retry after 10s
+        if (!closed) setTimeout(() => void connect(), 10_000);
       }
     }
-  }, [currentScreen]);
 
+    void connect();
+
+    return () => {
+      closed = true;
+      ws?.close();
+      callWsRef.current = null;
+    };
+  }, [isAuthenticated]); // re-connect when auth changes
+
+  // ── Bottom nav tab switch ─────────────────────────────────────────────────
+  useEffect(() => {
+    const k = screenKey; // reference to trigger re-render
+    if (activeTab === 'home') { setCurrentScreen('home'); setScreenKey(k + 1); }
+    else if (activeTab === 'tasks') { setTasksDefaultTab('client'); setCurrentScreen('tasksTab'); setScreenKey(k + 1); }
+    else if (activeTab === 'messages') { setCurrentScreen('messages'); setScreenKey(k + 1); }
+    else if (activeTab === 'wallet') setCurrentScreen('wallet');
+    else if (activeTab === 'profile') setCurrentScreen('profile');
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Auth guard ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!publicScreens.includes(currentScreen) && !apiClient.getAccessToken()) {
+      setCurrentScreen('login');
+    }
+  }, [currentScreen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Language sync ─────────────────────────────────────────────────────────
   useEffect(() => {
     setAppLanguage(apiClient.getCountryCode());
   }, []);
 
+  // ── Token refresh watchdog ─────────────────────────────────────────────────
   useEffect(() => {
     const check = async () => {
       const token = apiClient.getAccessToken();
@@ -172,33 +224,55 @@ export default function App() {
       try {
         const payload = JSON.parse(atob(token.split('.')[1] ?? ''));
         if (typeof payload.exp !== 'number') return;
-        const msUntilExp = payload.exp * 1000 - Date.now();
-        if (msUntilExp < 120_000) {
-          try {
-            await authService.refresh();
-          } catch {
-            await authService.logout();
-            setCurrentScreen('login');
-          }
+        if (payload.exp * 1000 - Date.now() < 120_000) {
+          try { await authService.refresh(); }
+          catch { await authService.logout(); setCurrentScreen('login'); }
         }
       } catch {
         await authService.logout();
         setCurrentScreen('login');
       }
     };
-
     void check();
     const timer = setInterval(check, 60_000);
     return () => clearInterval(timer);
   }, []);
 
-  const isAuthenticated = !!apiClient.getAccessToken();
-  const showBottomNav = isAuthenticated && ['home', 'taskerMode', 'tasksTab', 'messages', 'wallet', 'profile', 'categories', 'search', 'admin', 'callCenter', 'taskerApply', 'applicants'].includes(currentScreen);
+  // ── Global incoming call handlers ─────────────────────────────────────────
+  const handleGlobalAnswer = (callId: string, mediaType: 'audio' | 'video') => {
+    if (!incomingCall) return;
+    setActiveGlobalCall({
+      callId,
+      isCaller: false,
+      mediaType,
+      partnerName: incomingCall.callerName,
+      partnerAvatar: incomingCall.callerAvatar,
+    });
+    setIncomingCall(null);
+  };
+
+  const handleGlobalDecline = () => {
+    if (incomingCall) {
+      apiClient.post(`/calls/${incomingCall.callId}/end`, {}).catch(() => {});
+    }
+    setIncomingCall(null);
+  };
+
+  const showBottomNav =
+    isAuthenticated &&
+    ['home', 'taskerMode', 'tasksTab', 'messages', 'wallet', 'profile',
+      'categories', 'search', 'admin', 'callCenter', 'taskerApply', 'applicants',
+    ].includes(currentScreen);
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const openTaskDetail = (taskId: string) => {
+    setCurrentTaskId(taskId);
+    goTo('taskDetail');
+  };
 
   const renderScreen = () => {
-    if (!publicScreens.includes(currentScreen) && !isAuthenticated) {
-      return null;
-    }
+    if (!publicScreens.includes(currentScreen) && !isAuthenticated) return null;
+
     switch (currentScreen) {
       case 'splash':
         return <SplashScreen onComplete={() => setCurrentScreen('onboarding')} />;
@@ -250,10 +324,7 @@ export default function App() {
         return (
           <ForgotPasswordScreen
             onBack={() => setCurrentScreen('login')}
-            onCodeSent={(email) => {
-              setResetEmail(email);
-              setCurrentScreen('resetPassword');
-            }}
+            onCodeSent={(email) => { setResetEmail(email); setCurrentScreen('resetPassword'); }}
           />
         );
 
@@ -275,20 +346,15 @@ export default function App() {
         );
 
       case 'demoNav':
-        return <DemoNavigationScreen onNavigate={(screen) => setCurrentScreen(screen as Screen)} />;
+        return <DemoNavigationScreen onNavigate={(s) => setCurrentScreen(s as Screen)} />;
 
       case 'home':
         return (
           <HomeScreen
+            key={screenKey}
             onPostTask={() => setCurrentScreen('taskModeSelection')}
-            onViewApplicants={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('applicants');
-            }}
-            onTaskDetail={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('taskDetail');
-            }}
+            onViewApplicants={(taskId) => { setCurrentTaskId(taskId); goTo('applicants'); }}
+            onTaskDetail={openTaskDetail}
             onCategories={() => setCurrentScreen('categories')}
             onSelectCategory={(_, description) => {
               setInitialDescription(description);
@@ -315,28 +381,15 @@ export default function App() {
         );
 
       case 'search':
-        return (
-          <SearchScreen
-            onBack={() => setCurrentScreen('home')}
-          />
-        );
+        return <SearchScreen onBack={() => setCurrentScreen('home')} />;
 
       case 'notifications':
         return (
           <NotificationsScreen
             onBack={() => setCurrentScreen('home')}
-            onTaskDetail={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('taskDetail');
-            }}
-            onTaskChat={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('taskChat');
-            }}
-            onViewApplicants={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('applicants');
-            }}
+            onTaskDetail={openTaskDetail}
+            onTaskChat={(taskId) => { setCurrentTaskId(taskId); goTo('taskChat'); }}
+            onViewApplicants={(taskId) => { setCurrentTaskId(taskId); goTo('applicants'); }}
           />
         );
 
@@ -394,7 +447,7 @@ export default function App() {
         return (
           <ApplicantsScreen
             taskId={currentTaskId}
-            onBack={() => setCurrentScreen('home')}
+            onBack={() => setCurrentScreen(prevScreen)}
             onSelectTasker={() => setCurrentScreen('taskDetail')}
             onNegotiate={(taskerName, originalPrice, proposedPrice) => {
               setCurrentNegotiation({ taskerName, originalPrice, proposedPrice });
@@ -407,10 +460,16 @@ export default function App() {
         return (
           <TaskDetailScreen
             taskId={currentTaskId}
-            onBack={() => setCurrentScreen('home')}
+            onBack={() => {
+              // Return to the screen that opened this task detail
+              const back = ['tasksTab', 'home', 'messages', 'notifications', 'taskHistory']
+                .includes(prevScreen) ? prevScreen : 'home';
+              setCurrentScreen(back);
+              setScreenKey((k) => k + 1); // force refresh of list
+            }}
             onComplete={() => setCurrentScreen('paymentSuccess')}
-            onChat={() => setCurrentScreen('taskChat')}
-            onViewApplicants={() => setCurrentScreen('applicants')}
+            onChat={() => { goTo('taskChat'); }}
+            onViewApplicants={() => { goTo('applicants'); }}
           />
         );
 
@@ -419,9 +478,10 @@ export default function App() {
           <TaskChatScreen
             taskId={currentTaskId}
             onBack={() => {
-              // Return to messages if we came from there, otherwise taskDetail
-              if (activeTab === 'messages') setCurrentScreen('messages');
-              else setCurrentScreen('taskDetail');
+              const back = ['messages', 'tasksTab', 'taskDetail'].includes(prevScreen)
+                ? prevScreen
+                : 'taskDetail';
+              setCurrentScreen(back);
             }}
           />
         );
@@ -431,7 +491,7 @@ export default function App() {
           <ConfirmCompletionScreen
             taskId={currentTaskId}
             onBack={() => setCurrentScreen('taskDetail')}
-            onSuccess={() => setCurrentScreen('paymentSuccess')}
+            onSuccess={() => { setCurrentScreen('paymentSuccess'); setScreenKey((k) => k + 1); }}
             onReportIssue={() => setCurrentScreen('reportIssue')}
           />
         );
@@ -439,7 +499,7 @@ export default function App() {
       case 'paymentSuccess':
         return (
           <PaymentSuccessScreen
-            onDone={() => setCurrentScreen('home')}
+            onDone={() => { setCurrentScreen('home'); setScreenKey((k) => k + 1); }}
             onViewReceipt={() => setCurrentScreen('transactionHistory')}
           />
         );
@@ -450,10 +510,7 @@ export default function App() {
       case 'taskerMode':
         return (
           <TaskerModeScreen
-            onApply={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('taskerApply');
-            }}
+            onApply={(taskId) => { setCurrentTaskId(taskId); setCurrentScreen('taskerApply'); }}
             onBack={() => setCurrentScreen('home')}
           />
         );
@@ -473,21 +530,22 @@ export default function App() {
       case 'tasksTab':
         return (
           <TasksTabScreen
+            key={screenKey}
             defaultTab={tasksDefaultTab}
-            onTaskClick={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('taskDetail');
-            }}
-            onViewApplicants={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('applicants');
-            }}
+            onTaskClick={openTaskDetail}
+            onViewApplicants={(taskId) => { setCurrentTaskId(taskId); goTo('applicants'); }}
             onPostTask={() => setCurrentScreen('taskModeSelection')}
-            onChatOpen={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('taskChat');
-            }}
+            onChatOpen={(taskId) => { setCurrentTaskId(taskId); goTo('taskChat'); }}
             onExplore={() => setCurrentScreen('taskerMode')}
+          />
+        );
+
+      case 'messages':
+        return (
+          <MessagesScreen
+            key={screenKey}
+            onOpenChat={(taskId) => { setCurrentTaskId(taskId); goTo('taskChat'); }}
+            onPostTask={() => setCurrentScreen('taskModeSelection')}
           />
         );
 
@@ -502,28 +560,13 @@ export default function App() {
         );
 
       case 'sendMoney':
-        return (
-          <SendMoneyScreen
-            onBack={() => setCurrentScreen('wallet')}
-            onSuccess={() => setCurrentScreen('paymentSuccess')}
-          />
-        );
+        return <SendMoneyScreen onBack={() => setCurrentScreen('wallet')} onSuccess={() => setCurrentScreen('paymentSuccess')} />;
 
       case 'withdraw':
-        return (
-          <WithdrawScreen
-            onBack={() => setCurrentScreen('wallet')}
-            onSuccess={() => setCurrentScreen('paymentSuccess')}
-          />
-        );
+        return <WithdrawScreen onBack={() => setCurrentScreen('wallet')} onSuccess={() => setCurrentScreen('paymentSuccess')} />;
 
       case 'addFunds':
-        return (
-          <AddFundsScreen
-            onBack={() => setCurrentScreen('wallet')}
-            onSuccess={() => setCurrentScreen('paymentSuccess')}
-          />
-        );
+        return <AddFundsScreen onBack={() => setCurrentScreen('wallet')} onSuccess={() => setCurrentScreen('paymentSuccess')} />;
 
       case 'transactionHistory':
         return <TransactionHistoryScreen onBack={() => setCurrentScreen('wallet')} />;
@@ -538,59 +581,30 @@ export default function App() {
             onTaskHistory={() => setCurrentScreen('taskHistory')}
             onSettings={() => setCurrentScreen('settings')}
             onSupport={() => setCurrentScreen('support')}
-            onLogout={() => {
-              void authService.logout();
-              setCurrentScreen('login');
-            }}
+            onLogout={() => { void authService.logout(); setCurrentScreen('login'); }}
           />
         );
 
       case 'kyc':
-        return (
-          <KycScreen
-            onBack={() => setCurrentScreen('profile')}
-            onComplete={() => setCurrentScreen('profile')}
-          />
-        );
+        return <KycScreen onBack={() => setCurrentScreen('profile')} onComplete={() => setCurrentScreen('profile')} />;
 
       case 'editProfile':
-        return (
-          <EditProfileScreen
-            onBack={() => setCurrentScreen('profile')}
-            onSave={() => setCurrentScreen('profile')}
-          />
-        );
+        return <EditProfileScreen onBack={() => setCurrentScreen('profile')} onSave={() => setCurrentScreen('profile')} />;
 
       case 'paymentMethods':
-        return (
-          <PaymentMethodsScreen
-            onBack={() => setCurrentScreen('profile')}
-            onVirtualCards={() => setCurrentScreen('virtualCard')}
-          />
-        );
+        return <PaymentMethodsScreen onBack={() => setCurrentScreen('profile')} onVirtualCards={() => setCurrentScreen('virtualCard')} />;
 
       case 'addresses':
-        return (
-          <AddressesScreen
-            onBack={() => setCurrentScreen('profile')}
-          />
-        );
+        return <AddressesScreen onBack={() => setCurrentScreen('profile')} />;
 
       case 'virtualCard':
-        return (
-          <VirtualCardScreen
-            onBack={() => setCurrentScreen('paymentMethods')}
-          />
-        );
+        return <VirtualCardScreen onBack={() => setCurrentScreen('paymentMethods')} />;
 
       case 'taskHistory':
         return (
           <TaskHistoryScreen
             onBack={() => setCurrentScreen('profile')}
-            onTaskDetails={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('taskDetail');
-            }}
+            onTaskDetails={(taskId) => { setCurrentTaskId(taskId); goTo('taskDetail'); }}
           />
         );
 
@@ -599,20 +613,12 @@ export default function App() {
           <SettingsScreen
             onBack={() => setCurrentScreen('profile')}
             onSupport={() => setCurrentScreen('support')}
-            onLogout={() => {
-              void authService.logout();
-              setCurrentScreen('login');
-            }}
+            onLogout={() => { void authService.logout(); setCurrentScreen('login'); }}
           />
         );
 
       case 'support':
-        return (
-          <SupportScreen
-            onBack={() => setCurrentScreen('profile')}
-            onFAQ={() => setCurrentScreen('faq')}
-          />
-        );
+        return <SupportScreen onBack={() => setCurrentScreen('profile')} onFAQ={() => setCurrentScreen('faq')} />;
 
       case 'faq':
         return <FAQScreen onBack={() => setCurrentScreen('support')} />;
@@ -620,8 +626,9 @@ export default function App() {
       case 'reportIssue':
         return (
           <ReportIssueScreen
-            onBack={() => setCurrentScreen('taskDetail')}
-            onSubmit={() => setCurrentScreen('home')}
+            taskId={currentTaskId || undefined}
+            onBack={() => setCurrentScreen(prevScreen)}
+            onSubmit={() => setCurrentScreen(prevScreen)}
           />
         );
 
@@ -632,12 +639,7 @@ export default function App() {
         return <SkeletonLoadingScreen type="list" />;
 
       case 'error':
-        return (
-          <ErrorScreen
-            onRetry={() => setCurrentScreen('home')}
-            onBack={() => setCurrentScreen('home')}
-          />
-        );
+        return <ErrorScreen onRetry={() => setCurrentScreen('home')} onBack={() => setCurrentScreen('home')} />;
 
       case 'noInternet':
         return <NoInternetScreen onRetry={() => setCurrentScreen('home')} />;
@@ -700,30 +702,46 @@ export default function App() {
       case 'callCenter':
         return <CallCenterScreen />;
 
-      case 'messages':
-        return (
-          <MessagesScreen
-            onOpenChat={(taskId) => {
-              setCurrentTaskId(taskId);
-              setCurrentScreen('taskChat');
-            }}
-            onPostTask={() => setCurrentScreen('taskModeSelection')}
-          />
-        );
-
       default:
-        return <HomeScreen onPostTask={() => setCurrentScreen('taskModeSelection')} />;
+        return <HomeScreen key={screenKey} onPostTask={() => setCurrentScreen('taskModeSelection')} />;
     }
   };
 
   return (
     <ErrorBoundary>
       <div className="size-full bg-white flex flex-col max-w-md mx-auto relative">
+        {/* ── Global incoming call overlay (visible on ANY screen) ──────────── */}
+        {incomingCall && !activeGlobalCall && (
+          <div className="absolute inset-0 z-50">
+            <IncomingCallScreen
+              call={incomingCall}
+              onAnswer={handleGlobalAnswer}
+              onDecline={handleGlobalDecline}
+            />
+          </div>
+        )}
+
+        {/* ── Global active call (callee side) ──────────────────────────────── */}
+        {activeGlobalCall && (
+          <div className="absolute inset-0 z-50">
+            <CallScreen
+              callId={activeGlobalCall.callId}
+              isCaller={false}
+              mediaType={activeGlobalCall.mediaType}
+              partnerName={activeGlobalCall.partnerName}
+              partnerAvatar={activeGlobalCall.partnerAvatar}
+              onEnd={() => setActiveGlobalCall(null)}
+            />
+          </div>
+        )}
+
+        {/* ── Main screen content ───────────────────────────────────────────── */}
         <div className="flex-1 overflow-hidden">
           <Suspense fallback={<LoadingScreen />}>
             {renderScreen()}
           </Suspense>
         </div>
+
         {showBottomNav && (
           <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
         )}
