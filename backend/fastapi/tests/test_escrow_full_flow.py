@@ -70,8 +70,10 @@ def test_internal_escrow_release_credits_payee(db_session):
     escrow = svc.create_escrow("task-1", "payer", "payee", Decimal("500"), "XOF")
     svc.release_escrow(escrow.id)
 
+    from app.core.config import settings as _s
+    commission = (Decimal("500") * Decimal(str(_s.zaska_commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
     assert svc.get_balance("payer", "XOF") == Decimal("500")
-    assert svc.get_balance("payee", "XOF") == Decimal("500")
+    assert svc.get_balance("payee", "XOF") == Decimal("500") - commission
 
 
 def test_internal_escrow_refund_returns_to_payer(db_session):
@@ -143,7 +145,9 @@ def test_external_escrow_fund_then_release_credits_payee(db_session):
     assert escrow_funded.status == "funded"
 
     svc.release_escrow(escrow.id)
-    assert svc.get_balance("payee", "XOF") == Decimal("500")
+    from app.core.config import settings as _s
+    commission = (Decimal("500") * Decimal(str(_s.zaska_commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
+    assert svc.get_balance("payee", "XOF") == Decimal("500") - commission
 
 
 def test_external_escrow_fund_idempotent(db_session):
@@ -170,7 +174,7 @@ def test_external_escrow_cannot_fund_already_funded(db_session):
 # ── Conservation invariant ────────────────────────────────────────────────────
 
 def test_no_money_created_in_internal_flow(db_session):
-    """Total wallet balance before == total wallet balance after release."""
+    """Total wallet balance is reduced by exactly the ZASKA commission — no extra money created or destroyed."""
     svc = WalletService(db_session)
     svc.create_wallet("payer", "XOF")
     svc.create_wallet("payee", "XOF")
@@ -182,4 +186,10 @@ def test_no_money_created_in_internal_flow(db_session):
     svc.release_escrow(escrow.id)
 
     total_after = svc.get_balance("payer", "XOF") + svc.get_balance("payee", "XOF")
-    assert total_before == total_after, f"Money created: before={total_before} after={total_after}"
+    # 15% ZASKA commission goes to platform wallet (unconfigured in test env → not credited here).
+    # Verify total reduction == commission exactly — no phantom creation or extra loss.
+    from app.core.config import settings as _s
+    commission = (Decimal("600") * Decimal(str(_s.zaska_commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
+    assert total_before - commission == total_after, (
+        f"Expected={total_before - commission} (total_before={total_before} - commission={commission}), got={total_after}"
+    )

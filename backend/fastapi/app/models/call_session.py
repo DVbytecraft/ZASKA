@@ -18,7 +18,7 @@ class CallSession(Base):
     callee_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     media_type: Mapped[str] = mapped_column(String(8))   # 'audio' | 'video'
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
-    # pending → active → ended | rejected
+    # pending → active → ended | rejected | missed
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

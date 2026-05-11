@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
-import { taskService } from '@zaska/shared-services';
+import { apiClient, taskService } from '@zaska/shared-services';
 import type { Task } from '@zaska/shared-services';
 import {
   Sparkles, Package, FileText, Users, CheckCircle2, Activity,
@@ -83,6 +83,7 @@ export function HomeScreen({
   const [myTasks, setMyTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [unreadCount, setUnreadCount] = useState(0);
   const position = useGeolocation();
 
   const CATEGORIES = [
@@ -100,6 +101,13 @@ export function HomeScreen({
     return t('home.open');
   };
 
+  const loadUnreadCount = useCallback(() => {
+    apiClient
+      .get<{ count: number }>('/notifications/unread-count')
+      .then((res) => setUnreadCount(res.count ?? 0))
+      .catch(() => { /* best-effort — keep previous count */ });
+  }, []);
+
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
@@ -108,9 +116,25 @@ export function HomeScreen({
       .then(setMyTasks)
       .catch((err) => setError(err instanceof Error ? err.message : 'Erreur de chargement'))
       .finally(() => setLoading(false));
-  }, []);
+    loadUnreadCount();
+  }, [loadUnreadCount]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Re-load when tab becomes visible again (mobile foreground recovery)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [load]);
+
+  // Re-load on network recovery after going offline
+  useEffect(() => {
+    window.addEventListener('online', load);
+    return () => window.removeEventListener('online', load);
+  }, [load]);
 
   // Separate tasks by lifecycle status
   const openTasks = myTasks.filter((t) => t.status === 'OPEN' || t.status === 'PAUSED');
@@ -142,11 +166,18 @@ export function HomeScreen({
             )}
             {onNotifications && (
               <button
-                onClick={onNotifications}
+                onClick={() => { setUnreadCount(0); onNotifications?.(); }}
                 className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/25 backdrop-blur-sm flex items-center justify-center transition-colors border border-white/10 relative"
+                aria-label={unreadCount > 0 ? `${unreadCount} notifications non lues` : 'Notifications'}
               >
                 <Bell size={20} className="text-white" />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border border-white" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] bg-red-500 rounded-full border-2 border-white flex items-center justify-center">
+                    <span className="text-white text-[9px] font-bold leading-none px-0.5">
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </span>
+                  </span>
+                )}
               </button>
             )}
           </div>

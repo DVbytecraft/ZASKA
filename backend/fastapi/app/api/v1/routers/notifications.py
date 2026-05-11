@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -24,22 +25,37 @@ def _serialize(n: Notification) -> dict:
     }
 
 
+@router.get("/unread-count")
+def unread_count(
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    try:
+        count = db.execute(
+            select(func.count()).select_from(Notification).where(
+                Notification.user_id == user_id, Notification.read == False  # noqa: E712
+            )
+        ).scalar_one()
+        return success_response({"count": count})
+    except (OperationalError, ProgrammingError):
+        db.rollback()
+        return success_response({"count": 0})
+
+
 @router.get("")
 def list_notifications(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
     try:
-        notifs = (
-            db.query(Notification)
-            .filter(Notification.user_id == user_id)
+        notifs = db.execute(
+            select(Notification)
+            .where(Notification.user_id == user_id)
             .order_by(Notification.created_at.desc())
             .limit(50)
-            .all()
-        )
+        ).scalars().all()
         return success_response([_serialize(n) for n in notifs])
     except (OperationalError, ProgrammingError):
-        # Migration hasn't run yet — return empty list rather than crashing
         db.rollback()
         return success_response([])
 
@@ -50,9 +66,11 @@ def mark_read(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    notif = db.query(Notification).filter(
-        Notification.id == notif_id, Notification.user_id == user_id
-    ).one_or_none()
+    notif = db.execute(
+        select(Notification).where(
+            Notification.id == notif_id, Notification.user_id == user_id
+        )
+    ).scalars().one_or_none()
     if notif is None:
         raise HTTPException(status_code=404, detail="Notification introuvable")
     notif.read = True
@@ -65,8 +83,10 @@ def mark_all_read(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    db.query(Notification).filter(
-        Notification.user_id == user_id, Notification.read == False  # noqa: E712
-    ).update({"read": True})
+    db.execute(
+        Notification.__table__.update()
+        .where(Notification.user_id == user_id, Notification.read == False)  # noqa: E712
+        .values(read=True)
+    )
     db.commit()
     return success_response({"marked": True})

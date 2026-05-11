@@ -38,18 +38,74 @@ class BootstrapPayload(BaseModel):
 def bootstrap_admin(payload: BootstrapPayload, db: Session = Depends(get_db)):
     """Promote a user to admin role using the ADMIN_BOOTSTRAP_SECRET.
 
-    Call once after first deploy, then remove ADMIN_BOOTSTRAP_SECRET from env.
+    SECURITY RULES:
+    1. Only works when ADMIN_BOOTSTRAP_SECRET is set in env.
+    2. Refused if an admin already exists in the system (one-time operation).
+    3. Audit-logged in Redis with timestamp and IP (if available).
+    4. ADMIN_BOOTSTRAP_SECRET MUST be removed from env after first success.
+
+    After calling this endpoint successfully:
+      - Remove ADMIN_BOOTSTRAP_SECRET from your .env / Kubernetes secret.
+      - The endpoint will return 403 on all subsequent calls (no secret = locked).
     """
+    from app.core.observability import logger
+
     if not settings.admin_bootstrap_secret.strip():
-        raise HTTPException(status_code=403, detail="Bootstrap not available")
-    if payload.secret != settings.admin_bootstrap_secret:
+        raise HTTPException(status_code=403, detail="Bootstrap not available — ADMIN_BOOTSTRAP_SECRET not set")
+
+    # Constant-time comparison — prevents timing attacks on secret comparison
+    import hmac as _hmac
+    if not _hmac.compare_digest(
+        payload.secret.encode(),
+        settings.admin_bootstrap_secret.encode(),
+    ):
+        logger.warning("bootstrap_admin: invalid secret attempt for email={}", payload.email)
         raise HTTPException(status_code=403, detail="Invalid secret")
-    user = db.query(User).filter(User.email == payload.email.strip().lower()).one_or_none()
+
+    # ONE-SHOT GUARD: refuse if any admin already exists.
+    # This prevents the endpoint from being used to create a second admin
+    # even while the secret is still set (e.g. operator forgot to remove it).
+    existing_admin = db.execute(
+        select(User).where(User.role == settings.admin_role).limit(1)
+    ).scalars().one_or_none()
+    if existing_admin is not None:
+        logger.warning(
+            "bootstrap_admin: blocked — admin already exists (email={}) attempted by {}",
+            payload.email, existing_admin.email,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Bootstrap refused — an admin account already exists. "
+                "Remove ADMIN_BOOTSTRAP_SECRET from your environment immediately."
+            ),
+        )
+
+    user = db.execute(
+        select(User).where(User.email == payload.email.strip().lower())
+    ).scalars().one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
+
     user.role = settings.admin_role
     db.commit()
-    return success_response({"promoted": user.email, "role": user.role})
+
+    # Audit log in Redis — persistent for 90 days
+    audit_key = f"audit:bootstrap:{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    redis_sync.setex(audit_key, 86400 * 90, f"admin_promoted:{user.email}")
+
+    logger.warning(
+        "BOOTSTRAP_ADMIN: user {} promoted to admin role. "
+        "REMOVE ADMIN_BOOTSTRAP_SECRET FROM ENV NOW.",
+        user.email,
+    )
+
+    return success_response({
+        "promoted": user.email,
+        "role": user.role,
+        "action_required": "REMOVE ADMIN_BOOTSTRAP_SECRET from your environment immediately. "
+                           "This endpoint is now permanently locked (one admin already exists).",
+    })
 
 
 # ── Existing endpoints (preserved) ───────────────────────────────────────────
@@ -490,13 +546,15 @@ def resolve_payout(
     if payload.status == "completed" and payout.status == "failed":
         # The payout actually succeeded after all — undo the automatic rollback credit
         # (rollback credit is issued with reference "rollback:{payout.reference}")
-        from app.models.wallet import Transaction as WalletTransaction
+        from app.models.wallet import Transaction as WalletTransaction, Wallet as WalletModel
         from app.services.wallet_service import InsufficientFundsError
+        # Transaction has no user_id column — join through Wallet to filter by owner
         rollback_tx = (
             db.query(WalletTransaction)
+            .join(WalletModel, WalletTransaction.wallet_id == WalletModel.id)
             .filter(
                 WalletTransaction.reference == f"rollback:{payout.reference}",
-                WalletTransaction.user_id == payout.user_id,
+                WalletModel.user_id == payout.user_id,
             )
             .one_or_none()
         )

@@ -7,6 +7,7 @@ import secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db, require_kyc_approved
@@ -31,14 +32,12 @@ def _luhn_checksum(number: str) -> int:
 
 
 def _generate_card_number(card_type: str) -> str:
-    """Generate a valid Luhn card number using a CSPRNG."""
     if card_type == "visa":
         prefix = secrets.choice(_VISA_PREFIXES)
         length = 16
     else:
         prefix = secrets.choice(_MASTERCARD_PREFIXES)
         length = 16
-
     partial = prefix + "".join([str(secrets.randbelow(10)) for _ in range(length - len(prefix) - 1)])
     check = (10 - _luhn_checksum(partial + "0")) % 10
     return partial + str(check)
@@ -53,7 +52,6 @@ def _hash_value(value: str) -> str:
 
 
 def _generate_expiry() -> tuple[int, int]:
-    """Expiry = 4 years from now."""
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     return now.month, now.year + 4
@@ -90,12 +88,11 @@ def list_cards(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    cards = (
-        db.query(VirtualCard)
-        .filter(VirtualCard.user_id == user_id, VirtualCard.status != "cancelled")
+    cards = db.execute(
+        select(VirtualCard)
+        .where(VirtualCard.user_id == user_id, VirtualCard.status != "cancelled")
         .order_by(VirtualCard.created_at.desc())
-        .all()
-    )
+    ).scalars().all()
     return success_response([_serialize_card(c) for c in cards])
 
 
@@ -106,12 +103,11 @@ def generate_card(
     db: Session = Depends(get_db),
 ):
     """Génère une carte virtuelle Visa ou Mastercard pour l'utilisateur."""
-    # Limit: max 2 active cards per user
-    active_count = (
-        db.query(VirtualCard)
-        .filter(VirtualCard.user_id == user_id, VirtualCard.status == "active")
-        .count()
-    )
+    active_count = db.execute(
+        select(func.count()).select_from(VirtualCard).where(
+            VirtualCard.user_id == user_id, VirtualCard.status == "active"
+        )
+    ).scalar_one()
     if active_count >= 2:
         raise HTTPException(
             status_code=409,
@@ -137,7 +133,6 @@ def generate_card(
     db.commit()
     db.refresh(card)
 
-    # Return full details only at creation time
     return success_response({
         **_serialize_card(card),
         "cardNumber": _mask_card(card_number),
@@ -154,12 +149,13 @@ def update_card_status(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    card = db.query(VirtualCard).filter(VirtualCard.id == card_id, VirtualCard.user_id == user_id).one_or_none()
+    card = db.execute(
+        select(VirtualCard).where(VirtualCard.id == card_id, VirtualCard.user_id == user_id)
+    ).scalars().one_or_none()
     if card is None:
         raise HTTPException(status_code=404, detail="Carte introuvable")
     if card.status == "cancelled":
         raise HTTPException(status_code=409, detail="Une carte annulée ne peut pas être modifiée")
-
     card.status = payload.status
     db.commit()
     db.refresh(card)

@@ -1,0 +1,160 @@
+# ZASKA API — Kubernetes Deployment + Probes + PodDisruptionBudget + HPA
+#
+# These manifests prevent:
+#   - Traffic on pods without DB connection (readiness)
+#   - Zombie pods that accept connections but hang (liveness)
+#   - Rollouts that serve 500s during startup (startupProbe)
+#   - Full downtime during node maintenance (PodDisruptionBudget)
+#   - Under-provisioning under load (HorizontalPodAutoscaler)
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zaska-api
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0      # Never take a pod down before replacement is ready
+      maxSurge: 1            # Add one extra pod during rollout
+  selector:
+    matchLabels:
+      app: zaska-api
+  template:
+    metadata:
+      labels:
+        app: zaska-api
+    spec:
+      # Allow at least 30s for in-flight requests to drain before SIGKILL
+      terminationGracePeriodSeconds: 30
+
+      containers:
+        - name: zaska-api
+          image: zaska/api:latest
+          ports:
+            - containerPort: 6969
+
+          env:
+            - name: WEB_CONCURRENCY
+              value: "2"                # 2 uvicorn workers per pod; scale via HPA replicas
+            - name: DB_POOL_SIZE
+              value: "5"               # 5 connections per process × 2 workers × N pods
+            - name: DB_MAX_OVERFLOW
+              value: "10"              # burst headroom; total max = 15 per pod
+
+          # ── Startup Probe ──────────────────────────────────────────────────
+          # Gives the app 60s to start before liveness kicks in.
+          # Prevents premature kills during slow DB migrations.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 6969
+            failureThreshold: 12      # 12 × 5s = 60s total startup window
+            periodSeconds: 5
+
+          # ── Readiness Probe ────────────────────────────────────────────────
+          # Pod is removed from load balancer if DB or Redis is unavailable.
+          # /health/ready checks DB, Redis, ZASKA_WALLET_USER_ID, and JWT_SECRET strength.
+          # Pod is removed from LB if any critical financial config is missing.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 6969
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3       # Remove after 3 consecutive failures (30s)
+            successThreshold: 1
+            timeoutSeconds: 5
+
+          # ── Liveness Probe ─────────────────────────────────────────────────
+          # Restarts pod if it stops responding entirely (deadlock, OOM, etc.)
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 6969
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 4       # Restart after 4 × 15s = 60s of non-response
+            timeoutSeconds: 5
+
+          # ── Resource Limits ────────────────────────────────────────────────
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+
+          # ── Graceful Shutdown ──────────────────────────────────────────────
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]  # drain connections from LB first
+
+---
+# PodDisruptionBudget — AUDIT-05 FIX
+#
+# Without a PDB, a Kubernetes node drain (maintenance, rolling node upgrade) can
+# evict ALL pods simultaneously → full service downtime.
+# minAvailable: 1 guarantees at least one pod stays running during any disruption.
+# This means node drains will wait for a replacement pod before evicting the last one.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: zaska-api-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: zaska-api
+
+---
+# HorizontalPodAutoscaler — AUDIT-05 FIX
+#
+# Static replicas: 2 doesn't scale under load (traffic spikes, reconnect storms).
+# HPA scales between 2 and 10 pods based on:
+#   - CPU utilization (>70% average across pods → scale up)
+#   - Memory utilization (>80% → scale up; WebSocket connections consume ~1-2KB each)
+#
+# Scale-down is conservative (stabilizationWindowSeconds: 300) to avoid oscillation
+# under bursty WebSocket load where connections don't drop immediately.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: zaska-api-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: zaska-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300   # Wait 5min before scaling down (WebSocket drain)
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60             # Remove at most 1 pod per minute on scale-down
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60             # Add at most 2 pods per minute on scale-up

@@ -62,10 +62,16 @@ def _wallet_frontend_url(path: str) -> str:
 
 
 def _wallet_rate_limit(user_id: str) -> None:
+    # P1-007 FIX: Send INCR + EXPIRE in a single pipeline round-trip.
+    # Old code: two separate calls — if the process crashed after INCR but before
+    # EXPIRE, the key never expired and the user was permanently rate-limited.
+    # With a pipeline both commands land on Redis atomically (same network frame),
+    # eliminating the crash window between them.
     key = f"rl:wallet:{user_id}"
-    n = redis_sync.incr(key)
-    if n == 1:
-        redis_sync.expire(key, 60)
+    pipe = redis_sync.pipeline(transaction=False)
+    pipe.incr(key)
+    pipe.expire(key, 60)
+    n = pipe.execute()[0]
     if n > 60:
         raise HTTPException(status_code=429, detail="Too many wallet requests")
 
@@ -377,23 +383,11 @@ async def withdraw(
         )
         raise HTTPException(status_code=403, detail=str(exc))
 
-    # ── Payout record (pending) ────────────────────────────────────────────────
-    payout_record = Payout(
-        user_id=user_id,
-        amount=amount,
-        currency=currency,
-        provider=payload.provider,
-        phone_number=payload.phone_number,
-        country_code=cc,
-        reference=reference,
-        status="pending",
-    )
-    svc.db.add(payout_record)
-    svc.db.commit()
-    svc.db.refresh(payout_record)
-    payout_id = payout_record.id
-
-    # ── Step 1 : débit wallet ──────────────────────────────────────────────────
+    # ── DEBIT-FIRST: débit wallet avant création du Payout record ─────────────
+    # Règle fintech absolue : jamais de Payout record sans débit correspondant.
+    # Si le processus crashe entre débit et création du Payout → orphan debit détecté
+    # par reconciliation_service → réparation traçable.
+    # L'inverse (payout avant débit) risque un payout sans fonds → trou financier.
     try:
         debit_tx = svc.debit_wallet(
             user_id=user_id,
@@ -404,25 +398,30 @@ async def withdraw(
             metadata={
                 "type": "withdrawal",
                 "provider": payload.provider,
-                "payout_id": payout_id,
                 "country_code": cc,
             },
         )
     except InsufficientFundsError as exc:
-        payout_record.status = "failed"
-        payout_record.failure_reason = f"insufficient_funds: {exc}"
-        svc.db.commit()
         raise HTTPException(status_code=402, detail=str(exc))
     except ValueError as exc:
-        payout_record.status = "failed"
-        payout_record.failure_reason = str(exc)
-        svc.db.commit()
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # ── Payout record → processing ─────────────────────────────────────────────
-    payout_record.status = "processing"
-    payout_record.transaction_id = debit_tx.id
+    # ── Payout record créé APRÈS le débit (garantit l'ordre causal) ────────────
+    payout_record = Payout(
+        user_id=user_id,
+        amount=amount,
+        currency=currency,
+        provider=payload.provider,
+        phone_number=payload.phone_number,
+        country_code=cc,
+        reference=reference,
+        status="processing",
+        transaction_id=debit_tx.id,  # liaison immédiate au débit
+    )
+    svc.db.add(payout_record)
     svc.db.commit()
+    svc.db.refresh(payout_record)
+    payout_id = payout_record.id
 
     # ── Step 2 : appel API payout ──────────────────────────────────────────────
     try:

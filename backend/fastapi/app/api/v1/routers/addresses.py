@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
@@ -51,12 +52,11 @@ def list_addresses(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    addresses = (
-        db.query(UserAddress)
-        .filter(UserAddress.user_id == user_id)
+    addresses = db.execute(
+        select(UserAddress)
+        .where(UserAddress.user_id == user_id)
         .order_by(UserAddress.is_default.desc(), UserAddress.created_at.desc())
-        .all()
-    )
+    ).scalars().all()
     return success_response([_serialize(a) for a in addresses])
 
 
@@ -67,8 +67,11 @@ def create_address(
     db: Session = Depends(get_db),
 ):
     if payload.is_default:
-        db.query(UserAddress).filter(UserAddress.user_id == user_id).update({"is_default": False})
-
+        db.execute(
+            UserAddress.__table__.update()
+            .where(UserAddress.user_id == user_id)
+            .values(is_default=False)
+        )
     addr = UserAddress(
         user_id=user_id,
         label=payload.label,
@@ -92,17 +95,20 @@ def update_address(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    addr = db.query(UserAddress).filter(UserAddress.id == address_id, UserAddress.user_id == user_id).one_or_none()
+    addr = db.execute(
+        select(UserAddress).where(UserAddress.id == address_id, UserAddress.user_id == user_id)
+    ).scalars().one_or_none()
     if addr is None:
         raise HTTPException(status_code=404, detail="Adresse introuvable")
-
     if payload.is_default:
-        db.query(UserAddress).filter(UserAddress.user_id == user_id).update({"is_default": False})
-
+        db.execute(
+            UserAddress.__table__.update()
+            .where(UserAddress.user_id == user_id)
+            .values(is_default=False)
+        )
     changes = payload.model_dump(exclude_none=True)
     for key, val in changes.items():
         setattr(addr, key, val)
-
     db.commit()
     db.refresh(addr)
     return success_response(_serialize(addr))
@@ -114,7 +120,9 @@ def delete_address(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    addr = db.query(UserAddress).filter(UserAddress.id == address_id, UserAddress.user_id == user_id).one_or_none()
+    addr = db.execute(
+        select(UserAddress).where(UserAddress.id == address_id, UserAddress.user_id == user_id)
+    ).scalars().one_or_none()
     if addr is None:
         raise HTTPException(status_code=404, detail="Adresse introuvable")
     db.delete(addr)

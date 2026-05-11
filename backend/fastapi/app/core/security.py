@@ -32,12 +32,20 @@ def revoke_all_user_tokens(user_id: str) -> None:
     """Invalidate all existing tokens for a user by incrementing the version counter.
 
     Any JWT carrying an older 'ver' claim will be rejected by get_current_user_id.
+
+    AUDIT-02 FIX — Non-atomic INCR/EXPIRE:
+      OLD: redis_sync.incr(key) + redis_sync.expire(key) — two separate round-trips.
+           If the process crashes between INCR and EXPIRE the key has no TTL →
+           permanent key growth and the user's token_version can never age out.
+      NEW: Pipeline sends both commands in a single network frame — atomically on Redis.
     """
     from app.core.redis_client import redis_sync
 
     key = f"token_version:{user_id}"
-    redis_sync.incr(key)
-    redis_sync.expire(key, _TOKEN_VERSION_TTL)
+    pipe = redis_sync.pipeline(transaction=False)
+    pipe.incr(key)
+    pipe.expire(key, _TOKEN_VERSION_TTL)
+    pipe.execute()
 
 
 def create_token(subject: str, expires_delta: timedelta, token_type: str) -> str:

@@ -4,7 +4,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.core.redis_client import redis_sync
+from app.core.redis_client import redis_async
 from app.core.responses import error_response
 
 # Atomic INCR + conditional EXPIRE — eliminates the TOCTOU window where a crash
@@ -19,7 +19,7 @@ return count
 
 
 class RedisRateLimitMiddleware(BaseHTTPMiddleware):
-    """Fixed-window rate limiting per client IP via Redis (atomic Lua)."""
+    """Fixed-window rate limiting per client IP via Redis (atomic Lua, async-safe)."""
 
     def __init__(self, app, prefix: str = "rl:http", max_requests: int = 180, window_seconds: int = 60):
         super().__init__(app)
@@ -35,7 +35,12 @@ class RedisRateLimitMiddleware(BaseHTTPMiddleware):
         window = int(time.time() // self.window_seconds)
         key = f"{self.prefix}:{client}:{window}"
 
-        n = redis_sync.eval(_LUA_RATE_LIMIT, 1, key, str(self.window_seconds + 5))
+        try:
+            # redis_async is AsyncRedis — await is non-blocking on the event loop.
+            n = await redis_async.eval(_LUA_RATE_LIMIT, 1, key, str(self.window_seconds + 5))
+        except Exception:
+            # Redis unavailable — fail open (let request through) rather than hard-blocking.
+            return await call_next(request)
 
         if n > self.max_requests:
             return JSONResponse(

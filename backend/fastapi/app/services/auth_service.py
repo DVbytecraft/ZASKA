@@ -4,6 +4,7 @@ import secrets
 import uuid
 from datetime import timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -21,6 +22,14 @@ def _hash_otp(code: str) -> str:
 
 def _verify_otp_hash(code: str, stored_hash: str) -> bool:
     return hmac.compare_digest(_hash_otp(code), stored_hash)
+
+
+def _get_user_by_email(db: Session, email: str) -> User | None:
+    return db.execute(select(User).where(User.email == email)).scalars().one_or_none()
+
+
+def _get_user_by_phone(db: Session, phone: str) -> User | None:
+    return db.execute(select(User).where(User.phone == phone)).scalars().one_or_none()
 
 
 class AuthService:
@@ -41,9 +50,9 @@ class AuthService:
         phone = phone.strip()
         email_norm = email.lower().strip() if email else None
 
-        if email_norm and self.db.query(User).filter(User.email == email_norm).one_or_none():
+        if email_norm and _get_user_by_email(self.db, email_norm):
             raise ValueError("Email already registered")
-        if self.db.query(User).filter(User.phone == phone).one_or_none():
+        if _get_user_by_phone(self.db, phone):
             raise ValueError("Phone already registered")
 
         user = User(
@@ -60,6 +69,61 @@ class AuthService:
         )
         self.db.add(user)
 
+        # Flush to obtain user.id without committing — allows wallet rows to reference it
+        # in the same transaction so all three objects commit atomically below.
+        self.db.flush()
+
+        # Create wallets atomically with the user.
+        # OLD pattern (3 separate commits in the router) had a crash gap:
+        #   user committed → crash → wallets never created → user exists without wallet.
+        # NEW: user + wallets in one commit; if anything fails, the whole registration rolls back.
+        #
+        # USD:  universal currency for international transactions
+        # Local: user's country primary currency (derived from country_code)
+        # Both are created upfront so GET /wallet/balance never returns WalletNotFoundError
+        # for a freshly registered user.
+        from decimal import Decimal as _D
+        from app.models.wallet import Wallet as _Wallet
+        currencies_to_create = {"USD"}
+        if country_code:
+            _COUNTRY_CURRENCY = {
+                # XOF — BCEAO zone (West Africa)
+                "TG": "XOF", "SN": "XOF", "CI": "XOF", "BJ": "XOF",
+                "BF": "XOF", "ML": "XOF", "NE": "XOF", "GW": "XOF",
+                # XAF — BEAC zone (Central Africa)
+                "CM": "XAF", "CG": "XAF", "GA": "XAF", "CF": "XAF",
+                "TD": "XAF", "GQ": "XAF",
+                # Other African currencies
+                "GH": "GHS",
+                "NG": "NGN",
+                "KE": "KES",
+                "ZA": "ZAR",
+                "ET": "ETB",
+                "TZ": "TZS",
+                "UG": "UGX",
+                "RW": "RWF",
+                "MA": "MAD",
+                # Europe
+                "FR": "EUR", "DE": "EUR", "ES": "EUR", "IT": "EUR",
+                "PT": "EUR", "NL": "EUR", "BE": "EUR", "AT": "EUR",
+                "FI": "EUR", "IE": "EUR", "LU": "EUR", "GR": "EUR",
+                "GB": "EUR",   # GBP not supported in platform — EUR fallback
+                # Americas
+                "US": "USD",   # USD already in currencies_to_create
+                "CA": "USD",
+            }
+            local_currency = _COUNTRY_CURRENCY.get(country_code.upper(), "XOF")
+            currencies_to_create.add(local_currency)
+        else:
+            currencies_to_create.add("XOF")
+
+        for _currency in currencies_to_create:
+            self.db.add(_Wallet(
+                user_id=user.id,
+                currency=_currency,
+                balance=_D("0"),
+            ))
+
         otp_code = f"{secrets.randbelow(1_000_000):06d}"
         otp_hash = _hash_otp(otp_code)
         otp_key = f"otp:phone:{phone}"
@@ -71,7 +135,6 @@ class AuthService:
                 self.db.rollback()
                 raise ValueError("Failed to send verification email — check SMTP configuration")
         elif provider == "smtp" and not email_norm:
-            # No email provided — proceed without email OTP; user can verify via bypass
             logger.warning("otp:smtp_requested_but_no_email phone={}", phone)
         else:
             env_norm = str(settings.env).strip().lower()
@@ -84,10 +147,11 @@ class AuthService:
             logger.info("[OTP MOCK] phone={} code={}", phone, otp_code)
 
         redis_sync.setex(otp_key, settings.otp_expire_minutes * 60, otp_hash)
+        # Single atomic commit: user + wallets + nothing else
         self.db.commit()
         self.db.refresh(user)
 
-        return {"userId": user.id, "phone": phone}
+        return {"userId": user.id, "phone": phone, "currencies": list(currencies_to_create)}
 
     def verify_otp(self, phone: str, code: str) -> dict:
         phone = phone.strip()
@@ -95,7 +159,7 @@ class AuthService:
         if not stored_hash or not _verify_otp_hash(code, stored_hash):
             raise ValueError("Invalid or expired OTP code")
 
-        user = self.db.query(User).filter(User.phone == phone).one_or_none()
+        user = _get_user_by_phone(self.db, phone)
         if user is None:
             raise ValueError("User not found")
 
@@ -109,7 +173,7 @@ class AuthService:
 
     def resend_otp(self, phone: str) -> None:
         phone = phone.strip()
-        user = self.db.query(User).filter(User.phone == phone).one_or_none()
+        user = _get_user_by_phone(self.db, phone)
         if user is None:
             raise ValueError("User not found")
         if user.is_verified:
@@ -126,7 +190,7 @@ class AuthService:
             logger.info("[OTP MOCK] resend phone={} code={}", phone, otp_code)
 
     def set_password(self, email: str, password: str) -> None:
-        user = self.db.query(User).filter(User.email == email).one_or_none()
+        user = _get_user_by_email(self.db, email)
         if user is None:
             raise ValueError("User not found")
         if not user.is_verified:
@@ -138,7 +202,7 @@ class AuthService:
 
     def login(self, email: str, password: str, country_code: str | None = None) -> dict:
         email = email.strip().lower()
-        user = self.db.query(User).filter(User.email == email).one_or_none()
+        user = _get_user_by_email(self.db, email)
         if user is None or not user.password_hash or not verify_password(password, user.password_hash):
             raise ValueError("Invalid credentials")
         if not user.is_verified:
@@ -151,6 +215,8 @@ class AuthService:
         tokens = self._generate_tokens(user.id)
         tokens["userId"] = user.id
         tokens["email"] = user.email
+        tokens["role"] = user.role
+        tokens["isAdmin"] = (user.role == "admin")
         return tokens
 
     def logout(self, refresh_token: str) -> None:
@@ -165,9 +231,8 @@ class AuthService:
 
     def forgot_password(self, email: str) -> None:
         email = email.strip().lower()
-        user = self.db.query(User).filter(User.email == email).one_or_none()
+        user = _get_user_by_email(self.db, email)
         if user is None:
-            # Silent — don't reveal whether the email is registered
             logger.info("forgot_password:email_not_found email={}", email)
             return
 
@@ -189,7 +254,7 @@ class AuthService:
         if not stored_hash or not _verify_otp_hash(code, stored_hash):
             raise ValueError("Code invalide ou expiré")
 
-        user = self.db.query(User).filter(User.email == email).one_or_none()
+        user = _get_user_by_email(self.db, email)
         if user is None:
             raise ValueError("Utilisateur introuvable")
 

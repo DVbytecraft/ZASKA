@@ -1,6 +1,17 @@
 """
 Lightweight asyncio scheduler — replaces Celery beat for free-tier deployments.
 Runs periodic background tasks inside the FastAPI process.
+
+MULTI-INSTANCE SAFETY:
+Each FastAPI replica (pod) runs its own in-process scheduler.  Without distributed
+locks, every job would run N times (once per replica) on every tick.  To prevent
+this, every job acquires a Redis lock with TTL = (interval - safety_margin) via
+SET NX.  Only the first instance to call SET NX wins; the others skip gracefully.
+
+The lock is NOT explicitly released after the job completes.  It expires via TTL
+slightly before the next scheduled run, allowing any surviving instance to win the
+next cycle.  This prevents two instances from running the same job within a single
+interval window — even if one finishes early.
 """
 
 from __future__ import annotations
@@ -27,29 +38,125 @@ logger = logging.getLogger(__name__)
 
 _tasks: list[asyncio.Task] = []
 
+_job_heartbeats: dict[str, datetime] = {}
+
+_JOB_MAX_SILENCE: dict[str, float] = {
+    "release_held_escrows": 900,
+    "process_outbox": 120,
+    "check_pending_payouts": 300,
+    "reconciliation": 900,
+    "otp_cleanup": 1800,
+    "backup_postgres": 172800,
+}
+
+
+# ── Distributed lock helper ───────────────────────────────────────────────────
+
+def _acquire_job_lock(name: str, ttl_seconds: int) -> bool:
+    """Try to acquire a distributed Redis lock for a scheduler job.
+
+    Returns True if the lock was acquired (this instance should run the job).
+    Returns False if another instance already holds the lock (skip this run).
+
+    TTL should be slightly less than the job interval (interval - 10s).  The
+    lock is intentionally NOT released after the job — it expires naturally so
+    only ONE instance runs the job within each interval window, even if the job
+    finishes early on the winning instance.
+    """
+    from app.core.redis_client import redis_sync
+    lock_key = f"scheduler:{name}:lock"
+    acquired = redis_sync.set(lock_key, "1", ex=ttl_seconds, nx=True)
+    if not acquired:
+        logger.info("scheduler[%s]: distributed lock held — skipping this cycle", name)
+        return False
+    return True
+
 
 async def _run_every(interval: float, name: str, fn) -> None:
-    """Run fn() in a thread every `interval` seconds. Errors are logged, not raised."""
-    await asyncio.sleep(30)  # let the app finish startup before first run
+    """Run fn() in a thread every `interval` seconds.
+
+    Errors are caught, logged, and the job continues (no silent death).
+    Heartbeats are updated after each run so the watchdog can detect stuck jobs.
+    """
+    await asyncio.sleep(30)
     loop = asyncio.get_event_loop()
     while True:
+        start = datetime.utcnow()
         try:
             await loop.run_in_executor(None, fn)
-            logger.info("scheduler[%s]: ok", name)
+            _job_heartbeats[name] = datetime.utcnow()
+            elapsed = (datetime.utcnow() - start).total_seconds()
+            logger.info("scheduler[%s]: ok elapsed=%.1fs", name, elapsed)
         except Exception as exc:
-            logger.error("scheduler[%s]: failed — %s", name, exc)
+            elapsed = (datetime.utcnow() - start).total_seconds()
+            logger.error("scheduler[%s]: failed elapsed=%.1fs — %s", name, elapsed, exc)
+            _job_heartbeats[name] = datetime.utcnow()
         await asyncio.sleep(interval)
+
+
+async def _watchdog() -> None:
+    """Watchdog task — checks that all scheduled jobs are still running."""
+    while True:
+        await asyncio.sleep(60)
+        now = datetime.utcnow()
+        for name, max_silence in _JOB_MAX_SILENCE.items():
+            last = _job_heartbeats.get(name)
+            if last is None:
+                continue
+            silence = (now - last).total_seconds()
+            if silence > max_silence:
+                logger.error(
+                    "SCHEDULER_WATCHDOG_ALERT: job '%s' silent for %.0fs (max %.0fs) — "
+                    "potential dead task or crash",
+                    name, silence, max_silence,
+                )
+
+
+def get_scheduler_health() -> dict:
+    now = datetime.utcnow()
+    status = {}
+    for name, max_silence in _JOB_MAX_SILENCE.items():
+        last = _job_heartbeats.get(name)
+        if last is None:
+            status[name] = {"status": "not_started", "last_run": None, "silence_s": None}
+        else:
+            silence = (now - last).total_seconds()
+            status[name] = {
+                "status": "dead" if silence > max_silence else "ok",
+                "last_run": last.isoformat(),
+                "silence_s": round(silence, 1),
+                "max_silence_s": max_silence,
+            }
+    return status
 
 
 # ── Job implementations ───────────────────────────────────────────────────────
 
 def _cleanup_otp() -> None:
+    # Lock TTL = 290s (interval 300s - 10s).  Only one replica runs this per cycle.
+    if not _acquire_job_lock("otp_cleanup", 290):
+        return
+    # P1-010 FIX: SCAN-based iteration instead of redis.keys("otp:*")
     from app.core.redis_client import redis_sync
-    keys = redis_sync.keys("otp:*")
-    logger.info("otp_cleanup: active_keys=%s", len(keys))
+    count = 0
+    cursor = 0
+    while True:
+        cursor, keys = redis_sync.scan(cursor, match="otp:*", count=100)
+        count += len(keys)
+        if cursor == 0:
+            break
+    logger.info("otp_cleanup: active_keys=%s", count)
 
 
 def _release_held_escrows() -> None:
+    from app.core.redis_client import redis_sync
+    # Existing lock pattern kept — TTL 290s for 300s interval
+    lock_key = "scheduler:release_held_escrows:lock"
+    acquired = redis_sync.set(lock_key, "1", ex=290, nx=True)
+    if not acquired:
+        logger.info("release_held_escrows: lock held by another instance — skipping")
+        return
+
     db = SessionLocal()
     try:
         now = datetime.utcnow()
@@ -64,20 +171,25 @@ def _release_held_escrows() -> None:
         released = 0
         errors = 0
         for escrow in expired:
+            # P1-011 FIX: capture fields before release_escrow commits
+            esc_id = escrow.id
+            esc_payee_id = escrow.payee_id
+            esc_amount = escrow.amount
+            esc_currency = escrow.currency
             try:
-                wallet_svc.release_escrow(escrow.id)
+                wallet_svc.release_escrow(esc_id)
                 FinancialAuditLogger.log(
                     action="escrow_auto_released",
-                    user_id=escrow.payee_id or "",
-                    payment_id=escrow.id,
-                    amount=escrow.amount,
-                    currency=escrow.currency,
+                    user_id=esc_payee_id or "",
+                    payment_id=esc_id,
+                    amount=esc_amount,
+                    currency=esc_currency,
                     provider="internal",
                     status="released",
                 )
                 released += 1
             except Exception as exc:
-                logger.error("escrow_auto_release: failed escrow=%s — %s", escrow.id, exc)
+                logger.error("escrow_auto_release: failed escrow=%s — %s", esc_id, exc)
                 errors += 1
 
         logger.info(
@@ -88,7 +200,50 @@ def _release_held_escrows() -> None:
         db.close()
 
 
+def _process_outbox() -> None:
+    """Deliver pending outbox events (transactional outbox pattern).
+
+    Lock TTL = 25s (interval 30s - 5s).  At high replica count, only one instance
+    processes the outbox per 30s window.  The outbox service uses SELECT FOR UPDATE
+    SKIP LOCKED internally, so concurrent executions are also safe — the lock here
+    is purely to reduce unnecessary DB load from redundant runs.
+    """
+    if not _acquire_job_lock("process_outbox", 25):
+        return
+    from app.services.outbox_service import OutboxService
+    db = SessionLocal()
+    try:
+        result = OutboxService.process_pending(db)
+        if result["delivered"] or result["failed"] or result["dead_letter"]:
+            logger.info(
+                "outbox: delivered=%s failed=%s dead_letter=%s",
+                result["delivered"], result["failed"], result["dead_letter"],
+            )
+    except Exception as exc:
+        logger.error("outbox_processor: failed — %s", exc)
+    finally:
+        db.close()
+
+
+def _run_reconciliation() -> None:
+    """Run full financial reconciliation.
+
+    Lock TTL = 290s (interval 300s - 10s).  Reconciliation reads the ledger and
+    may log drift — running it concurrently on multiple replicas would produce
+    duplicate alerts and unnecessary DB load.
+    """
+    if not _acquire_job_lock("reconciliation", 290):
+        return
+    from app.services.reconciliation_service import run_reconciliation
+    report = run_reconciliation()
+    issues = report.get("summary", {}).get("issues_total", 0)
+    logger.info("reconciliation: issues=%s", issues)
+
+
 def _check_pending_payouts() -> None:
+    # Lock TTL = 55s (interval 60s - 5s)
+    if not _acquire_job_lock("check_pending_payouts", 55):
+        return
     from app.services.payment.reconciliation_engine import ReconciliationEngine
     db = SessionLocal()
     try:
@@ -109,6 +264,10 @@ def _check_pending_payouts() -> None:
 
 
 def _backup_postgres() -> None:
+    # Lock TTL = 86390s (interval 86400s - 10s).  Only one replica runs the daily backup.
+    if not _acquire_job_lock("backup_postgres", 86390):
+        return
+
     backup_dir = Path(settings.backup_dir)
     backup_dir.mkdir(parents=True, exist_ok=True)
 
@@ -159,21 +318,24 @@ def _backup_postgres() -> None:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def start_scheduler() -> None:
-    """Create asyncio background tasks for all periodic jobs."""
+    """Create asyncio background tasks for all periodic jobs + watchdog."""
     jobs = [
         (300,   "otp_cleanup",           _cleanup_otp),
         (300,   "release_held_escrows",  _release_held_escrows),
+        (30,    "process_outbox",        _process_outbox),
         (60,    "check_pending_payouts", _check_pending_payouts),
+        (300,   "reconciliation",        _run_reconciliation),
         (86400, "backup_postgres",       _backup_postgres),
     ]
     for interval, name, fn in jobs:
         task = asyncio.create_task(_run_every(interval, name, fn))
         _tasks.append(task)
-    logger.info("scheduler: started %s periodic jobs", len(jobs))
+    watchdog_task = asyncio.create_task(_watchdog())
+    _tasks.append(watchdog_task)
+    logger.info("scheduler: started %s periodic jobs + watchdog", len(jobs))
 
 
 def stop_scheduler() -> None:
-    """Cancel all scheduler tasks (called on shutdown)."""
     for task in _tasks:
         task.cancel()
     _tasks.clear()

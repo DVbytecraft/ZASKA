@@ -39,6 +39,15 @@ def release_held_escrows(self):
     and no contest has been filed. Automatically releases payment to the tasker.
     This is the 24h automatic release after task completion.
     """
+    # Distributed lock — coordinate with the asyncio scheduler running in each FastAPI
+    # process.  TTL matches the scheduler interval (300s) minus a 10s grace window.
+    from app.core.redis_client import redis_sync as _redis
+    lock_key = "scheduler:release_held_escrows:lock"
+    acquired = _redis.set(lock_key, "celery", ex=290, nx=True)
+    if not acquired:
+        logger.info("release_held_escrows: lock held — skipping this Celery run")
+        return {"skipped": True, "reason": "distributed_lock"}
+
     db = SessionLocal()
     released = 0
     errors = 0

@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -67,33 +68,54 @@ def _record_neg_event(
 
 # ─── Serializers ─────────────────────────────────────────────────────────────
 
-def _serialize_task(task: Task) -> dict:
+def _serialize_task(task: Task, viewer_id: str | None = None) -> dict:
+    """Serialize a task.
+
+    viewer_id=None  → called from a participant-only endpoint (access already verified
+                      by the endpoint guard).  Return full data.
+
+    viewer_id=<uid> → called from a public/listing endpoint.  Redact sensitive fields
+                      for non-OPEN tasks when the viewer is not a participant.
+                      This prevents IDOR on task listings (SEC-01 / privacy fix).
+
+    Sensitive fields (participant-only): assignedTo, negotiatedPrice, negotiatedBy,
+      completionPercent, proofPhotoUrl, exact lat/lng, exact address (non-OPEN).
+    """
+    # When viewer_id is provided, apply privacy filter for non-participants on non-OPEN tasks
+    redact = False
+    if viewer_id is not None and task.status != "OPEN":
+        is_participant = (task.created_by == viewer_id or task.assigned_to == viewer_id)
+        redact = not is_participant
+
+    lat = None if redact else task.latitude
+    lng = None if redact else task.longitude
+
     return {
         "id": task.id,
         "title": task.title,
         "description": task.description,
         "price": float(task.price),
         "currency": task.currency,
-        "latitude": task.latitude,
-        "longitude": task.longitude,
-        "address": task.address,
+        "latitude": lat,
+        "longitude": lng,
+        "address": None if redact else task.address,
         "status": task.status,
         "mode": getattr(task, "mode", "fast") or "fast",
         "createdBy": task.created_by,
-        "assignedTo": task.assigned_to,
-        "completionPercent": task.completion_percent,
-        "negotiationStatus": task.negotiation_status,
-        "originalPrice": float(task.original_price) if task.original_price else None,
-        "negotiatedPrice": float(task.negotiated_price) if task.negotiated_price else None,
-        "negotiatedBy": task.negotiated_by,
+        "assignedTo": None if redact else task.assigned_to,
+        "completionPercent": None if redact else task.completion_percent,
+        "negotiationStatus": None if redact else task.negotiation_status,
+        "originalPrice": (None if redact else (float(task.original_price) if task.original_price else None)),
+        "negotiatedPrice": (None if redact else (float(task.negotiated_price) if task.negotiated_price else None)),
+        "negotiatedBy": None if redact else task.negotiated_by,
         "scheduledAt": task.scheduled_at.isoformat() if task.scheduled_at else None,
         "anySchedule": bool(task.any_schedule),
         "createdAt": task.created_at.isoformat() if task.created_at else None,
-        "stops": task.stops,
+        "stops": None if redact else task.stops,
         "city": getattr(task, "city", None),
         "country": getattr(task, "country", None),
-        "creatorRated": bool(getattr(task, "creator_rated", False)),
-        "proofPhotoUrl": getattr(task, "proof_photo_url", None),
+        "creatorRated": None if redact else bool(getattr(task, "creator_rated", False)),
+        "proofPhotoUrl": None if redact else getattr(task, "proof_photo_url", None),
     }
 
 
@@ -197,7 +219,7 @@ def list_tasks(
         )
         result = []
         for t, dist in zip(tasks, distances):
-            d = _serialize_task(t)
+            d = _serialize_task(t, viewer_id=user_id)
             d["distanceKm"] = round(dist, 1) if dist is not None else None
             result.append(d)
         return success_response(result)
@@ -235,10 +257,14 @@ def get_task(
     service: TaskService = Depends(get_task_service),
     user_id: str = Depends(get_current_user_id),
 ):
-    _ = user_id
     try:
         task = _get_task_or_404(task_id, service)
-        return success_response(_serialize_task(task))
+        # OPEN tasks are publicly browseable; any authenticated user may view them.
+        # Non-OPEN tasks contain sensitive data (assignee, negotiated price) and must
+        # only be visible to the two participants of the task.
+        if task.status != "OPEN" and task.created_by != user_id and task.assigned_to != user_id:
+            raise HTTPException(status_code=403, detail="Accès non autorisé à cette tâche")
+        return success_response(_serialize_task(task, viewer_id=user_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -344,15 +370,18 @@ def cancel_task(
         task = _get_task_or_404(task_id, service)
         if task.created_by != user_id:
             raise HTTPException(status_code=403, detail="Non autorisé")
-        if task.status not in ("ASSIGNED", "PAUSED", "OPEN"):
+        if task.status not in ("ASSIGNED", "PAUSED", "OPEN", "PENDING_VALIDATION"):
             raise HTTPException(status_code=409, detail="La tâche ne peut être annulée dans cet état")
 
         tasker_id = task.assigned_to
         new_status = "OPEN" if payload.republish else "CANCELLED"
 
-        # Refund escrow if funded (only relevant when ASSIGNED)
+        # Refund escrow if funded (only relevant when ASSIGNED).
+        # P1-005 FIX: use FOR UPDATE so a concurrent cancel/abandon cannot both
+        # read status="funded" and both try to refund (race would result in a 500
+        # on the second EscrowError instead of a clean 409).
         if tasker_id:
-            escrow = wallet_svc.get_escrow_by_task(task_id)
+            escrow = wallet_svc.get_escrow_by_task_for_update(task_id)
             if escrow and escrow.status in ("funded", "hold"):
                 try:
                     wallet_svc.refund_escrow(escrow.id)
@@ -492,7 +521,10 @@ def accept_task(
         else:
             tasker_id = user_id
 
-        task = service.accept_task(task_id=task_id, tasker_id=tasker_id)
+        try:
+            task = service.accept_task(task_id=task_id, tasker_id=tasker_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
 
         # In-app + email notifications (best-effort)
         try:
@@ -543,12 +575,24 @@ def update_status(
     service: TaskService = Depends(get_task_service),
     user_id: str = Depends(get_current_user_id),
 ):
+    # Statuses that must go through dedicated endpoints (with escrow/payment logic).
+    # Bypassing these via PATCH /status would leave escrow in inconsistent state.
+    _RESERVED_STATUSES = {"COMPLETED", "CANCELLED", "RELEASED", "PARTIAL_RELEASED", "REFUNDED"}
+    if payload.status.upper() in _RESERVED_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Le statut '{payload.status}' doit être défini via l'endpoint dédié "
+                f"(/confirm, /cancel, /tasker-abandon). "
+                f"Modification directe refusée pour préserver la cohérence du paiement."
+            ),
+        )
     try:
         task = _get_task_or_404(task_id, service)
         if task.created_by != user_id and task.assigned_to != user_id:
             raise HTTPException(status_code=403, detail="Non autorisé à modifier le statut de cette tâche")
         task = service.update_status(task_id=task_id, status=payload.status)
-        return success_response(_serialize_task(task))
+        return success_response(_serialize_task(task, viewer_id=user_id))
     except HTTPException:
         raise
     except Exception as exc:
@@ -637,9 +681,13 @@ def respond_to_negotiation(
 
         if payload.accept:
             task = service.accept_negotiation(task_id)
-            # Adjust escrow amount to match the newly accepted price
+            # Adjust escrow amount to match the newly accepted price.
+            # P0-003 FIX: credit_wallet() and debit_wallet() commit internally.
+            # After each internal commit, escrow.amount must be committed in its OWN
+            # explicit db.commit() — db.flush() is insufficient since the session
+            # transaction was already committed by the wallet operation.
             try:
-                escrow = wallet_svc.get_escrow_by_task(task_id)
+                escrow = wallet_svc.get_escrow_by_task_for_update(task_id)
                 if escrow and task.price and escrow.status in ("funded", "hold"):
                     diff = task.price - escrow.amount
                     if diff < Decimal("0"):
@@ -649,8 +697,9 @@ def respond_to_negotiation(
                             amount=-diff, reference=f"neg_refund:{escrow.id}",
                             metadata={"type": "negotiation_refund", "task_id": task_id},
                         )
+                        # credit_wallet committed — begin fresh transaction for escrow update
                         escrow.amount = task.price
-                        db.flush()
+                        db.commit()  # explicit commit — not flush — to persist escrow.amount
                     elif diff > Decimal("0"):
                         # Negotiated price is higher — debit client if they have funds
                         try:
@@ -659,8 +708,9 @@ def respond_to_negotiation(
                                 amount=diff, reference=f"neg_topup:{escrow.id}",
                                 metadata={"type": "negotiation_topup", "task_id": task_id},
                             )
+                            # debit_wallet committed — begin fresh transaction for escrow update
                             escrow.amount = task.price
-                            db.flush()
+                            db.commit()  # explicit commit — not flush
                         except InsufficientFundsError:
                             # Client can't afford the increase — escrow stays at original amount
                             pass
@@ -758,12 +808,11 @@ def get_negotiation_history(
         if task.created_by != user_id and task.assigned_to != user_id:
             raise HTTPException(status_code=403, detail="Accès non autorisé à cet historique")
         from app.models.negotiation_event import NegotiationEvent
-        events = (
-            db.query(NegotiationEvent)
-            .filter(NegotiationEvent.task_id == task_id)
+        events = db.execute(
+            select(NegotiationEvent)
+            .where(NegotiationEvent.task_id == task_id)
             .order_by(NegotiationEvent.created_at.asc())
-            .all()
-        )
+        ).scalars().all()
         # Enrich with actor name
         actor_cache: dict[str, str] = {}
         def actor_name(actor_id: str) -> str:
@@ -819,10 +868,20 @@ def mark_task_complete(
             raise HTTPException(status_code=409, detail="La tâche doit être ASSIGNED pour être déclarée terminée")
 
         pct = payload.completion_percent if payload.partial else 100
-        service.set_completion_percent(task_id, pct)
-        if payload.proof_photo_url:
-            task.proof_photo_url = payload.proof_photo_url
-        service.update_status(task_id, "PENDING_VALIDATION")
+        # P1-003 FIX: Replace the former two-commit pattern (set_completion_percent then
+        # update_status) with a single atomic commit.  Crash between the two commits left
+        # the task with completion_percent set but status still ASSIGNED — reconciliation
+        # couldn't auto-repair this without risk.  mark_pending_validation uses FOR UPDATE
+        # and commits both fields together.
+        try:
+            task = service.mark_pending_validation(
+                task_id=task_id,
+                tasker_id=user_id,
+                pct=pct,
+                proof_url=payload.proof_photo_url,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
 
         # Put escrow on 6h hold — auto-released if client doesn't act
         escrow = wallet_svc.get_escrow_by_task(task_id)
@@ -878,16 +937,36 @@ def confirm_task_complete(
 ):
     """Client confirme que le travail est réalisé → libération immédiate de l'escrow."""
     try:
-        task = _get_task_or_404(task_id, service)
+        # P1-001 FIX: Lock task row with FOR UPDATE before any guard check.
+        # Without the lock, two concurrent confirms can both read PENDING_VALIDATION,
+        # both pass the guard, and both try to release the escrow — generating duplicate
+        # payment notifications and confusing error logs.  With the lock, the second
+        # confirm waits, then sees task.status = "COMPLETED" and returns 409 cleanly.
+        #
+        # We also inline the status update (flush, not commit) so that task.status=COMPLETED
+        # and the escrow release are committed in the SAME DB transaction by
+        # release_escrow/partial_release_escrow — fully atomic.
+        task = db.execute(
+            select(Task).where(Task.id == task_id).with_for_update()
+        ).scalars().one_or_none()
+        if task is None:
+            raise HTTPException(status_code=404, detail="Tâche introuvable")
         if task.created_by != user_id:
             raise HTTPException(status_code=403, detail="Seul le client peut confirmer la réalisation")
         if task.status != "PENDING_VALIDATION":
             raise HTTPException(status_code=409, detail="La tâche n'est pas en attente de validation")
 
-        service.update_status(task_id, "COMPLETED")
+        # Inline status change — NOT via service.update_status (which commits separately).
+        # flush() stages the row without releasing the lock; the escrow commit below
+        # will commit both task.status=COMPLETED and the escrow release atomically.
+        task.status = "COMPLETED"
+        db.flush()
 
-        # Release escrow — proportionally if partial, fully if complete
-        escrow = wallet_svc.get_escrow_by_task(task_id)
+        # Release escrow — proportionally if partial, fully if complete.
+        # FIN-03: use FOR UPDATE to prevent two concurrent confirm requests from
+        # both reading status="funded"/"hold" and both trying to release the escrow.
+        escrow = wallet_svc.get_escrow_by_task_for_update(task_id)
+        escrow_released = False
         if escrow and escrow.status in ("funded", "hold"):
             try:
                 pct = task.completion_percent if task.completion_percent is not None else 100
@@ -895,8 +974,19 @@ def confirm_task_complete(
                     wallet_svc.partial_release_escrow(escrow.id, pct)
                 else:
                     wallet_svc.release_escrow(escrow.id)
+                escrow_released = True
             except EscrowError as exc:
-                logger.error("task:confirm_escrow_error task_id={} error={}", task_id, exc)
+                # Escrow release failed — task is COMPLETED but payment not yet delivered.
+                # Notify the tasker so they can contact support, and log for admin review.
+                logger.error("task:confirm_escrow_error task_id={} escrow={} error={}", task_id, escrow.id if escrow else None, exc)
+                if task.assigned_to:
+                    _notify(
+                        db, task.assigned_to, "warning",
+                        "Paiement en cours de vérification",
+                        f"La libération du paiement pour « {task.title} » est en cours de traitement. "
+                        f"Contactez le support si le montant n'apparaît pas dans les 24h.",
+                        task_id=task_id,
+                    )
 
         # Notify executor (best-effort)
         try:
@@ -915,27 +1005,31 @@ def confirm_task_complete(
         except Exception:
             pass
 
-        if task.assigned_to:
+        if task.assigned_to and escrow_released:
             pct = task.completion_percent if task.completion_percent is not None else 100
             gross = float(escrow.amount) if escrow else 0.0
+            commission_bps = settings.zaska_commission_bps
             if pct < 100:
-                net = round(gross * 0.10, 2)
-                zaska_cut = round(gross * 0.05, 2)
-                client_back = round(gross * 0.85, 2)
+                # Partial release: tasker receives pct% of gross, client gets refund on remainder,
+                # ZASKA commission applies only on the tasker portion.
+                tasker_gross = round(gross * pct / 100, 2)
+                zaska_cut = round(tasker_gross * commission_bps / 10000, 2)
+                net = round(tasker_gross - zaska_cut, 2)
+                client_back = round(gross - tasker_gross, 2)
                 pay_msg = (
-                    f"Paiement libéré pour {task.title}. "
-                    f"Brut : {gross:.2f} {task.currency}. "
-                    f"Votre part (10%) : {net:.2f} — Commission ZASKA (5%) : {zaska_cut:.2f} — "
-                    f"Remboursement client (85%) : {client_back:.2f} {task.currency}."
+                    f"Paiement partiel libéré pour {task.title} ({pct}% réalisé). "
+                    f"Votre brut : {tasker_gross:.2f} {task.currency} — "
+                    f"Commission ZASKA ({commission_bps / 100:.0f}%) : {zaska_cut:.2f} — "
+                    f"Net reçu : {net:.2f} {task.currency}. "
+                    f"Remboursement client : {client_back:.2f} {task.currency}."
                 )
             else:
-                commission_bps = settings.zaska_commission_bps
                 zaska_cut = round(gross * commission_bps / 10000, 2)
                 net = round(gross - zaska_cut, 2)
                 pay_msg = (
                     f"Paiement libéré pour {task.title}. "
-                    f"Brut : {gross:.2f} {task.currency}. "
-                    f"Commission ZASKA (15%) : {zaska_cut:.2f} — "
+                    f"Brut : {gross:.2f} {task.currency} — "
+                    f"Commission ZASKA ({commission_bps / 100:.0f}%) : {zaska_cut:.2f} — "
                     f"Net reçu : {net:.2f} {task.currency}."
                 )
             _notify(db, task.assigned_to, "success", "Paiement libéré 🎉", pay_msg, task_id=task_id)
@@ -1122,7 +1216,9 @@ def tasker_abandon(
             raise HTTPException(status_code=409, detail="Le désistement n'est possible que sur une tâche ASSIGNED ou PAUSED")
 
         pct = payload.completion_percent
-        escrow = wallet_svc.get_escrow_by_task(task_id)
+        # P1-002 FIX: FOR UPDATE on escrow prevents concurrent abandons from both
+        # reading status="funded" and both calling refund_escrow.
+        escrow = wallet_svc.get_escrow_by_task_for_update(task_id)
 
         if escrow and escrow.status in ("funded", "hold"):
             try:
@@ -1150,7 +1246,10 @@ def tasker_abandon(
         if pct > 0:
             service.set_completion_percent(task_id, pct)
 
-        task = service.tasker_abandon(task_id=task_id, tasker_id=user_id)
+        try:
+            task = service.tasker_abandon(task_id=task_id, tasker_id=user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
 
         # Notify creator
         creator = db.get(User, task.created_by)

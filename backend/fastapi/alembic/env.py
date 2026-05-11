@@ -15,6 +15,7 @@ from app.models import (  # noqa: F401
     location_config,
     negotiation_event,
     notification,
+    outbox_event,        # was missing — autogenerate ignored OutboxEvent model
     payment_method,
     payout,
     support_ticket,
@@ -28,8 +29,17 @@ from app.models import (  # noqa: F401
     webhook_idempotency,
 )
 
+import os
+
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+
+# ALEMBIC_DATABASE_URL overrides DATABASE_URL for migrations.
+# Required when DATABASE_URL points to PgBouncer (transaction pool mode):
+# PgBouncer does not support DDL (CREATE TABLE, ALTER TABLE) in transaction mode
+# because each statement may land on a different connection, breaking multi-statement
+# transactions.  Alembic must connect DIRECTLY to PostgreSQL for migrations.
+_alembic_url = os.environ.get("ALEMBIC_DATABASE_URL") or settings.database_url
+config.set_main_option("sqlalchemy.url", _alembic_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

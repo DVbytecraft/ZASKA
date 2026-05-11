@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_auth_service, get_country_code, get_current_user_id, get_wallet_service
+from app.api.deps import get_auth_service, get_country_code, get_current_user_id
 from app.core.country_engine import CountryEngineService, PaymentRouterService
 from app.core.redis_client import redis_sync
 from app.core.responses import success_response
@@ -11,7 +11,6 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import ForgotPasswordPayload, LoginPayload, LogoutPayload, RefreshPayload, RegisterPayload, ResendOtpPayload, ResetPasswordPayload, SetPasswordPayload, VerifyOtpPayload
 from app.services.auth_service import AuthService
-from app.services.wallet_service import WalletService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -62,7 +61,6 @@ def register(
     request: Request,
     payload: RegisterPayload,
     service: AuthService = Depends(get_auth_service),
-    wallet_svc: WalletService = Depends(get_wallet_service),
     country_code: str = Depends(get_country_code),
 ):
     _check_register_rate_limit(request)
@@ -76,8 +74,7 @@ def register(
             role=payload.role,
             country_code=payload.country or country_code,
         )
-        wallet_svc.create_wallet(user_id=data["userId"], currency="USD")
-        wallet_svc.create_wallet(user_id=data["userId"], currency="XOF")
+        # Wallets are now created atomically inside service.register() — no separate calls needed.
         return success_response(data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

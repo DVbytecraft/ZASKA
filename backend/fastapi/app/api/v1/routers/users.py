@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
@@ -9,12 +10,8 @@ from app.schemas.user import UpdateProfilePayload, UserProfileResponse
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-@router.get("/me")
-def get_me(user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.id == user_id).one_or_none()
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
-    return success_response(UserProfileResponse(
+def _user_response(user: User) -> dict:
+    return UserProfileResponse(
         id=user.id,
         email=user.email,
         role=user.role,
@@ -25,7 +22,15 @@ def get_me(user_id: str = Depends(get_current_user_id), db: Session = Depends(ge
         avatar_url=user.avatar_url,
         country_code=user.country_code,
         is_verified=user.is_verified,
-    ).model_dump())
+    ).model_dump()
+
+
+@router.get("/me")
+def get_me(user_id: str = Depends(get_current_user_id), db: Session = Depends(get_db)):
+    user = db.execute(select(User).where(User.id == user_id)).scalars().one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return success_response(_user_response(user))
 
 
 @router.get("/{user_id}")
@@ -35,7 +40,7 @@ def get_user_public(
     db: Session = Depends(get_db),
 ):
     """Return minimal public profile for any user (name + avatar)."""
-    user = db.query(User).filter(User.id == user_id).one_or_none()
+    user = db.execute(select(User).where(User.id == user_id)).scalars().one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return success_response({
@@ -53,7 +58,11 @@ def update_me(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    user = db.query(User).filter(User.id == user_id).one_or_none()
+    # FOR UPDATE: prevents two concurrent PATCH /users/me requests (multi-device)
+    # from reading the same user state and both writing conflicting values.
+    user = db.execute(
+        select(User).where(User.id == user_id).with_for_update()
+    ).scalars().one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     if payload.first_name is not None:
@@ -70,15 +79,4 @@ def update_me(
         user.avatar_url = payload.avatar_url
     db.commit()
     db.refresh(user)
-    return success_response(UserProfileResponse(
-        id=user.id,
-        email=user.email,
-        role=user.role,
-        first_name=user.first_name,
-        last_name=user.last_name,
-        full_name=user.full_name,
-        phone=user.phone,
-        avatar_url=user.avatar_url,
-        country_code=user.country_code,
-        is_verified=user.is_verified,
-    ).model_dump())
+    return success_response(_user_response(user))

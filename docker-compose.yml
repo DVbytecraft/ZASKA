@@ -6,15 +6,91 @@ services:
       POSTGRES_DB: zaska
       POSTGRES_USER: zaska_admin
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    # WAL archiving: ZASKA PITR infrastructure.
+    # archive_command copies each completed WAL segment to /var/wal-archive atomically.
+    # archive_timeout=60 forces a segment switch every 60s so the worst-case data loss
+    # window (gap between last archived WAL and incident) is ≤ 60 seconds.
+    # In production, set ARCHIVE_TARGET=s3://bucket/prefix and install aws-cli/rclone
+    # in a custom PostgreSQL image — the script honours $ARCHIVE_TARGET.
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      # sh prefix: on Windows, git does not preserve execute bits on shell scripts.
+      # Without sh, PostgreSQL would fail with "permission denied" when the archive
+      # command runs — silently leaving WAL segments unarchived (RPO violated).
+      - archive_command=sh /var/wal-archive-scripts/wal-archive.sh %p %f
+      - -c
+      - archive_timeout=60
+      - -c
+      - max_wal_senders=3
+      - -c
+      - wal_keep_size=1024
+      - -c
+      - hot_standby=on
     # DEV ONLY: set POSTGRES_PUBLISH_PORT=5417 in .env to expose locally. Never expose in production.
     ports:
       - "${POSTGRES_PUBLISH_PORT:-}:5432"
     volumes:
       - zaska-postgres-data:/var/lib/postgresql/data
+      - zaska-wal-archive:/var/wal-archive
+      # Mount the archive script read-only so PostgreSQL can call it
+      - ./scripts:/var/wal-archive-scripts:ro
     networks:
       - zaska-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U zaska_admin -d zaska"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # PgBouncer — connection pooler between FastAPI pods and PostgreSQL.
+  #
+  # WHY: With HPA scaling to 10 pods and DB_POOL_SIZE=10 per pod, worst-case
+  # connections = 10 × 30 = 300, which exceeds PostgreSQL's default max_connections=100
+  # and causes cascading connection refusals under load.
+  #
+  # pool_mode=transaction: connection is held only during an active transaction
+  # (not the full FastAPI request lifetime). This allows 1000 FastAPI connections
+  # to multiplex through 20 PostgreSQL connections — 50:1 multiplexing.
+  #
+  # FastAPI connects to pgbouncer:6432 instead of postgres:5432.
+  # DB_POOL_SIZE is reduced to 3 because PgBouncer absorbs burst concurrency.
+  pgbouncer:
+    image: edoburu/pgbouncer:1.22.0
+    container_name: zaska-pgbouncer
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: zaska_admin
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      DB_NAME: zaska
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "1000"
+      DEFAULT_POOL_SIZE: "20"
+      RESERVE_POOL_SIZE: "5"
+      RESERVE_POOL_TIMEOUT: "3"
+      # DEALLOCATE ALL resets prepared statements between connections in transaction mode.
+      # Required: psycopg3 uses prepared statements by default; without this reset,
+      # a connection borrowed from a different client's context may see stale prepared stmt state.
+      SERVER_RESET_QUERY: DEALLOCATE ALL
+      LOG_CONNECTIONS: "0"
+      LOG_DISCONNECTIONS: "0"
+      # Admin interface (internal only, never expose externally)
+      ADMIN_USERS: zaska_admin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - zaska-network
+    healthcheck:
+      # pg_isready is NOT available in the edoburu/pgbouncer Alpine image.
+      # Use a TCP-level check instead: /dev/tcp verifies the port is accepting connections.
+      # PgBouncer listens on 6432; if it's up, the TCP connect succeeds.
+      test: ["CMD-SHELL", "sh -c 'echo > /dev/tcp/localhost/6432' 2>/dev/null && echo ok"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -27,11 +103,18 @@ services:
     command: >
       sh -c '
         if [ -n "$$REDIS_PASSWORD" ]; then
-          redis-server --requirepass "$$REDIS_PASSWORD" --maxmemory 256mb --maxmemory-policy allkeys-lru;
+          redis-server --requirepass "$$REDIS_PASSWORD" --maxmemory 512mb --maxmemory-policy volatile-lru --save "" --appendonly no;
         else
-          redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru;
+          redis-server --maxmemory 512mb --maxmemory-policy volatile-lru --save "" --appendonly no;
         fi
       '
+    # volatile-lru: only evict keys that have a TTL set, using LRU ordering.
+    # allkeys-lru was unsafe: Redis could evict distributed locks, idempotency keys,
+    # or WS auth tickets under memory pressure → double payment execution / auth bypass.
+    # All ZASKA keys carry explicit TTLs, so volatile-lru gives the same memory relief
+    # with no risk of evicting safety-critical keys.
+    # --save "" --appendonly no: disable RDB snapshots (latency spikes) and AOF
+    # (not needed — Redis is a cache/broker, not persistent store).
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     # DEV ONLY: set REDIS_PUBLISH_PORT=16379 in .env to expose locally. Never expose in production.
@@ -60,10 +143,16 @@ services:
     env_file:
       - backend/fastapi/.env
     environment:
-      # DATABASE_URL uses internal docker hostname 'postgres', not localhost
-      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
-      # JWT_SECRET and ENV come from env_file (.env) — do NOT override here
-      # Full Redis URLs — override in .env for auth: redis://:password@redis:6379/N
+      # Routes through PgBouncer (port 6432) — NOT directly to postgres:5432.
+      # PgBouncer multiplexes up to 1000 client connections onto 20 PostgreSQL connections.
+      # DB_POOL_SIZE=3: small pool because PgBouncer absorbs the concurrency.
+      # IMPORTANT: alembic runs before the server starts (docker-entrypoint.sh) and must
+      # connect directly to postgres:5432 to avoid transaction-mode limitations on DDL.
+      # The alembic.ini URL is overridden at runtime via ALEMBIC_DATABASE_URL.
+      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@pgbouncer:6432/zaska
+      ALEMBIC_DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
+      DB_POOL_SIZE: "3"
+      DB_MAX_OVERFLOW: "2"
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
@@ -72,7 +161,7 @@ services:
       - ./backend/fastapi/app:/app/backend/fastapi/app
       - ./backend/fastapi/alembic:/app/backend/fastapi/alembic
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -96,7 +185,13 @@ services:
     env_file:
       - backend/fastapi/.env
     environment:
-      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
+      # Route through PgBouncer for consistency with API pods.
+      # Celery tasks create a new SQLAlchemy session per task and close it at end —
+      # this is compatible with PgBouncer's transaction mode.
+      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@pgbouncer:6432/zaska
+      ALEMBIC_DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
+      DB_POOL_SIZE: "3"
+      DB_MAX_OVERFLOW: "2"
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
@@ -105,7 +200,7 @@ services:
       - ./backend/fastapi/app:/app/backend/fastapi/app
       - zaska-backups:/app/backups
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -122,7 +217,10 @@ services:
     env_file:
       - backend/fastapi/.env
     environment:
-      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
+      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@pgbouncer:6432/zaska
+      ALEMBIC_DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
+      DB_POOL_SIZE: "2"
+      DB_MAX_OVERFLOW: "1"
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
@@ -130,7 +228,7 @@ services:
     volumes:
       - ./backend/fastapi/app:/app/backend/fastapi/app
     depends_on:
-      postgres:
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -186,3 +284,8 @@ networks:
 volumes:
   zaska-postgres-data:
   zaska-backups:
+  # WAL archive volume — stores continuous WAL segments for PITR.
+  # In production, mount a fast SSD or use an NFS path that syncs to S3/B2.
+  # Retention: keep at least 7 days of WALs (24h × WAL-per-60s × 7 = ~10k files, ~10GB).
+  # Pair with a cron job that pushes to object storage and prunes old segments.
+  zaska-wal-archive:

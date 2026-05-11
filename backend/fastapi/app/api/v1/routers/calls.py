@@ -67,7 +67,7 @@ async def initiate_call(
     )
     caller_avatar: str | None = getattr(caller, "avatar_url", None)
 
-    await user_call_notification_manager.notify(
+    callee_online = await user_call_notification_manager.notify(
         callee_id,
         {
             "type": "incoming_call",
@@ -79,7 +79,18 @@ async def initiate_call(
         },
     )
 
-    return success_response({"call_id": session.id, "callee_id": callee_id})
+    if not callee_online:
+        # Callee is not connected — mark the session as missed immediately
+        # so the caller can display a "user offline" message instead of
+        # an infinite ringing screen.
+        session.status = "missed"
+        db.commit()
+
+    return success_response({
+        "call_id": session.id,
+        "callee_id": callee_id,
+        "callee_online": callee_online,
+    })
 
 
 @router.post("/{call_id}/answer")

@@ -128,6 +128,21 @@ class Settings(BaseSettings):
 
     sentry_dsn: str = ""
 
+    # ── Database connection pool ──────────────────────────────────────────
+    # pool_size: connections kept open permanently (per process).
+    # max_overflow: extra connections allowed above pool_size under burst load.
+    # At scale (Kubernetes, multiple replicas) set DB_POOL_SIZE=5 and route
+    # through PgBouncer to avoid exhausting PostgreSQL max_connections.
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_recycle: int = 1800         # recycle connections after 30min (avoids stale handles)
+
+    # ── Redis connection pool ─────────────────────────────────────────────
+    # Cap the async Redis pool to prevent pool explosion under WS storms.
+    # 200 async + unlimited sync pool is safe for a single-node Redis with
+    # default maxclients=10000.  Raise to 500 if running Redis Cluster.
+    redis_max_async_connections: int = 200
+
     # ── PostgreSQL backups ────────────────────────────────────────────────
     backup_dir: str = "/app/backups"
     backup_keep_days: int = 7
@@ -164,9 +179,25 @@ class Settings(BaseSettings):
 
         if not self.jwt_secret.strip():
             raise ValueError("JWT_SECRET is required")
+        if len(self.jwt_secret.strip()) < 32:
+            raise ValueError(
+                f"JWT_SECRET is too short ({len(self.jwt_secret.strip())} chars) — "
+                "minimum 32 characters required to prevent brute-force attacks. "
+                "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
 
         if env_norm == "production" and mode != "production":
             raise ValueError("ENV=production requires PAYMENT_MODE=production")
+
+        # ZASKA_WALLET_USER_ID: normally auto-set by docker-entrypoint.sh from
+        # seed_platform_wallet.py before uvicorn starts.  In production, if it is
+        # still empty at config load time, that means the entrypoint seed failed —
+        # which is a startup error, not a config error.  We warn here; the hard
+        # gate is in _validate_production_hard_lock() (called at app startup) and
+        # /health/ready (used by Kubernetes readiness probe).
+        # We do NOT raise here because the seed runs before this module is imported
+        # in the entrypoint flow, so by the time uvicorn imports settings the value
+        # should already be set.  If it isn't, the hard_lock and /health/ready catch it.
 
         if mode == "production":
             has_live_provider = bool(

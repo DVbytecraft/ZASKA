@@ -1,5 +1,6 @@
 import asyncio
 import json
+from contextlib import asynccontextmanager
 
 import sentry_sdk
 from fastapi import FastAPI, HTTPException, WebSocket
@@ -11,14 +12,15 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api.v1.api import api_router
 from app.api.websocket import (
-    call_signaling_loop,
     call_signaling_manager,
+    call_signaling_loop,
     chat_ws_manager,
     user_call_notification_loop,
     user_call_notification_manager,
     websocket_loop,
 )
 from app.core.config import settings
+from app.core.idempotency_middleware import IdempotencyMiddleware
 from app.core.observability import RequestIDMiddleware, logger
 from app.core.rate_limit import RedisRateLimitMiddleware
 from app.core.responses import error_response, success_response
@@ -36,6 +38,7 @@ from app.models import (  # noqa: F401
     location_config,
     negotiation_event,
     notification,
+    outbox_event,
     payment_method,
     payout,
     support_ticket,
@@ -50,13 +53,35 @@ from app.models import (  # noqa: F401
 )
 
 
-app = FastAPI(title=settings.app_name)
-
-
 def _validate_production_hard_lock() -> None:
+    """Refuse to start in production if critical financial or security config is missing.
+
+    These checks run at startup — the pod will crash immediately rather than
+    silently serving requests with broken financial invariants.
+    """
+    env_norm = str(settings.env).strip().lower()
     mode = str(settings.payment_mode).strip().lower()
+
+    # JWT_SECRET length (applies to all environments — already validated in config.py,
+    # but we double-check here so startup fails loudly even if config.py is bypassed)
+    if len(settings.jwt_secret.strip()) < 32:
+        raise RuntimeError(
+            f"CRITICAL: JWT_SECRET is only {len(settings.jwt_secret.strip())} chars. "
+            "Minimum 32 required. Tokens can be forged with a weak secret."
+        )
+
     if mode != "production":
         return
+
+    # ZASKA_WALLET_USER_ID: without this, 15% commission on every escrow release is
+    # silently discarded. At 1000 transactions/day this is significant financial loss.
+    if not settings.zaska_wallet_user_id.strip():
+        raise RuntimeError(
+            "CRITICAL: ZASKA_WALLET_USER_ID is not set. "
+            "Platform commission (15%) cannot be credited — every escrow release loses money. "
+            "Configure this before handling real payments."
+        )
+
     provider_ok = any(
         [
             bool(settings.stripe_secret_key.strip()),
@@ -74,6 +99,32 @@ def _validate_production_hard_lock() -> None:
         raise RuntimeError("Production hard-lock: OTP provider must be enabled")
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown (replaces deprecated @app.on_event)."""
+    # ── Startup ──────────────────────────────────────────────────────────
+    logger.info("ZASKA CORE OS startup env={} version=core-os-1.0", settings.env)
+    if settings.sentry_dsn.strip():
+        sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1, environment=settings.env)
+    _validate_production_hard_lock()
+    # Chat Redis pub/sub subscriber (cross-instance chat delivery)
+    await chat_ws_manager.start()
+    # User call notification Redis pub/sub subscriber
+    await user_call_notification_manager.start()
+    # WebRTC signaling cross-instance relay subscriber (SC-03 fix)
+    await call_signaling_manager.start()
+    # In-process scheduler with distributed Redis locks
+    start_scheduler()
+
+    yield
+
+    # ── Shutdown ─────────────────────────────────────────────────────────
+    stop_scheduler()
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -99,28 +150,11 @@ async def security_headers_middleware(request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none';"
-    # HSTS only on production (requires HTTPS)
     if env_norm == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    # Remove server fingerprint
     if "server" in response.headers:
         del response.headers["server"]
     return response
-
-
-@app.on_event("startup")
-async def startup() -> None:
-    logger.info("ZASKA CORE OS startup env={} version=core-os-1.0", settings.env)
-    if settings.sentry_dsn.strip():
-        sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1, environment=settings.env)
-    _validate_production_hard_lock()
-    await chat_ws_manager.start()
-    start_scheduler()
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    stop_scheduler()
 
 
 @app.get("/health")
@@ -128,11 +162,161 @@ def health():
     return success_response({"status": "ok"})
 
 
+@app.get("/health/ready")
+def health_ready():
+    """Strict readiness check — fails if any critical financial config is missing.
+
+    Used by Kubernetes readiness probe and load balancers.
+    Returns 503 if the instance should NOT receive production traffic.
+
+    Checks:
+      - DB connectivity
+      - Redis connectivity
+      - ZASKA_WALLET_USER_ID configured (prevents silent commission loss)
+      - JWT_SECRET strength
+    """
+    issues: list[str] = []
+
+    # DB check
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        issues.append(f"db_unreachable: {exc}")
+
+    # Redis check
+    try:
+        from app.core.redis_client import redis_sync
+        if not redis_sync.ping():
+            issues.append("redis_ping_failed")
+    except Exception as exc:
+        issues.append(f"redis_unreachable: {exc}")
+
+    # ZASKA_WALLET_USER_ID — must be set before handling real money
+    if not settings.zaska_wallet_user_id.strip():
+        issues.append("zaska_wallet_user_id_missing: 15% commission will be lost on every escrow release")
+
+    # JWT_SECRET strength
+    if len(settings.jwt_secret.strip()) < 32:
+        issues.append(f"jwt_secret_too_short: {len(settings.jwt_secret.strip())} chars < 32 minimum")
+
+    if issues:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "issues": issues},
+        )
+    return success_response({"status": "ready"})
+
+
 @app.get("/health/db")
 def health_db():
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
     return success_response({"status": "ok"})
+
+
+@app.get("/health/scheduler")
+def health_scheduler():
+    from app.core.scheduler import get_scheduler_health
+    jobs = get_scheduler_health()
+    dead = [name for name, info in jobs.items() if info.get("status") == "dead"]
+    overall = "degraded" if dead else "ok"
+    return success_response({"status": overall, "dead_jobs": dead, "jobs": jobs})
+
+
+@app.get("/health/redis")
+def health_redis():
+    from app.core.redis_client import redis_sync
+    try:
+        pong = redis_sync.ping()
+        if not pong:
+            return JSONResponse(status_code=503, content=error_response("Redis ping failed"))
+        return success_response({"status": "ok"})
+    except Exception as exc:
+        return JSONResponse(status_code=503, content=error_response(f"Redis unavailable: {exc}"))
+
+
+@app.get("/health/realtime")
+def health_realtime():
+    from app.core.scheduler import get_scheduler_health, _tasks
+    scheduler_running = len(_tasks) > 0
+    jobs = get_scheduler_health()
+    dead_jobs = [name for name, info in jobs.items() if info.get("status") == "dead"]
+
+    ws_chat_connections = sum(
+        len(conns) for conns in chat_ws_manager.connections.values()
+    )
+    call_rooms_active = len(call_signaling_manager.rooms)
+
+    status = "degraded" if (dead_jobs or not scheduler_running) else "ok"
+    return success_response({
+        "status": status,
+        "scheduler_running": scheduler_running,
+        "dead_jobs": dead_jobs,
+        "ws_chat_connections": ws_chat_connections,
+        "call_rooms_active": call_rooms_active,
+    })
+
+
+@app.get("/health/metrics")
+async def health_metrics():
+    """Prometheus-compatible plain text metrics endpoint.
+
+    The outbox query result is cached for 30s in Redis to avoid opening a new
+    DB session on every Prometheus scrape (default: every 15s).
+    """
+    from app.core.redis_client import redis_async as r
+    from app.core.scheduler import get_scheduler_health, _job_heartbeats
+    from datetime import datetime
+    from fastapi.responses import PlainTextResponse
+
+    lines = []
+
+    def gauge(name: str, value: float | int, labels: str = "") -> None:
+        label_str = f"{{{labels}}}" if labels else ""
+        lines.append(f"{name}{label_str} {value}")
+
+    now = datetime.utcnow()
+    for job_name, last_run in _job_heartbeats.items():
+        silence = (now - last_run).total_seconds()
+        gauge("zaska_scheduler_job_silence_seconds", silence, f'job="{job_name}"')
+
+    # Outbox metrics — cached 30s to avoid a DB hit on every scrape
+    try:
+        _CACHE_KEY = "metrics:outbox_cache"
+        cached_raw = await r.get(_CACHE_KEY)
+        if cached_raw:
+            outbox_rows = json.loads(cached_raw)
+        else:
+            from app.db.session import SessionLocal
+            db = SessionLocal()
+            try:
+                from sqlalchemy import text as sql_text
+                rows = db.execute(sql_text(
+                    "SELECT status, COUNT(*) as cnt FROM outbox_events GROUP BY status"
+                )).all()
+                outbox_rows = [{"status": row.status, "cnt": row.cnt} for row in rows]
+                await r.setex(_CACHE_KEY, 30, json.dumps(outbox_rows))
+            finally:
+                db.close()
+        for row in outbox_rows:
+            gauge("zaska_outbox_events_total", row["cnt"], f'status="{row["status"]}"')
+    except Exception:
+        pass
+
+    # Redis stats (async — non-blocking)
+    try:
+        info = await r.info("stats")
+        gauge("zaska_redis_commands_processed_total", info.get("total_commands_processed", 0))
+        gauge("zaska_redis_connected_clients", info.get("connected_clients", 0))
+    except Exception:
+        gauge("zaska_redis_up", 0)
+
+    ws_connections = sum(len(c) for c in chat_ws_manager.connections.values())
+    gauge("zaska_ws_chat_connections_active", ws_connections)
+    gauge("zaska_call_rooms_active", len(call_signaling_manager.rooms))
+
+    return PlainTextResponse("\n".join(lines), media_type="text/plain; version=0.0.4")
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -190,10 +374,11 @@ async def websocket_call_signaling(websocket: WebSocket, call_id: str) -> None:
         if not user_id:
             await websocket.close(code=1008, reason="Unauthorized")
             return
-        accepted = await call_signaling_manager.connect(call_id, websocket)
+        accepted = await call_signaling_manager.connect(call_id, websocket, user_id)
         if not accepted:
             await websocket.close(code=1008, reason="Call room full")
             return
+        await call_signaling_manager.drain_signal_queue(call_id, websocket)
         await call_signaling_loop(call_id=call_id, websocket=websocket)
     except (TimeoutError, asyncio.TimeoutError, json.JSONDecodeError):
         await websocket.close(code=1008, reason="Unauthorized")
@@ -212,12 +397,14 @@ async def websocket_user_call_notifications(websocket: WebSocket, user_id: str) 
         if data.get("type") != "auth" or not data.get("ticket"):
             await websocket.close(code=1008, reason="Unauthorized")
             return
-        # Ticket was scoped with task_id=user_id
         authenticated_user = consume_ws_ticket(str(data["ticket"]), expected_task_id=user_id)
         if not authenticated_user or authenticated_user != user_id:
             await websocket.close(code=1008, reason="Unauthorized")
             return
-        await user_call_notification_manager.connect(user_id, websocket)
+        accepted = await user_call_notification_manager.connect(user_id, websocket)
+        if not accepted:
+            await websocket.close(code=1008, reason="Server at capacity")
+            return
         await user_call_notification_loop(user_id=user_id, websocket=websocket)
     except (TimeoutError, asyncio.TimeoutError, json.JSONDecodeError):
         await websocket.close(code=1008, reason="Unauthorized")

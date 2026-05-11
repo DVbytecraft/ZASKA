@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { walletService } from '@zaska/shared-services';
@@ -32,43 +32,59 @@ export function WalletScreen({
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const cancelledRef = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(async () => {
+    cancelledRef.current = false;
     setLoading(true);
     setError(null);
-
-    const load = async () => {
-      try {
-        const [bal, txs] = await Promise.all([
-          walletService.getBalance(currency),
-          walletService.getTransactions(currency),
-        ]);
-        if (!cancelled) { setWallet(bal); setTransactions(txs); }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '';
-        if (msg.includes('failed: 404')) {
-          try {
-            await walletService.createWallet(currency);
-            const [bal, txs] = await Promise.all([
-              walletService.getBalance(currency),
-              walletService.getTransactions(currency),
-            ]);
-            if (!cancelled) { setWallet(bal); setTransactions(txs); }
-          } catch (createErr) {
-            if (!cancelled) setError(createErr instanceof Error ? createErr.message : 'Impossible d\'initialiser le portefeuille');
-          }
-        } else {
-          if (!cancelled) setError(msg || 'Impossible de charger le portefeuille');
+    try {
+      const [bal, txs] = await Promise.all([
+        walletService.getBalance(currency),
+        walletService.getTransactions(currency),
+      ]);
+      if (!cancelledRef.current) { setWallet(bal); setTransactions(txs); }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      if (msg.includes('failed: 404')) {
+        try {
+          await walletService.createWallet(currency);
+          const [bal, txs] = await Promise.all([
+            walletService.getBalance(currency),
+            walletService.getTransactions(currency),
+          ]);
+          if (!cancelledRef.current) { setWallet(bal); setTransactions(txs); }
+        } catch (createErr) {
+          if (!cancelledRef.current) setError(createErr instanceof Error ? createErr.message : 'Impossible d\'initialiser le portefeuille');
         }
-      } finally {
-        if (!cancelled) setLoading(false);
+      } else {
+        if (!cancelledRef.current) setError(msg || 'Impossible de charger le portefeuille');
       }
-    };
-
-    void load();
-    return () => { cancelled = true; };
+    } finally {
+      if (!cancelledRef.current) setLoading(false);
+    }
   }, [currency]);
+
+  useEffect(() => {
+    cancelledRef.current = false;
+    void load();
+    return () => { cancelledRef.current = true; };
+  }, [load]);
+
+  // Refresh on tab visibility (mobile foreground recovery)
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [load]);
+
+  // Refresh on network recovery
+  useEffect(() => {
+    window.addEventListener('online', load);
+    return () => window.removeEventListener('online', load);
+  }, [load]);
 
   const balanceDisplay = wallet
     ? `${wallet.currency} ${parseFloat(wallet.balance).toFixed(2)}`

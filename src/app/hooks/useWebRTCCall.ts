@@ -77,6 +77,10 @@ export function useWebRTCCall({ callId, isCaller, mediaType, onEnded }: UseWebRT
   const remoteReady = useRef(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const endedRef = useRef(false);
+  // Track how long we've been in "disconnected" state to distinguish transient
+  // network blips (< 8s) from actual failures that need to terminate the call.
+  const disconnectedAt = useRef<number | null>(null);
+  const disconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const send = useCallback((msg: Signal) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -88,6 +92,7 @@ export function useWebRTCCall({ callId, isCaller, mediaType, onEnded }: UseWebRT
     if (endedRef.current) return;
     endedRef.current = true;
     if (timerRef.current) clearInterval(timerRef.current);
+    if (disconnectTimerRef.current) clearTimeout(disconnectTimerRef.current);
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
     pcRef.current?.close();
     wsRef.current?.close();
@@ -149,11 +154,50 @@ export function useWebRTCCall({ callId, isCaller, mediaType, onEnded }: UseWebRT
       };
 
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'connected') {
+        const s = pc.connectionState;
+
+        if (s === 'connected') {
+          // Clear any pending disconnect timer — we recovered
+          if (disconnectTimerRef.current) {
+            clearTimeout(disconnectTimerRef.current);
+            disconnectTimerRef.current = null;
+          }
+          disconnectedAt.current = null;
           setState('active');
-          timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
+          if (!timerRef.current) {
+            timerRef.current = setInterval(() => setElapsed((v) => v + 1), 1000);
+          }
         }
-        if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+
+        if (s === 'disconnected') {
+          // Attempt ICE restart immediately — handles mobile network switch (WiFi→4G),
+          // brief packet loss, NAT timeout.  Caller creates a new offer with iceRestart:true;
+          // callee automatically responds with an answer via ws.onmessage.
+          disconnectedAt.current = Date.now();
+          if (isCaller && pc.signalingState === 'stable') {
+            pc.createOffer({ iceRestart: true })
+              .then((offer) => pc.setLocalDescription(offer))
+              .then(() => {
+                if (pc.localDescription?.sdp) {
+                  send({ type: 'offer', sdp: pc.localDescription.sdp });
+                }
+              })
+              .catch(() => { /* ICE restart failed silently — safety timer handles termination */ });
+          }
+          // Safety timer: if still not recovered in 8s, terminate the call
+          disconnectTimerRef.current = setTimeout(() => {
+            if (!endedRef.current && pc.connectionState !== 'connected') {
+              setState('failed');
+              endCall();
+            }
+          }, 8_000);
+        }
+
+        if (s === 'failed' || s === 'closed') {
+          if (disconnectTimerRef.current) {
+            clearTimeout(disconnectTimerRef.current);
+            disconnectTimerRef.current = null;
+          }
           setState('failed');
           endCall();
         }
@@ -174,6 +218,8 @@ export function useWebRTCCall({ callId, isCaller, mediaType, onEnded }: UseWebRT
         } catch {
           return;
         }
+        // Ignore keepalive pong frames
+        if ((msg as { type: string }).type === 'pong') return;
         if (msg.type === 'offer') {
           await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
           await drainIce();
@@ -194,7 +240,34 @@ export function useWebRTCCall({ callId, isCaller, mediaType, onEnded }: UseWebRT
         }
       };
 
-      ws.onerror = () => endCall();
+      ws.onerror = () => {
+        clearInterval(pingInterval);
+        endCall();
+      };
+
+      // P2-001 FIX: Handle WS close events explicitly.
+      // Without onclose, a server-initiated close (code 1008 = ticket expired,
+      // code 1011 = server error, or any rolling-deploy reconnect) would leave
+      // the RTCPeerConnection open indefinitely, consuming media resources and
+      // holding ICE candidates against a dead signaling channel.
+      ws.onclose = (event) => {
+        clearInterval(pingInterval);
+        if (!endedRef.current) {
+          // 1000 = normal close (hangup already handled by onmessage)
+          // Anything else = unexpected close — treat as call failure
+          if (event.code !== 1000) {
+            setState('failed');
+          }
+          endCall();
+        }
+      };
+
+      // Keepalive ping every 30s — prevents NAT / reverse-proxy timeout on idle calls
+      const pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send('{"type":"ping"}');
+        }
+      }, 30_000);
 
       ws.onopen = async () => {
         // Auth handshake with one-time ticket (matches backend pattern)
@@ -233,6 +306,7 @@ export function useWebRTCCall({ callId, isCaller, mediaType, onEnded }: UseWebRT
     void setup();
     return () => {
       cancelled = true;
+      if (disconnectTimerRef.current) clearTimeout(disconnectTimerRef.current);
       endCall();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

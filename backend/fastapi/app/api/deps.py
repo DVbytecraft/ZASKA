@@ -35,22 +35,43 @@ bearer_scheme = HTTPBearer(auto_error=False)
 # ── Auth ───────────────────────────────────────────────────────────────────
 
 def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> str:
+    import logging as _log
     if credentials is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
     payload = decode_token(credentials.credentials)
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
-    if redis_sync.get(f"blacklist:{credentials.credentials}"):
-        raise HTTPException(status_code=401, detail="Token revoked")
+
+    # Blacklist check (explicit logout / admin revocation) — fail-open if Redis is down
+    try:
+        if redis_sync.get(f"blacklist:{credentials.credentials}"):
+            raise HTTPException(status_code=401, detail="Token revoked")
+    except HTTPException:
+        raise
+    except Exception as _e:
+        _log.getLogger(__name__).warning("auth: Redis blacklist check failed (Redis down?) — %s", _e)
+
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token")
-    # Validate per-user token version — incremented on password reset / forced logout
+
+    # Per-user token version check (password reset / forced logout) — fail-open if Redis is down
+    # Rationale: Redis downtime is rare and temporary; blocking ALL auth causes more harm
+    # than the narrow window of an already-revoked token being accepted briefly.
     token_ver = payload.get("ver")
     if token_ver is None:
         raise HTTPException(status_code=401, detail="Token invalide — reconnectez-vous")
-    if int(token_ver) < get_token_version(str(user_id)):
-        raise HTTPException(status_code=401, detail="Token revoked — please log in again")
+    try:
+        current_ver = get_token_version(str(user_id))
+        if int(token_ver) < current_ver:
+            raise HTTPException(status_code=401, detail="Token revoked — please log in again")
+    except HTTPException:
+        raise
+    except Exception as _e:
+        _log.getLogger(__name__).warning(
+            "auth: token_version check failed (Redis down?) user=%s — %s. Proceeding fail-open.", user_id, _e
+        )
+
     return str(user_id)
 
 

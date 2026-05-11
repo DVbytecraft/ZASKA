@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_chat_service, get_current_user_id, get_db
+from app.api.websocket import chat_ws_manager
 from app.core.cloudinary_client import (
     ALLOWED_CHAT_TYPES,
     chat_size_limit,
@@ -13,6 +14,8 @@ from app.models.task import Task
 from app.models.user import User
 from app.schemas.chat import ChatMessagePayload
 from app.services.chat_service import ChatService
+
+from app.core.ws_ticket import create_ws_ticket
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -27,6 +30,23 @@ def _format_message(msg) -> dict:
         "mediaType": getattr(msg, "media_type", None),
         "createdAt": msg.created_at.isoformat(),
     }
+
+
+@router.post("/{task_id}/ws-ticket")
+def get_chat_ws_ticket(
+    task_id: str,
+    service: ChatService = Depends(get_chat_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    """One-time ticket for the task chat WebSocket (/ws/tasks/{task_id})."""
+    try:
+        service.assert_participant(task_id, user_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    ticket = create_ws_ticket(user_id, task_id=task_id)
+    return success_response({"ticket": ticket})
 
 
 @router.get("/{task_id}")
@@ -93,6 +113,7 @@ async def upload_media(
 @router.post("")
 def create_message(
     payload: ChatMessagePayload,
+    background_tasks: BackgroundTasks,
     service: ChatService = Depends(get_chat_service),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
@@ -111,9 +132,14 @@ def create_message(
             media_type=payload.media_type,
         )
 
-        # In-app notification to the other participant (best-effort)
+        formatted = _format_message(msg)
+
+        # Persist in-app notification + outbox event in ONE commit (crash-safe).
+        # The outbox processor will deliver the WS broadcast with guaranteed retry.
+        # A BackgroundTask is also fired for immediate optimistic delivery (fast path).
         try:
             from app.models.notification import Notification
+            from app.services.outbox_service import OutboxService
             task = db.get(Task, payload.task_id)
             if task:
                 recipient_id = task.assigned_to if task.created_by == user_id else task.created_by
@@ -132,11 +158,23 @@ def create_message(
                         task_id=payload.task_id,
                     )
                     db.add(notif)
-                    db.flush()
+
+                    # Outbox entry — guarantees WS broadcast delivery even if background
+                    # task or Redis is unavailable at the moment of send.
+                    OutboxService(db).enqueue(
+                        event_type="chat.message",
+                        aggregate_id=payload.task_id,
+                        aggregate_type="chat",
+                        payload=formatted,
+                        idempotency_key=f"chat_msg:{msg.id}",
+                    )
+                    db.commit()
         except Exception:
             pass
 
-        return success_response(_format_message(msg))
+        # Optimistic fast-path: immediate WS delivery (no retry needed if this succeeds)
+        background_tasks.add_task(chat_ws_manager.publish, payload.task_id, formatted)
+        return success_response(formatted)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PermissionError as exc:

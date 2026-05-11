@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from sqlalchemy import select
+
 from app.core.redis_client import redis_sync
 
 if TYPE_CHECKING:
@@ -70,11 +72,11 @@ class WebhookQueue:
         from app.models.webhook_idempotency import WebhookIdempotency
 
         try:
-            existing = (
-                db.query(WebhookIdempotency)
-                .filter(WebhookIdempotency.idempotency_key == idempotency_key)
-                .one_or_none()
-            )
+            existing = db.execute(
+                select(WebhookIdempotency).where(
+                    WebhookIdempotency.idempotency_key == idempotency_key
+                )
+            ).scalars().one_or_none()
             if existing is None:
                 record = WebhookIdempotency(
                     idempotency_key=idempotency_key,
@@ -91,13 +93,12 @@ class WebhookQueue:
         from app.models.webhook_idempotency import WebhookIdempotency
 
         try:
-            record = (
-                db.query(WebhookIdempotency)
-                .filter(WebhookIdempotency.idempotency_key == idempotency_key)
-                .one_or_none()
-            )
+            record = db.execute(
+                select(WebhookIdempotency).where(
+                    WebhookIdempotency.idempotency_key == idempotency_key
+                )
+            ).scalars().one_or_none()
             if record is not None:
-                # Re-warm Redis cache so next check is fast
                 redis_sync.setex(
                     f"{cls.PROCESSED_PREFIX}{idempotency_key}", 86400 * 7, "1"
                 )

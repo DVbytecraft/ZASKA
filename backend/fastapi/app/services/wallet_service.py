@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -131,6 +131,22 @@ class WalletService:
         # SELECT FOR UPDATE to prevent lost-update race on concurrent credits
         wallet = self._get_or_create_wallet(user_id, currency, for_update=True)
 
+        # Idempotency guard: if a completed transaction with this reference already exists
+        # for this wallet, return it without creating a duplicate (double-credit protection).
+        existing_tx = self.db.execute(
+            select(Transaction).where(
+                Transaction.wallet_id == wallet.id,
+                Transaction.reference == reference,
+                Transaction.type == "credit",
+            )
+        ).scalars().one_or_none()
+        if existing_tx is not None:
+            logger.warning(
+                "credit_wallet: duplicate reference=%s wallet=%s — returning existing tx %s",
+                reference, wallet.id, existing_tx.id,
+            )
+            return existing_tx
+
         tx = Transaction(
             id=_uuid(),
             wallet_id=wallet.id,
@@ -160,6 +176,22 @@ class WalletService:
             raise ValueError("Le montant doit etre positif")
 
         wallet = self.get_wallet(user_id, currency, for_update=True)
+
+        # Idempotency guard: prevent double-debit on the same reference.
+        existing_tx = self.db.execute(
+            select(Transaction).where(
+                Transaction.wallet_id == wallet.id,
+                Transaction.reference == reference,
+                Transaction.type == "debit",
+            )
+        ).scalars().one_or_none()
+        if existing_tx is not None:
+            logger.warning(
+                "debit_wallet: duplicate reference=%s wallet=%s — returning existing tx %s",
+                reference, wallet.id, existing_tx.id,
+            )
+            return existing_tx
+
         if wallet.balance < amount:
             raise InsufficientFundsError(f"Solde insuffisant : {wallet.balance} {currency} < {amount} {currency}")
 
@@ -184,6 +216,25 @@ class WalletService:
     def create_escrow(self, task_id: str, payer_id: str, payee_id: str | None, amount: Decimal, currency: str) -> Escrow:
         if amount <= Decimal("0"):
             raise ValueError("Le montant escrow doit etre positif")
+
+        # P1-008 FIX: Idempotency guard — return existing active escrow if one already
+        # exists for this task.  Without this, two concurrent POST /wallet/escrow calls
+        # for the same task_id both succeed and create two funded escrows.  The second
+        # escrow is never linked to a release → funds locked forever.
+        # We lock the existing row (FOR UPDATE) to prevent a concurrent create from
+        # slipping through the gap between this check and the INSERT below.
+        existing = self.db.execute(
+            select(Escrow).where(
+                Escrow.task_id == task_id,
+                Escrow.status.in_(["funded", "hold", "pending"]),
+            ).with_for_update(skip_locked=False)
+        ).scalars().one_or_none()
+        if existing is not None:
+            logger.warning(
+                "create_escrow: active escrow already exists task=%s escrow=%s status=%s — returning existing",
+                task_id, existing.id, existing.status,
+            )
+            return existing
 
         escrow_id = _uuid()
 
@@ -228,7 +279,8 @@ class WalletService:
     def release_escrow(self, escrow_id: str) -> Escrow:
         from app.core.config import settings as _cfg
         escrow = self._get_escrow(escrow_id, for_update=True)
-        if escrow.status != "funded":
+        # Accept "hold" too: scheduler auto-releases escrows in hold state after 6h window.
+        if escrow.status not in {"funded", "hold"}:
             raise EscrowError(f"Escrow {escrow_id} ne peut etre libere (statut: {escrow.status})")
         if not escrow.payee_id:
             raise EscrowError(f"Escrow {escrow_id} n'a pas de payee defini")
@@ -281,13 +333,41 @@ class WalletService:
 
         escrow.status = "released"
         escrow.settlement_tx_id = tx.id
+        # Append immutable audit event before commit (same transaction)
+        try:
+            from app.services.event_ledger import EventLedger
+            EventLedger.log_financial(
+                db=self.db,
+                event_type="escrow.released",
+                aggregate_id=escrow_id,
+                aggregate_type="escrow",
+                actor_id=escrow.payee_id or "",
+                amount=escrow.amount,
+                currency=escrow.currency,
+                reference=f"escrow_release:{escrow_id}",
+                extra={
+                    "task_id": escrow.task_id,
+                    "commission_bps": commission_bps,
+                    "commission": str(commission),
+                    "tasker_amount": str(tasker_amount),
+                },
+            )
+        except Exception as _ledger_exc:
+            # AUDIT-04 FIX: log instead of silently swallowing.
+            # A missing audit event is a compliance issue — alert so ops can investigate.
+            logger.error(
+                "AUDIT_TRAIL_FAILURE: EventLedger.log_financial failed for escrow=%s — %s",
+                escrow_id, _ledger_exc,
+            )
         self.db.commit()
         self.db.refresh(escrow)
         return escrow
 
     def refund_escrow(self, escrow_id: str) -> Escrow:
         escrow = self._get_escrow(escrow_id, for_update=True)
-        if escrow.status != "funded":
+        # Accept "hold" too: escrow enters hold when tasker declares complete (6h window).
+        # Admin cancel or tasker abandon during hold must still be refundable.
+        if escrow.status not in {"funded", "hold"}:
             raise EscrowError(f"Escrow {escrow_id} ne peut etre rembourse (statut: {escrow.status})")
 
         self._audit_transition(escrow, TransactionState.REFUNDED, "refund_processing", "internal")
@@ -440,6 +520,17 @@ class WalletService:
     def get_escrow_by_task(self, task_id: str) -> Escrow | None:
         return self.db.execute(select(Escrow).where(Escrow.task_id == task_id)).scalars().one_or_none()
 
+    def get_escrow_by_task_for_update(self, task_id: str) -> Escrow | None:
+        """Like get_escrow_by_task but acquires a row lock — use inside critical sections
+        where the escrow status must not change between read and write (FIN-03)."""
+        return (
+            self.db.execute(
+                select(Escrow).where(Escrow.task_id == task_id).with_for_update()
+            )
+            .scalars()
+            .one_or_none()
+        )
+
     def hold_escrow_24h(self, escrow_id: str) -> Escrow:
         """Transition funded → hold: starts the 6h contestation window."""
         from datetime import timedelta
@@ -447,7 +538,10 @@ class WalletService:
         if escrow.status != "funded":
             raise EscrowError(f"Escrow {escrow_id} ne peut passer en hold (statut: {escrow.status})")
         escrow.status = "hold"
-        escrow.payout_available_at = datetime.now(timezone.utc) + timedelta(hours=6)
+        # Use naive UTC — DB column is TIMESTAMP WITHOUT TIME ZONE.
+        # contest_escrow and release_held_escrow compare with datetime.utcnow() (naive),
+        # so we must be consistent here to avoid TypeError on comparison.
+        escrow.payout_available_at = datetime.utcnow() + timedelta(hours=6)
         self.db.commit()
         self.db.refresh(escrow)
         return escrow
@@ -459,7 +553,8 @@ class WalletService:
     def contest_escrow(self, escrow_id: str, client_user_id: str) -> Escrow:
         """Client contests the work — freezes payment during 6h hold window."""
         from datetime import timedelta
-        now = datetime.now(timezone.utc)
+        # Use naive UTC — DB column is TIMESTAMP WITHOUT TIME ZONE; comparing aware vs naive raises TypeError
+        now = datetime.utcnow()
         escrow = self._get_escrow(escrow_id, for_update=True)
         if escrow.payer_id != client_user_id:
             raise EscrowError("Seul le payeur peut contester cet escrow")
@@ -474,15 +569,74 @@ class WalletService:
         return escrow
 
     def release_held_escrow(self, escrow_id: str) -> Escrow:
-        """Release escrow after 24h hold has passed (no contest)."""
-        now = datetime.now(timezone.utc)
+        """Release escrow after 24h hold has passed (no contest).
+
+        P0-005 FIX: Do NOT call self.release_escrow() here — that would issue a second
+        SELECT FOR UPDATE on the same row in the same transaction, which is wasteful and
+        potentially inconsistent (release_escrow would re-read the row, possibly getting
+        a cached/stale SQLAlchemy identity map entry).
+
+        Instead, inline the release logic directly on the already-locked escrow.
+        """
+        from app.core.config import settings as _cfg
+        now = datetime.utcnow()
         escrow = self._get_escrow(escrow_id, for_update=True)
+
         if escrow.status != "hold":
             raise EscrowError(f"Escrow {escrow_id} n'est pas en hold (statut: {escrow.status})")
         if escrow.payout_available_at and now < escrow.payout_available_at:
-            remaining = (escrow.payout_available_at - now).seconds // 3600
+            remaining = int((escrow.payout_available_at - now).total_seconds() / 3600)
             raise EscrowError(f"Paiement disponible dans ~{remaining}h — la période de contestation n'est pas terminée")
-        return self.release_escrow(escrow_id)
+        if not escrow.payee_id:
+            raise EscrowError(f"Escrow {escrow_id} n'a pas de payee défini")
+
+        self._audit_transition(escrow, TransactionState.PROCESSING, "release_processing", "internal")
+
+        commission_bps = _cfg.zaska_commission_bps
+        commission = (escrow.amount * Decimal(str(commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
+        tasker_amount = escrow.amount - commission
+
+        wallet = self._get_or_create_wallet(escrow.payee_id, escrow.currency, for_update=True)
+        tx = Transaction(
+            id=_uuid(),
+            wallet_id=wallet.id,
+            type="credit",
+            amount=tasker_amount,
+            status="completed",
+            reference=f"escrow_release:{escrow_id}",
+            provider="internal",
+            metadata_json=json.dumps({
+                "escrow_id": escrow_id, "task_id": escrow.task_id,
+                "gross": str(escrow.amount), "commission_bps": commission_bps,
+                "commission": str(commission), "net": str(tasker_amount),
+                "source": "hold_auto_release",
+            }),
+        )
+        wallet.balance += tasker_amount
+        self.db.add(tx)
+        self.db.flush()
+
+        zaska_user_id = _cfg.zaska_wallet_user_id
+        if commission > Decimal("0") and zaska_user_id:
+            zaska_wallet = self._get_or_create_wallet(zaska_user_id, escrow.currency, for_update=True)
+            zaska_tx = Transaction(
+                id=_uuid(),
+                wallet_id=zaska_wallet.id,
+                type="credit",
+                amount=commission,
+                status="completed",
+                reference=f"commission:{escrow_id}",
+                provider="internal",
+                metadata_json=json.dumps({"escrow_id": escrow_id, "type": "zaska_commission"}),
+            )
+            zaska_wallet.balance += commission
+            self.db.add(zaska_tx)
+
+        escrow.status = "released"
+        escrow.settlement_tx_id = tx.id
+        self.db.commit()
+        self.db.refresh(escrow)
+        return escrow
 
     def partial_release_escrow(self, escrow_id: str, completion_percent: int) -> tuple[Escrow, Decimal, Decimal]:
         """Fixed split on partial task abandonment/completion:
@@ -629,14 +783,21 @@ class WalletService:
 
         ref = reference or f"fx:{from_currency}:{to_currency}:{_uuid()}"
 
-        # SELECT FOR UPDATE on both wallets to prevent concurrent race
-        from_wallet = self.get_wallet(user_id, from_currency, for_update=True)
+        # Canonical lock ordering for FX wallets of the SAME user.
+        # Even same-user wallets must be locked in deterministic order to prevent
+        # deadlocks when the same user issues concurrent FX conversions in both directions.
+        first_currency, second_currency = sorted([from_currency, to_currency])
+        if first_currency == from_currency:
+            from_wallet = self.get_wallet(user_id, from_currency, for_update=True)
+            to_wallet = self._get_or_create_wallet(user_id, to_currency, for_update=True)
+        else:
+            to_wallet = self._get_or_create_wallet(user_id, to_currency, for_update=True)
+            from_wallet = self.get_wallet(user_id, from_currency, for_update=True)
+
         if from_wallet.balance < from_amount:
             raise InsufficientFundsError(
                 f"Solde insuffisant : {from_wallet.balance} {from_currency} < {from_amount}"
             )
-
-        to_wallet = self._get_or_create_wallet(user_id, to_currency, for_update=True)
 
         debit_tx = Transaction(
             id=_uuid(),
@@ -748,9 +909,22 @@ class WalletService:
             stmt = stmt.with_for_update()
         wallet = self.db.execute(stmt).scalars().one_or_none()
         if wallet is None:
-            wallet = Wallet(id=_uuid(), user_id=user_id, currency=currency, balance=Decimal("0"))
-            self.db.add(wallet)
-            self.db.flush()
+            new_wallet = Wallet(id=_uuid(), user_id=user_id, currency=currency, balance=Decimal("0"))
+            self.db.add(new_wallet)
+            try:
+                # Use a SAVEPOINT so a concurrent-creation IntegrityError only rolls back
+                # the INSERT — NOT the entire outer transaction (which may have staged
+                # wallet credits via flush() that must not be lost).
+                with self.db.begin_nested():
+                    self.db.flush()
+                wallet = new_wallet
+            except IntegrityError:
+                # Another request won the INSERT race; discard our failed object and
+                # re-read the winner.  Outer transaction is intact (savepoint rolled back).
+                self.db.expunge(new_wallet)
+                wallet = self.db.execute(
+                    select(Wallet).where(Wallet.user_id == user_id, Wallet.currency == currency)
+                ).scalars().one()
         return wallet
 
     def _get_escrow(self, escrow_id: str, *, for_update: bool = False) -> Escrow:
@@ -817,6 +991,10 @@ class WalletService:
         Verifies recipient exists, locks both wallets, creates both transactions atomically.
         Raises ValueError if recipient doesn't exist.
         Raises InsufficientFundsError if sender has insufficient funds.
+
+        Deadlock prevention: wallets are always locked in alphabetical user_id order.
+        Two concurrent transfers A→B and B→A will both acquire locks in the same order,
+        eliminating the cycle that would cause a PostgreSQL deadlock.
         """
         from app.models.user import User
 
@@ -827,13 +1005,18 @@ class WalletService:
         if recipient is None:
             raise ValueError(f"Utilisateur destinataire {to_user_id} introuvable")
 
-        from_wallet = self.get_wallet(from_user_id, currency, for_update=True)
+        # Canonical lock ordering — always lock by user_id alphabetically to prevent deadlock
+        first_id, second_id = sorted([from_user_id, to_user_id])
+        first_wallet = self.get_wallet(first_id, currency, for_update=True)
+        second_wallet = self._get_or_create_wallet(second_id, currency, for_update=True)
+
+        from_wallet = first_wallet if first_id == from_user_id else second_wallet
+        to_wallet = second_wallet if second_id == to_user_id else first_wallet
+
         if from_wallet.balance < amount:
             raise InsufficientFundsError(
                 f"Solde insuffisant : {from_wallet.balance} {currency} < {amount} {currency}"
             )
-
-        to_wallet = self._get_or_create_wallet(to_user_id, currency, for_update=True)
 
         debit_tx = Transaction(
             id=_uuid(),
@@ -1046,12 +1229,11 @@ class WalletService:
 
     def list_payment_methods(self, user_id: str) -> list:
         from app.models.payment_method import PaymentMethod as PM
-        return (
-            self.db.query(PM)
-            .filter(PM.user_id == user_id)
+        return self.db.execute(
+            select(PM)
+            .where(PM.user_id == user_id)
             .order_by(PM.is_default.desc(), PM.created_at.desc())
-            .all()
-        )
+        ).scalars().all()
 
     def add_payment_method(
         self,
@@ -1065,7 +1247,9 @@ class WalletService:
     ):
         from app.models.payment_method import PaymentMethod as PM
         if is_default:
-            self.db.query(PM).filter(PM.user_id == user_id).update({"is_default": False})
+            self.db.execute(
+                PM.__table__.update().where(PM.user_id == user_id).values(is_default=False)
+            )
         method = PM(
             id=_uuid(),
             user_id=user_id,
@@ -1084,7 +1268,9 @@ class WalletService:
 
     def delete_payment_method(self, method_id: str, user_id: str) -> None:
         from app.models.payment_method import PaymentMethod as PM
-        method = self.db.query(PM).filter(PM.id == method_id, PM.user_id == user_id).one_or_none()
+        method = self.db.execute(
+            select(PM).where(PM.id == method_id, PM.user_id == user_id)
+        ).scalars().one_or_none()
         if method is None:
             raise ValueError("Méthode de paiement introuvable")
         self.db.delete(method)

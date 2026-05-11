@@ -195,7 +195,10 @@ class TestEscrowFlow:
         escrow = svc.create_escrow("task-1", "user-a", "user-b", Decimal("300"), "XOF")
         svc.release_escrow(escrow.id)
         balance_b_after = svc.get_balance("user-b", "XOF")
-        assert balance_b_after == balance_b_before + Decimal("300")
+        # 15% ZASKA commission — payee receives 85% of escrow amount
+        from app.core.config import settings as _s
+        commission = (Decimal("300") * Decimal(str(_s.zaska_commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
+        assert balance_b_after == balance_b_before + Decimal("300") - commission
 
     def test_release_escrow_status_becomes_released(self, svc):
         self._fund_payer(svc)

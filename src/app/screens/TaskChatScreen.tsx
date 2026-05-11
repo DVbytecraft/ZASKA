@@ -54,10 +54,15 @@ export function TaskChatScreen({ taskId, onBack }: TaskChatScreenProps) {
     if (!taskId) return;
     setCallError(null);
     try {
-      const res = await apiClient.post<{ call_id: string }>('/calls', {
+      const res = await apiClient.post<{ call_id: string; callee_online: boolean }>('/calls', {
         task_id: taskId,
         media_type: mediaType,
       });
+      if (!res.callee_online) {
+        setCallError("L'autre utilisateur est hors ligne. L'appel n'a pas pu aboutir.");
+        setTimeout(() => setCallError(null), 5000);
+        return;
+      }
       setActiveCall({ callId: res.call_id, mediaType });
     } catch {
       setCallError("Impossible de démarrer l'appel. Vérifiez votre connexion.");

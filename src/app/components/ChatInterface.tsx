@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Send, Phone, Video, MapPin, X, Navigation, Loader,
-  Paperclip, Image, FileText, Film, Download,
+  Paperclip, Image, FileText, Film, Download, WifiOff,
 } from 'lucide-react';
 import { Avatar } from './Avatar';
 import { apiClient, chatService } from '@zaska/shared-services';
@@ -30,6 +30,11 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// ── WebSocket URL helper ──────────────────────────────────────────────────────
+function getWsBase(): string {
+  const env = (import.meta as unknown as { env?: Record<string, string> }).env;
+  return env?.VITE_WS_URL ?? 'ws://localhost:6969';
+}
 
 // ── Location Drawer ───────────────────────────────────────────────────────────
 interface LocationDrawerProps { onSend: (text: string) => void; onClose: () => void; }
@@ -113,7 +118,6 @@ function MediaBubble({ url, type, isMe }: { url: string; type: string; isMe: boo
       />
     );
   }
-  // document
   return (
     <a
       href={url}
@@ -160,6 +164,146 @@ function FilePreview({ file, onRemove }: FilePreviewProps) {
   );
 }
 
+// ── Real-time WS hook ─────────────────────────────────────────────────────────
+// Connects to /ws/tasks/{taskId}, receives pushed messages, handles reconnection
+// and keepalive pings automatically.  Delivers incoming messages via onMessage.
+
+interface UseTaskWsOptions {
+  taskId: string | undefined;
+  onMessage: (msg: ChatMessage) => void;
+}
+
+function useTaskChatWs({ taskId, onMessage }: UseTaskWsOptions) {
+  const [connected, setConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  const seenIds = useRef<Set<string>>(new Set());
+
+  const clearTimers = () => {
+    if (pingRef.current) { clearInterval(pingRef.current); pingRef.current = null; }
+    if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
+  };
+
+  const connect = useCallback(async () => {
+    if (!taskId || !mountedRef.current) return;
+
+    // Obtain a one-time WS ticket from the REST API
+    let ticket: string;
+    try {
+      const res = await apiClient.post<{ ticket: string }>(`/chat/${taskId}/ws-ticket`, {});
+      ticket = res.ticket;
+    } catch {
+      // Ticket fetch failed — retry after 5s (backend may be restarting)
+      if (mountedRef.current) {
+        retryRef.current = setTimeout(connect, 5_000);
+      }
+      return;
+    }
+
+    if (!mountedRef.current) return;
+
+    const url = `${getWsBase()}/ws/tasks/${taskId}`;
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      // Auth handshake — must be first message after open
+      ws.send(JSON.stringify({ type: 'auth', ticket }));
+
+      // Keepalive: send ping every 30s so NATs / reverse proxies don't close idle connections
+      pingRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send('{"type":"ping"}');
+        }
+      }, 30_000);
+
+      if (mountedRef.current) setConnected(true);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data as string) as Record<string, unknown>;
+        // Ignore pong / system frames
+        if (data.type === 'pong' || !data.id) return;
+
+        const msgId = String(data.id ?? '');
+        // Deduplication — REST response already added our own sent message to state.
+        // Guard against the WS echo of messages we sent ourselves.
+        if (msgId && seenIds.current.has(msgId)) return;
+        if (msgId) seenIds.current.add(msgId);
+        // Cap set size to avoid unbounded growth
+        if (seenIds.current.size > 500) {
+          const first = seenIds.current.values().next().value;
+          seenIds.current.delete(first);
+        }
+
+        const msg: ChatMessage = {
+          id: msgId,
+          taskId: String(data.taskId ?? ''),
+          senderId: String(data.senderId ?? ''),
+          message: String(data.message ?? ''),
+          mediaUrl: data.mediaUrl ? String(data.mediaUrl) : undefined,
+          mediaType: data.mediaType as ChatMessage['mediaType'],
+          createdAt: String(data.createdAt ?? new Date().toISOString()),
+        };
+        onMessage(msg);
+      } catch {
+        // Malformed frame — ignore
+      }
+    };
+
+    ws.onerror = () => {
+      // Error is always followed by onclose — handle there
+    };
+
+    ws.onclose = () => {
+      clearTimers();
+      if (mountedRef.current) {
+        setConnected(false);
+        // Reconnect after 3s (exponential backoff not needed for short sessions)
+        retryRef.current = setTimeout(connect, 3_000);
+      }
+    };
+  }, [taskId, onMessage]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    seenIds.current = new Set();
+    void connect();
+
+    // Re-connect on tab becoming visible again (mobile foreground/background)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        const ws = wsRef.current;
+        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+          clearTimers();
+          void connect();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    // Re-connect on network recovery
+    const onOnline = () => {
+      clearTimers();
+      void connect();
+    };
+    window.addEventListener('online', onOnline);
+
+    return () => {
+      mountedRef.current = false;
+      clearTimers();
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('online', onOnline);
+      wsRef.current?.close();
+    };
+  }, [connect]);
+
+  return connected;
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 export function ChatInterface({ taskerName, taskId, partnerSrc, onCall }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -172,15 +316,30 @@ export function ChatInterface({ taskerName, taskId, partnerSrc, onCall }: ChatIn
   const [uploadError, setUploadError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Track IDs of messages already in state to guard WS duplicates
+  const knownIds = useRef<Set<string>>(new Set());
 
+  // Load initial history from REST
   useEffect(() => {
     if (!taskId) return;
-    chatService.listMessages(taskId).then(setMessages).catch(() => setMessages([]));
+    chatService.listMessages(taskId).then(msgs => {
+      setMessages(msgs);
+      knownIds.current = new Set(msgs.map(m => m.id));
+    }).catch(() => setMessages([]));
   }, [taskId]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   const userId = apiClient.getUserId() ?? '';
+
+  // Real-time WS receiver — appends incoming messages avoiding duplicates
+  const handleWsMessage = useCallback((msg: ChatMessage) => {
+    if (knownIds.current.has(msg.id)) return;
+    knownIds.current.add(msg.id);
+    setMessages(prev => [...prev, msg]);
+  }, []);
+
+  const wsConnected = useTaskChatWs({ taskId, onMessage: handleWsMessage });
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -226,6 +385,8 @@ export function ChatInterface({ taskerName, taskId, partnerSrc, onCall }: ChatIn
     if (!text) setNewMessage('');
     try {
       const sent = await chatService.sendMessage(taskId, body, mediaUrl, mediaType);
+      // Register the ID so the WS echo doesn't create a duplicate
+      knownIds.current.add(sent.id);
       setMessages(prev => [...prev, sent]);
     } catch {
       if (!text) setNewMessage(body);
@@ -258,9 +419,15 @@ export function ChatInterface({ taskerName, taskId, partnerSrc, onCall }: ChatIn
           <Avatar name={taskerName || 'T'} size="sm" src={partnerSrc ?? undefined} />
           <div>
             <h4 className="font-semibold text-gray-900">{taskerName || 'Discussion'}</h4>
-            <p className="text-xs text-green-600 flex items-center gap-1">
-              <span className="w-2 h-2 bg-green-500 rounded-full inline-block" /> En ligne
-            </p>
+            {wsConnected ? (
+              <p className="text-xs text-green-600 flex items-center gap-1">
+                <span className="w-2 h-2 bg-green-500 rounded-full inline-block" /> En ligne
+              </p>
+            ) : (
+              <p className="text-xs text-amber-600 flex items-center gap-1">
+                <WifiOff size={10} /> Reconnexion…
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -334,7 +501,6 @@ export function ChatInterface({ taskerName, taskId, partnerSrc, onCall }: ChatIn
       {/* Input bar */}
       <div className="px-3 py-3 bg-white border-t border-gray-200">
         <div className="flex items-center gap-2">
-          {/* Media attachment */}
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={!taskId || uploading}
@@ -344,7 +510,6 @@ export function ChatInterface({ taskerName, taskId, partnerSrc, onCall }: ChatIn
             <Paperclip size={17} className="text-gray-500" />
           </button>
 
-          {/* Location share */}
           <button
             onClick={() => setShowLocationDrawer(true)}
             disabled={!taskId}
