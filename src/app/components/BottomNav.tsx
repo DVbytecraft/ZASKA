@@ -1,4 +1,4 @@
-import { Home, Briefcase, Wallet, User, MessageSquare } from 'lucide-react';
+import { Home, Compass, Briefcase, MessageSquare, Wallet, User } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 interface BottomNavProps {
@@ -11,6 +11,7 @@ export function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
 
   const tabs = [
     { id: 'home',     label: t('nav.home'),     icon: Home },
+    { id: 'explore',  label: t('nav.explore'),  icon: Compass },
     { id: 'tasks',    label: t('nav.tasks'),    icon: Briefcase },
     { id: 'messages', label: t('nav.messages'), icon: MessageSquare },
     { id: 'wallet',   label: t('nav.wallet'),   icon: Wallet },
@@ -27,12 +28,12 @@ export function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
             <button
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className={`flex flex-col items-center gap-1 px-3 py-2 rounded-xl transition-all ${
+              className={`flex flex-col items-center gap-0.5 px-2 py-2 rounded-xl transition-all ${
                 isActive ? 'text-[#6D28D9] bg-[#6D28D9]/8' : 'text-gray-500 hover:text-gray-700'
               }`}
             >
-              <Icon size={21} strokeWidth={isActive ? 2.5 : 2} />
-              <span className={`text-[10px] leading-tight ${isActive ? 'font-semibold' : 'font-medium'}`}>
+              <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
+              <span className={`text-[9px] leading-tight ${isActive ? 'font-semibold' : 'font-medium'}`}>
                 {tab.label}
               </span>
             </button>
