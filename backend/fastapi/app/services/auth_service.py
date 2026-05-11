@@ -13,6 +13,7 @@ from app.core.redis_client import redis_sync
 from app.core.security import create_token, get_password_hash, revoke_all_user_tokens, verify_password
 from app.core.ws_ticket import create_ws_ticket
 from app.models.user import User
+from app.models.wallet import Wallet
 from app.services.email_service import EmailService
 
 
@@ -37,6 +38,18 @@ class AuthService:
         self.db = db
         self.email_service = EmailService()
 
+    def _purge_unverified(self, user: User) -> None:
+        """Atomically delete a pending (unverified) registration and its wallets.
+
+        An unverified user is not a real account — no financial history exists yet.
+        Safe to purge so the phone/email slot can be reused for a fresh attempt.
+        """
+        from sqlalchemy import delete as _delete
+        self.db.execute(_delete(Wallet).where(Wallet.user_id == user.id))
+        self.db.delete(user)
+        self.db.flush()
+        redis_sync.delete(f"otp:phone:{user.phone}")
+
     def register(
         self,
         phone: str,
@@ -50,10 +63,23 @@ class AuthService:
         phone = phone.strip()
         email_norm = email.lower().strip() if email else None
 
-        if email_norm and _get_user_by_email(self.db, email_norm):
-            raise ValueError("Email already registered")
-        if _get_user_by_phone(self.db, phone):
-            raise ValueError("Phone already registered")
+        # ── Phone collision ───────────────────────────────────────────────
+        existing_phone = _get_user_by_phone(self.db, phone)
+        if existing_phone:
+            if existing_phone.is_verified:
+                raise ValueError("Phone already registered")
+            # Unverified pending registration — purge and allow fresh attempt
+            self._purge_unverified(existing_phone)
+
+        # ── Email collision ───────────────────────────────────────────────
+        if email_norm:
+            existing_email = _get_user_by_email(self.db, email_norm)
+            if existing_email:
+                if existing_email.is_verified:
+                    raise ValueError("Email already registered")
+                # Different phone, same email — purge that orphan too
+                if existing_email.phone != phone:
+                    self._purge_unverified(existing_email)
 
         user = User(
             id=str(uuid.uuid4()),
