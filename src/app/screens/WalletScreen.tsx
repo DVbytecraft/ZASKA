@@ -4,6 +4,7 @@ import { Card } from '../components/Card';
 import { walletService } from '@zaska/shared-services';
 import type { Transaction, WalletBalance } from '@zaska/shared-services';
 import { Send, Download, CreditCard, TrendingUp, TrendingDown } from 'lucide-react';
+import { formatCurrency } from '../../services/fxService';
 
 interface WalletScreenProps {
   currency?: string;
@@ -87,7 +88,7 @@ export function WalletScreen({
   }, [load]);
 
   const balanceDisplay = wallet
-    ? `${wallet.currency} ${parseFloat(wallet.balance).toFixed(2)}`
+    ? formatCurrency(parseFloat(wallet.balance), wallet.currency)
     : loading
     ? '—'
     : 'N/A';
