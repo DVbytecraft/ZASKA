@@ -555,6 +555,7 @@ export default function App() {
       case 'wallet':
         return (
           <WalletScreen
+            currency={apiClient.getCurrency() ?? 'XOF'}
             onSendMoney={() => setCurrentScreen('sendMoney')}
             onWithdraw={() => setCurrentScreen('withdraw')}
             onAddFunds={() => setCurrentScreen('addFunds')}

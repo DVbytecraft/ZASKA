@@ -16,7 +16,26 @@ type SessionMeta = {
 };
 
 const inMemoryTokens: TokenStore = { accessToken: null, refreshToken: null };
-const inMemoryMeta: SessionMeta = { countryCode: null, currency: null, userId: null };
+
+// Restore country/currency from localStorage on module load (survives page refresh).
+// Tokens are NOT persisted (security) — user must re-login after refresh.
+const _LS_COUNTRY = 'zaska_country';
+const _LS_CURRENCY = 'zaska_currency';
+function _lsGet(key: string): string | null {
+  try { return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null; } catch { return null; }
+}
+function _lsSet(key: string, value: string): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(key, value); } catch { /* ignore */ }
+}
+function _lsDel(key: string): void {
+  try { if (typeof localStorage !== 'undefined') localStorage.removeItem(key); } catch { /* ignore */ }
+}
+
+const inMemoryMeta: SessionMeta = {
+  countryCode: _lsGet(_LS_COUNTRY),
+  currency: _lsGet(_LS_CURRENCY),
+  userId: null,
+};
 
 type _ViteImportMeta = { env?: Record<string, string | undefined> };
 
@@ -59,8 +78,8 @@ export class ApiClient {
   }
 
   setCountry(countryCode: string | null | undefined, currency?: string | null) {
-    if (countryCode) inMemoryMeta.countryCode = countryCode.toUpperCase();
-    if (currency) inMemoryMeta.currency = currency.toUpperCase();
+    if (countryCode) { inMemoryMeta.countryCode = countryCode.toUpperCase(); _lsSet(_LS_COUNTRY, inMemoryMeta.countryCode); }
+    if (currency)    { inMemoryMeta.currency    = currency.toUpperCase();    _lsSet(_LS_CURRENCY, inMemoryMeta.currency);    }
   }
 
   setUserId(userId: string | null) {
@@ -73,6 +92,8 @@ export class ApiClient {
     inMemoryMeta.countryCode = null;
     inMemoryMeta.currency = null;
     inMemoryMeta.userId = null;
+    _lsDel(_LS_COUNTRY);
+    _lsDel(_LS_CURRENCY);
   }
 
   getAccessToken() { return inMemoryTokens.accessToken; }
