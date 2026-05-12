@@ -4,7 +4,7 @@ import { Card } from '../components/Card';
 import { Avatar } from '../components/Avatar';
 import {
   ChevronRight, CreditCard, Clock, Settings, HelpCircle, LogOut,
-  Edit, ShieldCheck, ShieldAlert, ShieldOff, AlertCircle, MapPin,
+  Edit, ShieldCheck, ShieldAlert, ShieldOff, AlertCircle, MapPin, LayoutDashboard,
 } from 'lucide-react';
 
 interface ProfileScreenProps {
@@ -16,6 +16,7 @@ interface ProfileScreenProps {
   onSettings?: () => void;
   onSupport?: () => void;
   onLogout?: () => void;
+  onAdmin?: () => void;
 }
 
 type KycStatus = 'not_submitted' | 'pending' | 'approved' | 'rejected';
@@ -68,6 +69,7 @@ export function ProfileScreen({
   onSettings,
   onSupport,
   onLogout,
+  onAdmin,
 }: ProfileScreenProps = {}) {
   const [kycStatus, setKycStatus] = useState<KycStatus>('not_submitted');
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -193,7 +195,23 @@ export function ProfileScreen({
           })}
         </div>
 
-        <div className="mt-6">
+        {profile?.role === 'admin' && onAdmin && (
+          <div className="mt-4">
+            <Card onClick={onAdmin} className="hover:shadow-lg transition-all border border-[#6D28D9]/20 bg-[#6D28D9]/5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-[#6D28D9]/10 flex items-center justify-center">
+                    <LayoutDashboard size={18} className="text-[#6D28D9]" strokeWidth={2.5} />
+                  </div>
+                  <span className="font-medium text-[#6D28D9]">Dashboard Admin</span>
+                </div>
+                <ChevronRight size={18} className="text-[#6D28D9]/40" />
+              </div>
+            </Card>
+          </div>
+        )}
+
+        <div className="mt-4">
           <Card onClick={onLogout} className="hover:shadow-lg transition-all border border-red-100">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">

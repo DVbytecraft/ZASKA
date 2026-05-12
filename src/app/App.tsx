@@ -201,9 +201,8 @@ export default function App() {
   // ── Bottom nav tab switch ─────────────────────────────────────────────────
   useEffect(() => {
     if (activeTab === 'home') { setCurrentScreen('home'); setScreenKey((k) => k + 1); }
-    else if (activeTab === 'explore') { setCurrentScreen('search'); setScreenKey((k) => k + 1); }
+    else if (activeTab === 'explore') { setCurrentScreen('taskerMode'); setScreenKey((k) => k + 1); }
     else if (activeTab === 'tasks') { setTasksDefaultTab('client'); setCurrentScreen('tasksTab'); setScreenKey((k) => k + 1); }
-    else if (activeTab === 'messages') { setCurrentScreen('messages'); setScreenKey((k) => k + 1); }
     else if (activeTab === 'wallet') setCurrentScreen('wallet');
     else if (activeTab === 'profile') setCurrentScreen('profile');
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -586,6 +585,7 @@ export default function App() {
             onSettings={() => setCurrentScreen('settings')}
             onSupport={() => setCurrentScreen('support')}
             onLogout={() => { void authService.logout(); setCurrentScreen('login'); }}
+            onAdmin={() => setCurrentScreen('adminDashboard')}
           />
         );
 
