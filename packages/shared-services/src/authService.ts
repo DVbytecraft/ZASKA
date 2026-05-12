@@ -16,6 +16,7 @@ export const authService = {
   async verifyOtp(payload: VerifyOtpPayload): Promise<AuthSession> {
     const session = await apiClient.post<AuthSession>("/auth/verify-otp", payload);
     apiClient.setTokens({ accessToken: session.accessToken, refreshToken: session.refreshToken });
+    apiClient.setCountry(session.country ?? null, session.currency ?? null);
     apiClient.setUserId(session.userId ?? null);
     return session;
   },

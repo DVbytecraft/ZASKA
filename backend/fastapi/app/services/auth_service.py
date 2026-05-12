@@ -195,6 +195,18 @@ class AuthService:
 
         tokens = self._generate_tokens(user.id)
         tokens["userId"] = user.id
+
+        # Return country/currency so frontend can set the correct local wallet
+        # immediately after OTP — same data login() provides.
+        if user.country_code:
+            try:
+                from app.core.country_engine import CountryEngineService
+                config = CountryEngineService(redis_sync).get_country_config(user.country_code)
+                tokens["country"] = user.country_code
+                tokens["currency"] = config.currency
+            except Exception:
+                tokens["country"] = user.country_code
+
         return tokens
 
     def resend_otp(self, phone: str) -> None:
