@@ -255,6 +255,9 @@ class AuthService:
         tokens["email"] = user.email
         tokens["role"] = user.role
         tokens["isAdmin"] = (user.role == "admin")
+        # Return the user's registered country so the router uses it
+        # instead of the IP-detected fallback (which defaults to FR/EUR).
+        tokens["_user_country_code"] = user.country_code
         return tokens
 
     def logout(self, refresh_token: str) -> None:

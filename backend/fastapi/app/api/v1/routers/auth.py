@@ -133,10 +133,15 @@ def login(
         _check_login_rate_limit(request)
         data = service.login(email=payload.email, password=payload.password, country_code=country_code)
 
+        # Priority: user's registered country_code from DB > IP-detected fallback.
+        # IP detection stubs to None on Render → fallback "FR" → wrong EUR currency
+        # for all non-EU users. Using the stored country fixes this definitively.
+        effective_country = data.pop("_user_country_code", None) or country_code
+
         cre = CountryEngineService(redis_sync)
-        config = cre.get_country_config(country_code)
-        route = PaymentRouterService.route_payment(country_code, 0, config.currency)
-        data["country"] = country_code
+        config = cre.get_country_config(effective_country)
+        route = PaymentRouterService.route_payment(effective_country, 0, config.currency)
+        data["country"] = effective_country
         data["currency"] = config.currency
         data["paymentProvider"] = route.provider
         data["mobileMoneyEnabled"] = config.mobile_money_enabled
