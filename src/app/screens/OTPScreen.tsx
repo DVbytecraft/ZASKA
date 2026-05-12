@@ -6,11 +6,12 @@ import { authService } from '@zaska/shared-services';
 
 interface OTPScreenProps {
   phone: string;
+  email?: string;
   onBack: () => void;
   onVerify: () => void;
 }
 
-export function OTPScreen({ phone, onBack, onVerify }: OTPScreenProps) {
+export function OTPScreen({ phone, email, onBack, onVerify }: OTPScreenProps) {
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [resendLoading, setResendLoading] = useState(false);
   const [resendSent, setResendSent] = useState(false);
@@ -65,9 +66,15 @@ export function OTPScreen({ phone, onBack, onVerify }: OTPScreenProps) {
 
       <div className="flex-1 flex flex-col justify-center px-6">
         <div className="text-center mb-8">
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Vérifiez votre téléphone</h2>
-          <p className="text-gray-500 text-sm">Code envoyé au</p>
-          <p className="text-gray-900 font-semibold text-sm mt-0.5">{phone}</p>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            {email ? 'Vérifiez votre boîte mail' : 'Vérifiez votre téléphone'}
+          </h2>
+          <p className="text-gray-500 text-sm">
+            {email ? 'Code envoyé à' : 'Code envoyé au'}
+          </p>
+          <p className="text-gray-900 font-semibold text-sm mt-0.5">
+            {email ?? phone}
+          </p>
         </div>
 
         <div className="flex gap-2 justify-center mb-6">

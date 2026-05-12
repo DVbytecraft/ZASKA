@@ -309,6 +309,7 @@ export default function App() {
         return (
           <OTPScreen
             phone={registeredPhone}
+            email={registeredEmail || undefined}
             onBack={() => setCurrentScreen('register')}
             onVerify={() => setCurrentScreen('profileSetup')}
           />
