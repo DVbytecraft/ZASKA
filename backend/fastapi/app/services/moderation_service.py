@@ -1,20 +1,22 @@
 """Moderation Service — AI-assisted content moderation queue.
 
 Flow:
-  1. User reports content → ModerationCase created with AI severity analysis
-  2. Admin reviews → resolve / dismiss / escalate
-  3. Auto-escalate cron: HIGH/CRITICAL cases unresolved after 4h → ESCALATED
+  1. User reports content → ModerationCase created with rule-based severity (fast)
+  2. AI enrichment runs in background (BackgroundTasks) — updates severity + analysis
+  3. Admin reviews → resolve / dismiss / escalate
+  4. Auto-escalate cron: HIGH/CRITICAL cases unresolved after 4h → ESCALATED
 
 AI provider: Anthropic Claude Haiku (if ANTHROPIC_API_KEY set), else rule-based fallback.
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case as sql_case, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -24,11 +26,37 @@ from app.models.user import User
 
 
 _SEVERITY_KEYWORDS = {
-    "CRITICAL": ["violence", "arnaque", "viol", "drogue", "criminel", "terroris", "pédophil", "trafic"],
-    "HIGH":     ["harcèlement", "insulte grave", "menace", "escroquerie", "fraude", "agression"],
-    "MEDIUM":   ["spam", "faux profil", "discrimin", "racis", "sexis"],
-    "LOW":      ["incorrect", "inexact", "inapproprié", "désagréable"],
+    "CRITICAL": ["violence", "arnaque", "viol", "drogue", "criminel", "terroris", "pédophil", "trafic",
+                 "murder", "rape", "drug", "criminal", "terrorist", "trafficking"],
+    "HIGH":     ["harcèlement", "insulte grave", "menace", "escroquerie", "fraude", "agression",
+                 "harassment", "threat", "fraud", "scam", "assault"],
+    "MEDIUM":   ["spam", "faux profil", "discrimin", "racis", "sexis",
+                 "fake profile", "discriminat", "racist", "sexist"],
+    "LOW":      ["incorrect", "inexact", "inapproprié", "désagréable",
+                 "incorrect", "inaccurate", "inappropriate"],
 }
+
+# Severity order for ORDER BY (CRITICAL=0 → LOW=3)
+_SEV_ORDER = sql_case(
+    (ModerationCase.severity == "CRITICAL", 0),
+    (ModerationCase.severity == "HIGH", 1),
+    (ModerationCase.severity == "MEDIUM", 2),
+    else_=3,
+)
+
+# Prompt injection patterns to strip from user-supplied text before AI calls
+_INJECTION_RE = re.compile(
+    r"(ignore\s+(all\s+)?previous|disregard|system\s*:|assistant\s*:|"
+    r"<\|im_start\|>|<\|im_end\|>|\[INST\]|\[/INST\]|#{4,}|prompt\s*:|<system>)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_for_prompt(text: str) -> str:
+    """Strip prompt injection patterns and control characters from user input."""
+    text = text[:512]
+    text = _INJECTION_RE.sub("[FILTERED]", text)
+    return "".join(ch for ch in text if ch.isprintable() or ch in "\n\t").strip()
 
 
 def _rule_based_severity(reason: str) -> str:
@@ -41,7 +69,10 @@ def _rule_based_severity(reason: str) -> str:
 
 
 def _ai_severity(reason: str, content_type: str) -> str:
-    """Call Claude Haiku to classify severity. Falls back to rule-based on error."""
+    """Call Claude Haiku to classify severity. Falls back to rule-based on error.
+
+    NOTE: reason must be sanitized before calling this function.
+    """
     api_key = settings.anthropic_api_key.strip()
     if not api_key:
         return _rule_based_severity(reason)
@@ -50,11 +81,10 @@ def _ai_severity(reason: str, content_type: str) -> str:
 
         client = anthropic.Anthropic(api_key=api_key)
         prompt = (
-            f"Contenu signalé:\n"
-            f"Type: {content_type}\n"
-            f"Raison du signalement: {reason}\n\n"
-            "Classifie la sévérité parmi: LOW, MEDIUM, HIGH, CRITICAL.\n"
-            "Réponds avec UNIQUEMENT le mot de sévérité, rien d'autre."
+            "You are a content moderation assistant. Classify the severity of a user report.\n\n"
+            f"Content type: {content_type}\n"
+            f"Report reason: {reason}\n\n"
+            "Reply with exactly one word — the severity level: LOW, MEDIUM, HIGH, or CRITICAL."
         )
         message = client.messages.create(
             model=settings.anthropic_model,
@@ -66,12 +96,15 @@ def _ai_severity(reason: str, content_type: str) -> str:
             return raw
         return _rule_based_severity(reason)
     except Exception as exc:
-        logger.warning("moderation:ai_fallback error={}", exc)
+        logger.warning("moderation:ai_severity_fallback error={}", exc)
         return _rule_based_severity(reason)
 
 
 def _ai_analysis(reason: str, content_type: str) -> str | None:
-    """Get a brief AI analysis of the reported content. Returns None if AI unavailable."""
+    """Get a brief AI analysis of the reported content. Returns None if AI unavailable.
+
+    NOTE: reason must be sanitized before calling this function.
+    """
     api_key = settings.anthropic_api_key.strip()
     if not api_key:
         return None
@@ -80,13 +113,13 @@ def _ai_analysis(reason: str, content_type: str) -> str | None:
 
         client = anthropic.Anthropic(api_key=api_key)
         prompt = (
-            f"Analyse ce signalement sur la plateforme ZASKA:\n"
-            f"Type de contenu: {content_type}\n"
-            f"Raison: {reason}\n\n"
-            "Fournis une analyse concise (2-3 phrases) pour aider le modérateur:\n"
-            "1. Nature probable du problème\n"
-            "2. Risque pour la plateforme\n"
-            "3. Action recommandée"
+            "You are a content moderation assistant. Analyze this user report and provide "
+            "a concise 2-3 sentence summary for the human moderator covering:\n"
+            "1. Likely nature of the issue\n"
+            "2. Platform risk level\n"
+            "3. Recommended action\n\n"
+            f"Content type: {content_type}\n"
+            f"Report reason: {reason}"
         )
         message = client.messages.create(
             model=settings.anthropic_model,
@@ -103,7 +136,7 @@ class ModerationService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def report_content(
+    def report_content_sync(
         self,
         reporter_id: str,
         content_type: str,
@@ -111,11 +144,14 @@ class ModerationService:
         reported_user_id: str | None = None,
         content_id: str | None = None,
     ) -> ModerationCase:
+        """Create case immediately with rule-based severity (fast, no blocking AI call).
+
+        AI enrichment should be scheduled as a background task after this returns.
+        """
         if content_type not in ("profile", "task", "chat", "review"):
             raise ValueError("content_type must be: profile, task, chat, review")
 
-        severity = _ai_severity(reason, content_type)
-        analysis = _ai_analysis(reason, content_type)
+        severity = _rule_based_severity(reason)
 
         case = ModerationCase(
             id=str(uuid.uuid4()),
@@ -124,15 +160,42 @@ class ModerationService:
             content_type=content_type,
             content_id=content_id,
             reason=reason,
-            ai_analysis=analysis,
+            ai_analysis=None,
             severity=severity,
             status="PENDING",
         )
         self.db.add(case)
         self.db.commit()
         self.db.refresh(case)
-        logger.info("moderation:case_created id={} severity={}", case.id, severity)
+        logger.info("moderation:case_created id={} severity={} (rule-based)", case.id, severity)
         return case
+
+    @staticmethod
+    def enrich_with_ai(case_id: str, reason: str, content_type: str) -> None:
+        """Run AI severity + analysis and update the case. Uses its own DB session.
+
+        Designed to run as a FastAPI BackgroundTask after report_content_sync().
+        Blocking calls are acceptable here since this runs off the request thread.
+        """
+        from app.db.session import SessionLocal
+
+        safe_reason = _sanitize_for_prompt(reason)
+        severity = _ai_severity(safe_reason, content_type)
+        analysis = _ai_analysis(safe_reason, content_type)
+
+        db = SessionLocal()
+        try:
+            case = db.get(ModerationCase, case_id)
+            if case:
+                case.severity = severity
+                case.ai_analysis = analysis
+                case.updated_at = datetime.now(timezone.utc)
+                db.commit()
+                logger.info("moderation:ai_enriched id={} severity={}", case_id, severity)
+        except Exception as exc:
+            logger.error("moderation:ai_enrich_failed id={} error={}", case_id, exc)
+        finally:
+            db.close()
 
     def list_cases(
         self,
@@ -150,18 +213,14 @@ class ModerationService:
         if severity:
             q = q.where(ModerationCase.severity == severity)
 
-        # Sort: CRITICAL first, then by created_at desc
-        _sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-
         total = self.db.execute(
             select(func.count()).select_from(q.subquery())
         ).scalar() or 0
 
         cases = self.db.execute(
-            q.order_by(
-                ModerationCase.severity.asc(),  # CRITICAL < HIGH alphabetically: wrong
-                ModerationCase.created_at.desc(),
-            ).offset(offset).limit(limit)
+            q.order_by(_SEV_ORDER, ModerationCase.created_at.desc())
+            .offset(offset)
+            .limit(limit)
         ).scalars().all()
 
         return {
@@ -198,7 +257,6 @@ class ModerationService:
         case.resolved_at = now
         case.updated_at  = now
 
-        # Apply suspension if action requires it
         if action_taken == "banned" and case.reported_user_id:
             user = self.db.get(User, case.reported_user_id)
             if user:
@@ -214,11 +272,11 @@ class ModerationService:
         if case.status in ("RESOLVED", "DISMISSED"):
             raise ValueError(f"Case already {case.status}")
         now = datetime.now(timezone.utc)
-        case.status     = "DISMISSED"
-        case.resolution = reason
-        case.resolver_id= resolver_id
-        case.resolved_at= now
-        case.updated_at = now
+        case.status      = "DISMISSED"
+        case.resolution  = reason
+        case.resolver_id = resolver_id
+        case.resolved_at = now
+        case.updated_at  = now
         self.db.commit()
         self.db.refresh(case)
         return case

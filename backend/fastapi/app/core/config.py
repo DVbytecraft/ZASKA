@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     db_max_overflow: int = 20
     db_pool_recycle: int = 1800         # recycle connections after 30min (avoids stale handles)
 
+    # ── Redis Sentinel (High Availability) ───────────────────────────────
+    # Comma-separated "host:port" pairs, e.g. "sentinel1:26379,sentinel2:26379,sentinel3:26379"
+    # Leave empty to use redis_url directly (single-node or external managed Redis).
+    redis_sentinel_hosts: str = ""
+    redis_sentinel_master_name: str = "mymaster"
+
     # ── Redis connection pool ─────────────────────────────────────────────
     # Cap the async Redis pool to prevent pool explosion under WS storms.
     # 200 async + unlimited sync pool is safe for a single-node Redis with

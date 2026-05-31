@@ -117,6 +117,19 @@ async def lifespan(app: FastAPI):
     # In-process scheduler with distributed Redis locks
     start_scheduler()
 
+    # Seed trust catalog — idempotent, skips rows that already exist.
+    # Badges and skills tables would be empty on first boot without this.
+    from app.db.session import SessionLocal
+    from app.services.trust_service import TrustService
+    _seed_db = SessionLocal()
+    try:
+        TrustService(_seed_db).seed_catalog()
+        logger.info("ZASKA trust catalog seeded")
+    except Exception as _seed_err:
+        logger.error("trust_catalog:seed_failed error={}", _seed_err)
+    finally:
+        _seed_db.close()
+
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────────────

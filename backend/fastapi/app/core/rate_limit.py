@@ -1,6 +1,6 @@
 import time
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -49,3 +49,32 @@ class RedisRateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+
+def endpoint_rate_limit(key_prefix: str, max_requests: int, window_seconds: int):
+    """Return a FastAPI dependency that enforces a per-IP rate limit on a specific endpoint.
+
+    Usage:
+        _limit = endpoint_rate_limit("trust:report", max_requests=5, window_seconds=300)
+
+        @router.post("/report")
+        async def my_endpoint(_: None = Depends(_limit)):
+            ...
+    """
+    async def _check(request: Request) -> None:
+        client = request.client.host if request.client else "unknown"
+        window = int(time.time() // window_seconds)
+        key = f"rl:ep:{key_prefix}:{client}:{window}"
+        try:
+            n = await redis_async.eval(_LUA_RATE_LIMIT, 1, key, str(window_seconds + 5))
+            if int(n) > max_requests:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Trop de requêtes — réessayez dans {window_seconds // 60} minutes",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # fail open — Redis unavailable, let request through
+
+    return _check

@@ -1,12 +1,17 @@
-"""Photo verification via liveness detection.
+"""Photo verification via face presence detection.
+
+IMPORTANT — this is NOT true liveness detection.
+AWS Rekognition detect_faces can be fooled by a printed photo held in front of the camera.
+For production-grade liveness, migrate to:
+  - AWS Rekognition FaceLiveness (CreateFaceLivenessSession / GetFaceLivenessSessionResults)
+  - Or: iProov / Onfido / Smile Identity
 
 Provider priority:
-  1. AWS Rekognition — if AWS_ACCESS_KEY_ID configured
+  1. AWS Rekognition detect_faces — if AWS_ACCESS_KEY_ID configured
   2. Mock — auto-approve (dev mode)
 
-Liveness check logic:
-  - detect_faces with Attributes=['ALL']
-  - Exactly 1 face, Confidence > threshold
+Current check:
+  - Exactly 1 face detected, Confidence > threshold (default 0.80)
   - EyesOpen.Value == True
 """
 
@@ -110,5 +115,5 @@ class PhotoVerificationService:
         eyes_open = face.get("EyesOpen", {}).get("Value", False)
 
         if confidence >= threshold and eyes_open:
-            return (confidence, "VERIFIED", "rekognition")
-        return (confidence, "FAILED", "rekognition")
+            return (confidence, "VERIFIED", "rekognition_face_detection")
+        return (confidence, "FAILED", "rekognition_face_detection")

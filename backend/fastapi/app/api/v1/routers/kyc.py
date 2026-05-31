@@ -1,17 +1,22 @@
+import asyncio
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db, get_kyc_service
 from app.core.cloudinary_client import is_configured, upload_kyc_document
 from app.core.config import settings
+from app.core.rate_limit import endpoint_rate_limit
 from app.core.responses import success_response
 from app.models.user import User
 from app.services.kyc_service import KycService
-from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/kyc", tags=["kyc"])
+
+# 3 photo verification attempts per hour per IP — prevents Rekognition cost abuse
+_photo_verify_limit = endpoint_rate_limit("kyc:photo", max_requests=3, window_seconds=3600)
 
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
 
@@ -147,8 +152,14 @@ async def submit_photo_verification(
     selfie: UploadFile = File(..., description="Selfie photo (JPEG/PNG/WebP)"),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
+    _: None = Depends(_photo_verify_limit),
 ):
-    """Upload a selfie for liveness verification. Uses AWS Rekognition if configured, mock otherwise."""
+    """Upload a selfie for face presence verification.
+
+    Uses AWS Rekognition detect_faces if configured, mock otherwise.
+    NOTE: This verifies face presence, not true liveness — upgrade to
+    FaceLiveness API or a dedicated liveness provider for production.
+    """
     SELFIE_TYPES = {"image/jpeg", "image/png", "image/webp"}
     if selfie.content_type not in SELFIE_TYPES:
         raise HTTPException(status_code=400, detail="Selfie must be JPEG, PNG or WebP")
@@ -167,9 +178,11 @@ async def submit_photo_verification(
 
     try:
         from app.services.photo_verification_service import PhotoVerificationService
-        pv = PhotoVerificationService(db).submit(user_id=user_id, selfie_url=selfie_url)
+        pv_svc = PhotoVerificationService(db)
+        # Run blocking Rekognition/boto3 call in a thread so it doesn't starve the event loop
+        pv = await asyncio.to_thread(pv_svc.submit, user_id, selfie_url)
 
-        # Award PHOTO_VERIFIED badge if passed
+        # Recompute trust score to award PHOTO_VERIFIED badge if applicable
         if pv.status == "VERIFIED":
             try:
                 from app.services.trust_service import TrustService
