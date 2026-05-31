@@ -52,7 +52,11 @@ class RedisRateLimitMiddleware(BaseHTTPMiddleware):
 
 
 def endpoint_rate_limit(key_prefix: str, max_requests: int, window_seconds: int):
-    """Return a FastAPI dependency that enforces a per-IP rate limit on a specific endpoint.
+    """Return a FastAPI dependency that enforces per-IP and per-user rate limits.
+
+    Checks two Redis keys — one for the client IP and one for the authenticated
+    user_id (extracted from the Bearer JWT when present). Both must be under the
+    limit for the request to proceed. Falls open if Redis is unavailable.
 
     Usage:
         _limit = endpoint_rate_limit("trust:report", max_requests=5, window_seconds=300)
@@ -62,16 +66,40 @@ def endpoint_rate_limit(key_prefix: str, max_requests: int, window_seconds: int)
             ...
     """
     async def _check(request: Request) -> None:
+        from app.core.security import decode_token
+
         client = request.client.host if request.client else "unknown"
         window = int(time.time() // window_seconds)
-        key = f"rl:ep:{key_prefix}:{client}:{window}"
+        ip_key = f"rl:ep:{key_prefix}:{client}:{window}"
+
+        # Extract user_id from JWT if present — silently ignored if missing/invalid
+        user_id: str | None = None
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            try:
+                payload = decode_token(auth[7:])
+                if payload.get("type") == "access":
+                    raw_sub = payload.get("sub")
+                    if raw_sub:
+                        user_id = str(raw_sub)
+            except Exception:
+                pass
+
         try:
-            n = await redis_async.eval(_LUA_RATE_LIMIT, 1, key, str(window_seconds + 5))
-            if int(n) > max_requests:
+            n_ip = await redis_async.eval(_LUA_RATE_LIMIT, 1, ip_key, str(window_seconds + 5))
+            if int(n_ip) > max_requests:
                 raise HTTPException(
                     status_code=429,
                     detail=f"Trop de requêtes — réessayez dans {window_seconds // 60} minutes",
                 )
+            if user_id:
+                uid_key = f"rl:ep:{key_prefix}:uid:{user_id}:{window}"
+                n_uid = await redis_async.eval(_LUA_RATE_LIMIT, 1, uid_key, str(window_seconds + 5))
+                if int(n_uid) > max_requests:
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Trop de requêtes — réessayez dans {window_seconds // 60} minutes",
+                    )
         except HTTPException:
             raise
         except Exception:

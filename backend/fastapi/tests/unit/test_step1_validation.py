@@ -287,7 +287,8 @@ class TestModerationBackgroundTasks:
         mock_session_factory = MagicMock(return_value=mock_session)
 
         with patch("app.services.moderation_service._ai_severity", side_effect=Exception("Anthropic 503")), \
-             patch("app.db.session.SessionLocal", mock_session_factory):
+             patch("app.db.session.SessionLocal", mock_session_factory), \
+             patch("time.sleep"):  # avoid 7-second retry delays in unit tests
             # Must NOT raise — exception is caught inside enrich_with_ai
             ModerationService.enrich_with_ai(case_id, "test reason", "profile")
 
@@ -348,16 +349,53 @@ class TestModerationBackgroundTasks:
 
         # (assertions now above, immediately after enrich call)
 
-    def test_no_retry_mechanism_exists(self):
-        """Document known limitation: enrich_with_ai has no retry or DLQ."""
-        from app.services.moderation_service import ModerationService
+    def test_retry_mechanism_exists(self):
+        """C-05 fix: enrich_with_ai now retries up to 3 times with exponential backoff."""
+        from app.services.moderation_service import ModerationService, _RETRY_DELAYS
         import inspect
         source = inspect.getsource(ModerationService.enrich_with_ai)
-        assert "retry" not in source.lower(), (
-            "If retry was added, remove this test and document the new behavior"
-        )
-        # This test intentionally PASSES to document the known limitation:
-        # no retry = cases may remain with rule-based severity if AI is down
+        assert "_RETRY_DELAYS" in source, "enrich_with_ai must reference _RETRY_DELAYS"
+        assert len(_RETRY_DELAYS) == 3, "Must have exactly 3 retry attempts"
+
+    def test_enrich_with_ai_retries_on_transient_failure(self):
+        """enrich_with_ai retries AI calls on transient failures before succeeding."""
+        from app.services.moderation_service import ModerationService
+
+        call_count = 0
+
+        def flaky_ai_severity(reason, content_type):
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise Exception("Transient AI timeout")
+            return "HIGH"
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = MagicMock()
+
+        with patch("app.services.moderation_service._ai_severity", side_effect=flaky_ai_severity), \
+             patch("app.services.moderation_service._ai_analysis", return_value="Analysis"), \
+             patch("app.db.session.SessionLocal", return_value=mock_session), \
+             patch("time.sleep"):
+            ModerationService.enrich_with_ai("test-id", "reason text here for test", "profile")
+
+        assert call_count == 3, f"Expected 3 attempts (2 failures + 1 success), got {call_count}"
+        mock_session.commit.assert_called_once()
+
+    def test_enrich_with_ai_exhausts_all_retries_gracefully(self):
+        """When all retry attempts are exhausted, enrich_with_ai logs and returns without raising."""
+        from app.services.moderation_service import ModerationService
+
+        mock_session = MagicMock()
+        mock_session_factory = MagicMock(return_value=mock_session)
+
+        with patch("app.services.moderation_service._ai_severity", side_effect=Exception("AI down")), \
+             patch("app.db.session.SessionLocal", mock_session_factory), \
+             patch("time.sleep"):
+            ModerationService.enrich_with_ai("test-id", "reason here for testing", "profile")
+
+        mock_session.close.assert_called_once()
+        mock_session.commit.assert_not_called()  # no DB update on exhausted retries
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -576,20 +614,48 @@ class TestEndpointRateLimit:
         assert "trust:report" in keys_used[0]
         assert "kyc:photo" in keys_used[1]
 
-    def test_rate_limit_only_on_ip_not_user_id(self):
-        """Document known limitation: rate limit is IP-only, not user-bound.
-
-        An attacker with multiple IPs (VPN/proxies) can bypass per-IP limits.
-        This test documents the current behavior — not a pass/fail assertion.
-        """
-        # The endpoint_rate_limit factory uses request.client.host only.
-        # No user_id is incorporated into the key.
+    def test_rate_limit_includes_user_id_dimension(self):
+        """C-07 fix: endpoint_rate_limit now checks both IP and user_id keys."""
         from app.core.rate_limit import endpoint_rate_limit
         import inspect
         source = inspect.getsource(endpoint_rate_limit)
-        # Key format: rl:ep:{prefix}:{client_ip}:{window}
-        assert "client.host" in source
-        assert "user_id" not in source  # documenting: no user binding
+        assert "user_id" in source, "endpoint_rate_limit must incorporate user_id into rate limit key"
+        assert "uid_key" in source, "must generate a separate uid-based Redis key"
+
+    @pytest.mark.asyncio
+    async def test_authenticated_user_blocked_when_user_limit_exceeded(self):
+        """Authenticated user is blocked by user_id key even from a fresh IP."""
+        from app.core.rate_limit import endpoint_rate_limit
+        from app.core.security import create_token
+        from datetime import timedelta
+
+        dep = endpoint_rate_limit("test:uid_limit", max_requests=5, window_seconds=60)
+        token = create_token("user-abc-123", timedelta(minutes=30), "access")
+
+        def make_auth_request(client_ip: str = "99.99.99.99") -> Request:
+            scope = {
+                "type": "http",
+                "client": (client_ip, 12345),
+                "method": "POST",
+                "path": "/test",
+                "query_string": b"",
+                "headers": [(b"authorization", f"bearer {token}".encode())],
+            }
+            return Request(scope)
+
+        eval_calls = []
+
+        async def dual_key_eval(script, numkeys, key, ttl):
+            eval_calls.append(key)
+            return 6 if "uid:" in key else 1  # uid key over limit, IP key OK
+
+        with patch("app.core.rate_limit.redis_async") as mock_redis:
+            mock_redis.eval = dual_key_eval
+            with pytest.raises(HTTPException) as exc_info:
+                await dep(make_auth_request())
+
+        assert exc_info.value.status_code == 429
+        assert any("uid:" in k for k in eval_calls), "user_id key must be checked"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

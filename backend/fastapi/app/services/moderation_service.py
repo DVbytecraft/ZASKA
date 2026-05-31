@@ -12,6 +12,7 @@ AI provider: Anthropic Claude Haiku (if ANTHROPIC_API_KEY set), else rule-based 
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -43,6 +44,9 @@ _SEV_ORDER = sql_case(
     (ModerationCase.severity == "MEDIUM", 2),
     else_=3,
 )
+
+# Delays (seconds) between AI retry attempts: 3 attempts total (2s + 5s gaps)
+_RETRY_DELAYS = (2, 5, 10)
 
 # Prompt injection patterns to strip from user-supplied text before AI calls
 _INJECTION_RE = re.compile(
@@ -177,6 +181,7 @@ class ModerationService:
         Designed to run as a FastAPI BackgroundTask after report_content_sync().
         Blocking calls are acceptable here since this runs off the request thread.
         All exceptions are caught — a failed enrichment never crashes the worker.
+        Retries up to 3 times with exponential backoff (2s, 5s gaps) on AI failures.
         """
         from app.db.session import SessionLocal
 
@@ -184,8 +189,30 @@ class ModerationService:
 
         db = SessionLocal()
         try:
-            severity = _ai_severity(safe_reason, content_type)
-            analysis = _ai_analysis(safe_reason, content_type)
+            severity: str | None = None
+            analysis: str | None = None
+            last_exc: Exception | None = None
+
+            for attempt, delay in enumerate(_RETRY_DELAYS):
+                try:
+                    severity = _ai_severity(safe_reason, content_type)
+                    analysis = _ai_analysis(safe_reason, content_type)
+                    last_exc = None
+                    break
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning(
+                        "moderation:ai_enrich_retry attempt={} id={} error={}",
+                        attempt + 1, case_id, exc,
+                    )
+                    if attempt < len(_RETRY_DELAYS) - 1:
+                        time.sleep(delay)
+
+            if last_exc is not None:
+                logger.error(
+                    "moderation:ai_enrich_exhausted id={} error={}", case_id, last_exc
+                )
+                return  # leave case with rule-based severity intact
 
             case = db.get(ModerationCase, case_id)
             if case:

@@ -142,6 +142,12 @@ def _pv_serialize(pv) -> dict:
         "status": pv.status,
         "livenessScore": pv.liveness_score,
         "provider": pv.provider,
+        "verificationCapability": "face_detection_only",
+        "warning": (
+            "Cette vérification détecte la présence d'un visage mais ne constitue pas "
+            "une vérification de vivacité (liveness). Ne pas utiliser pour des opérations "
+            "à risque élevé sans vérification supplémentaire."
+        ),
         "reviewedAt": pv.reviewed_at.isoformat() if pv.reviewed_at else None,
         "createdAt": pv.created_at.isoformat(),
     }
