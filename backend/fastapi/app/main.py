@@ -21,6 +21,7 @@ from app.api.websocket import (
 )
 from app.core.config import settings
 from app.core.idempotency_middleware import IdempotencyMiddleware
+from app.middleware.device_fingerprint import DeviceFingerprintMiddleware
 from app.core.observability import RequestIDMiddleware, logger
 from app.core.rate_limit import RedisRateLimitMiddleware
 from app.core.responses import error_response, success_response
@@ -140,12 +141,13 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(DeviceFingerprintMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Country-Code", "X-Request-ID", "X-Idempotency-Key"],
+    allow_headers=["Authorization", "Content-Type", "X-Country-Code", "X-Request-ID", "X-Idempotency-Key", "X-Device-ID"],
 )
 app.add_middleware(
     RedisRateLimitMiddleware,

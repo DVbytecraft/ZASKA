@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_minutes: int = 60 * 24 * 7
     otp_expire_minutes: int = 5
+    # Separate secret for OTP HMAC — prevents algorithm confusion between JWT and OTP.
+    # If unset, falls back to jwt_secret (backwards-compatible).
+    otp_secret: str = ""
     ws_ticket_ttl_seconds: int = 60
 
     cors_allowed_origins: str = "http://localhost:3010,http://localhost:5173,http://localhost:5174"

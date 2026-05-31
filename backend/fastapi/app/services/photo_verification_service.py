@@ -1,18 +1,18 @@
-"""Photo verification via face presence detection.
+"""Photo verification — face detection and face comparison.
 
-IMPORTANT — this is NOT true liveness detection.
-AWS Rekognition detect_faces can be fooled by a printed photo held in front of the camera.
+Verification modes (in priority order):
+  1. Face comparison (selfie vs KYC document) — compare_with_kyc()
+     Uses Rekognition CompareFaces — confirms selfie matches identity document.
+     This is stronger than face detection alone.
+  2. Face detection (selfie only) — submit()
+     Uses Rekognition detect_faces — confirms a real face is present.
+     NOT true liveness: a printed photo can bypass this check.
+  3. Mock — auto-approve (dev mode when AWS not configured)
+
+IMPORTANT — true liveness not yet implemented.
 For production-grade liveness, migrate to:
   - AWS Rekognition FaceLiveness (CreateFaceLivenessSession / GetFaceLivenessSessionResults)
   - Or: iProov / Onfido / Smile Identity
-
-Provider priority:
-  1. AWS Rekognition detect_faces — if AWS_ACCESS_KEY_ID configured
-  2. Mock — auto-approve (dev mode)
-
-Current check:
-  - Exactly 1 face detected, Confidence > threshold (default 0.80)
-  - EyesOpen.Value == True
 """
 
 from __future__ import annotations
@@ -81,8 +81,60 @@ class PhotoVerificationService:
         logger.debug("photo_verification:mock_approve")
         return (0.95, "VERIFIED", "mock")
 
+    def compare_with_kyc(self, user_id: str, selfie_url: str, kyc_doc_url: str) -> dict:
+        """Compare a selfie against a KYC identity document using Rekognition CompareFaces.
+
+        Returns a dict with: match (bool), similarity (float 0-1), status, provider.
+        Higher similarity = more likely the same person.
+        Threshold: 80% similarity required (Rekognition default).
+        """
+        aws_key = settings.aws_access_key_id.strip()
+        if not aws_key:
+            logger.debug("photo_verification:compare_mock user_id={}", user_id)
+            return {"match": True, "similarity": 0.99, "status": "MATCH", "provider": "mock"}
+        try:
+            return self._rekognition_compare_faces(selfie_url, kyc_doc_url)
+        except Exception as exc:
+            logger.error("photo_verification:compare_error user_id={} error={}", user_id, exc)
+            return {"match": False, "similarity": 0.0, "status": "ERROR", "provider": "rekognition"}
+
+    def _rekognition_compare_faces(self, source_url: str, target_url: str) -> dict:
+        """Compare source face (selfie) against target face (KYC doc) using CompareFaces."""
+        import urllib.request
+        import boto3  # type: ignore[import-untyped]
+
+        client = boto3.client(
+            "rekognition",
+            region_name=settings.aws_region,
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+        )
+
+        with urllib.request.urlopen(source_url, timeout=10) as r:
+            source_bytes = r.read()
+        with urllib.request.urlopen(target_url, timeout=10) as r:
+            target_bytes = r.read()
+
+        result = client.compare_faces(
+            SourceImage={"Bytes": source_bytes},
+            TargetImage={"Bytes": target_bytes},
+            SimilarityThreshold=70.0,
+        )
+        matches = result.get("FaceMatches", [])
+        if not matches:
+            return {"match": False, "similarity": 0.0, "status": "NO_MATCH", "provider": "rekognition_compare"}
+
+        best = max(matches, key=lambda m: m.get("Similarity", 0))
+        similarity = best.get("Similarity", 0.0) / 100.0
+        matched = similarity >= 0.80
+        return {
+            "match": matched,
+            "similarity": round(similarity, 3),
+            "status": "MATCH" if matched else "LOW_SIMILARITY",
+            "provider": "rekognition_compare",
+        }
+
     def _rekognition_liveness(self, selfie_url: str) -> tuple[float, str, str]:
-        import io
         import urllib.request
 
         import boto3  # type: ignore[import-untyped]

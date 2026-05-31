@@ -1,12 +1,18 @@
 """Trust Score Engine.
 
-Algorithm — 6 components totalling 100 points:
-  identity   (25): phone_verified + email_set + kyc_approved
-  financial  (20): has_transactions + no_recent_payout_failures + positive_balance
-  profile    (15): avatar + bio + city + hourly_rate + skills
-  age        (10): account age in days → tiered
-  community  (20): rating_avg * 4 (capped) weighted by review count
-  behavior   (10): not_suspended + no_recent_moderation_cases
+Algorithm — 9 components totalling up to 130 points (capped at 100):
+  identity        (25): phone_verified + email_set + kyc_approved
+  financial       (20): has_transactions + no_recent_payout_failures + positive_balance
+  profile         (15): avatar + bio + city + hourly_rate + skills
+  age             (10): account age in days → tiered
+  community       (20): rating_avg * 4 (capped) weighted by review count
+  behavior        (10): not_suspended + no_recent_moderation_cases
+  completion_rate (15): tasks completed / tasks assigned as tasker
+  activity_recency(10): decays if user has been inactive > 30 days
+  device_trust     (5): single-user device known for X days (X-Device-ID)
+
+Total is min(100, sum_of_components). The extra 30 pts from new components let
+active users compensate for weak areas while still being capped at 100.
 
 Levels:  0-20 BRONZE | 21-40 SILVER | 41-60 GOLD | 61-80 PLATINUM | 81-100 DIAMOND
 
@@ -179,14 +185,21 @@ class TrustService:
         if user is None:
             raise ValueError(f"User {user_id} not found")
 
-        identity  = self._identity(user)
-        financial = self._financial(user)
-        profile   = self._profile(user)
-        age       = self._age(user)
-        community = self._community(user)
-        behavior  = self._behavior(user)
+        identity         = self._identity(user)
+        financial        = self._financial(user)
+        profile          = self._profile(user)
+        age              = self._age(user)
+        community        = self._community(user)
+        behavior         = self._behavior(user)
+        completion_rate  = self._completion_rate(user)
+        activity_recency = self._activity_recency(user)
+        device_trust     = self._device_trust(user.id)
 
-        total = round(identity + financial + profile + age + community + behavior, 1)
+        total = round(
+            identity + financial + profile + age + community + behavior
+            + completion_rate + activity_recency + device_trust,
+            1,
+        )
         total = max(0.0, min(100.0, total))
         level = _level_for(total)
 
@@ -330,6 +343,100 @@ class TrustService:
         if recent_cases == 0:
             score += 5.0
         return min(10.0, score)
+
+    def _completion_rate(self, user: User) -> float:
+        """0-15 pts: ratio of completed tasks to all assigned tasks as tasker.
+
+        Penalizes users who accept tasks then abandon them.
+        """
+        from app.models.task import Task
+        assigned = self.db.execute(
+            select(func.count(Task.id)).where(
+                Task.assigned_to == user.id,
+                Task.status.in_(["COMPLETED", "CANCELLED", "DISPUTE"]),
+            )
+        ).scalar() or 0
+        if assigned == 0:
+            return 0.0
+        completed = self.db.execute(
+            select(func.count(Task.id)).where(
+                Task.assigned_to == user.id,
+                Task.status == "COMPLETED",
+            )
+        ).scalar() or 0
+        rate = completed / assigned
+        return round(min(15.0, rate * 15.0), 1)
+
+    def _activity_recency(self, user: User) -> float:
+        """0-10 pts: decays if user has had no transactions or task activity in 30+ days.
+
+        Full 10 pts if active in last 30 days, prorated decay down to 0 at 180 days.
+        """
+        from app.models.task import Task
+        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        one_eighty_days_ago = datetime.now(timezone.utc) - timedelta(days=180)
+
+        # Check recent transaction activity
+        recent_tx = self.db.execute(
+            select(func.count(Transaction.id))
+            .join(Wallet, Wallet.id == Transaction.wallet_id)
+            .where(
+                Wallet.user_id == user.id,
+                Transaction.created_at >= thirty_days_ago,
+            )
+        ).scalar() or 0
+        if recent_tx > 0:
+            return 10.0
+
+        # Check recent task activity (as client or tasker)
+        recent_task = self.db.execute(
+            select(func.count(Task.id)).where(
+                (Task.created_by == user.id) | (Task.assigned_to == user.id),
+                Task.created_at >= thirty_days_ago,
+            )
+        ).scalar() or 0
+        if recent_task > 0:
+            return 10.0
+
+        # Check if active within 180 days for partial credit
+        somewhat_recent_tx = self.db.execute(
+            select(func.count(Transaction.id))
+            .join(Wallet, Wallet.id == Transaction.wallet_id)
+            .where(
+                Wallet.user_id == user.id,
+                Transaction.created_at >= one_eighty_days_ago,
+            )
+        ).scalar() or 0
+        if somewhat_recent_tx > 0:
+            return 5.0
+
+        return 0.0
+
+    def _device_trust(self, user_id: str) -> float:
+        """0-5 pts: trusted single-user device = 5 pts, multi-account device = 0 pts.
+
+        Reads device fingerprint data from Redis (populated by DeviceFingerprintMiddleware).
+        Falls back to 0 if Redis unavailable or no device data.
+        """
+        try:
+            from app.services.multi_account_service import MultiAccountService
+            from app.core.redis_client import redis_sync
+            # Find device IDs registered to this user (look for sets containing user_id)
+            # Since we can't SCAN all device keys cheaply, we store a reverse index
+            user_devices_key = f"user_devices:{user_id}"
+            raw_devices = redis_sync.smembers(user_devices_key)
+            if not raw_devices:
+                return 0.0
+            svc = MultiAccountService()
+            best_score = 0.0
+            for raw_dev in raw_devices:
+                dev_id = raw_dev.decode() if isinstance(raw_dev, bytes) else raw_dev
+                score = svc.get_device_trust_score(user_id, dev_id)
+                if score > best_score:
+                    best_score = score
+            return best_score
+        except Exception:
+            return 0.0
 
     def _award_badges(self, user: User, ts: TrustScore) -> None:
         """Auto-award badges based on current state. Idempotent — won't re-award."""

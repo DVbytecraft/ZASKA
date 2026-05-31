@@ -93,10 +93,12 @@ def require_admin(
     user_id: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ) -> str:
-    """Require the authenticated user to have admin role."""
+    """Require the authenticated user to have admin role and not be suspended/locked."""
     user = db.get(User, user_id)
     if user is None or user.role != settings.admin_role:
         raise HTTPException(status_code=403, detail="Admin access required")
+    if user.is_suspended or user.is_locked:
+        raise HTTPException(status_code=403, detail="Admin access revoked")
     return user_id
 
 

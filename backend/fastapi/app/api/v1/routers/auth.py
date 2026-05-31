@@ -56,6 +56,18 @@ def _check_verify_otp_rate_limit(phone: str) -> None:
     _check_rate_limit(f"rl:verify_otp:{phone}", limit=10, window_seconds=600)
 
 
+def _check_email_otp_rate_limit(request: Request, email: str) -> None:
+    """Rate limit password-reset / forgot-password by both IP and email address.
+
+    SEC-003: IP-only limit is bypassable via rotating proxies. Email key ensures
+    a single target address cannot be bombed regardless of source IP diversity.
+    """
+    ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(f"rl:otp:{ip}", limit=5, window_seconds=300)
+    email_norm = email.lower().strip()
+    _check_rate_limit(f"rl:otp:email:{email_norm}", limit=3, window_seconds=300)
+
+
 @router.post("/register")
 def register(
     request: Request,
@@ -201,7 +213,7 @@ def forgot_password(
     service: AuthService = Depends(get_auth_service),
 ):
     """Send password-reset OTP. Always returns success to prevent email enumeration."""
-    _check_otp_rate_limit(request)
+    _check_email_otp_rate_limit(request, payload.email)
     try:
         service.forgot_password(email=payload.email)
         return success_response({"sent": True})
@@ -215,7 +227,7 @@ def reset_password(
     payload: ResetPasswordPayload,
     service: AuthService = Depends(get_auth_service),
 ):
-    _check_otp_rate_limit(request)
+    _check_email_otp_rate_limit(request, payload.email)
     try:
         service.reset_password(email=payload.email, code=payload.code, new_password=payload.new_password)
         return success_response({"reset": True})

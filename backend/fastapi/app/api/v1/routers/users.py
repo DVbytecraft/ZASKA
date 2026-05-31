@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -64,23 +64,101 @@ def get_me(user_id: str = Depends(get_current_user_id), db: Session = Depends(ge
     return success_response(data)
 
 
+@router.get("/{user_id}/history")
+def get_user_history(
+    user_id: str,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=20, ge=1, le=100),
+    _: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Return paginated list of completed tasks for a user (as tasker).
+
+    Shows public task history — title, completion date, and rating received.
+    """
+    from app.models.task import Task
+    user = db.execute(select(User).where(User.id == user_id)).scalars().one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    offset = (page - 1) * limit
+    tasks = db.execute(
+        select(Task)
+        .where(Task.assigned_to == user_id, Task.status == "COMPLETED")
+        .order_by(Task.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    ).scalars().all()
+
+    total = db.execute(
+        select(__import__("sqlalchemy").func.count(Task.id))
+        .where(Task.assigned_to == user_id, Task.status == "COMPLETED")
+    ).scalar() or 0
+
+    return success_response({
+        "user_id": user_id,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "tasks": [
+            {
+                "id": t.id,
+                "title": t.title,
+                "city": t.city,
+                "country": t.country,
+                "currency": t.currency,
+                "price": float(t.price),
+                "completed_at": t.created_at.isoformat(),
+            }
+            for t in tasks
+        ],
+    })
+
+
 @router.get("/{user_id}")
 def get_user_public(
     user_id: str,
     _: str = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    """Return minimal public profile for any user (name + avatar)."""
+    """Return enriched public profile: name, avatar, trust score, skills, badges, bio."""
     user = db.execute(select(User).where(User.id == user_id)).scalars().one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
-    return success_response({
+
+    data: dict = {
         "id": user.id,
         "first_name": user.first_name,
         "last_name": user.last_name,
         "full_name": user.full_name,
         "avatar_url": user.avatar_url,
-    })
+        "bio": getattr(user, "bio", None),
+        "city": getattr(user, "city", None),
+        "availability": getattr(user, "availability", None),
+        "hourly_rate": getattr(user, "hourly_rate", None),
+        "response_time": getattr(user, "response_time", None),
+        "rating_avg": round(user.rating_sum / user.rating_count, 2) if user.rating_count > 0 else None,
+        "rating_count": user.rating_count,
+        "member_since": user.created_at.isoformat(),
+    }
+
+    try:
+        from app.services.trust_service import TrustService
+        svc = TrustService(db)
+        ts = svc.get_trust_score(user_id)
+        if ts:
+            data["trustScore"] = {
+                "totalScore": ts.total_score,
+                "level": ts.level,
+                "computedAt": ts.computed_at.isoformat(),
+            }
+        data["skills"] = svc.get_user_skills(user_id)
+        data["badges"] = svc.get_user_badges(user_id)
+    except Exception:
+        data["skills"] = []
+        data["badges"] = []
+
+    return success_response(data)
 
 
 @router.patch("/me/profile")

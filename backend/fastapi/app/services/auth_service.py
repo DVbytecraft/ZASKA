@@ -18,7 +18,8 @@ from app.services.email_service import EmailService
 
 
 def _hash_otp(code: str) -> str:
-    return hmac.new(settings.jwt_secret.encode(), code.encode(), hashlib.sha256).hexdigest()
+    secret = (settings.otp_secret.strip() or settings.jwt_secret).encode()
+    return hmac.new(secret, code.encode(), hashlib.sha256).hexdigest()
 
 
 def _verify_otp_hash(code: str, stored_hash: str) -> bool:
