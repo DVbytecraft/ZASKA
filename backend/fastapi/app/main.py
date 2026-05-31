@@ -45,6 +45,7 @@ from app.models import (  # noqa: F401
     task,
     task_application,
     task_completion_code,
+    trust,
     user,
     user_address,
     virtual_card,

@@ -127,3 +127,70 @@ def reject_kyc(
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Unable to reject KYC") from exc
+
+
+# ── Photo Verification (selfie liveness) ──────────────────────────────────────
+
+def _pv_serialize(pv) -> dict:
+    return {
+        "id": pv.id,
+        "status": pv.status,
+        "livenessScore": pv.liveness_score,
+        "provider": pv.provider,
+        "reviewedAt": pv.reviewed_at.isoformat() if pv.reviewed_at else None,
+        "createdAt": pv.created_at.isoformat(),
+    }
+
+
+@router.post("/photo-verification")
+async def submit_photo_verification(
+    selfie: UploadFile = File(..., description="Selfie photo (JPEG/PNG/WebP)"),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Upload a selfie for liveness verification. Uses AWS Rekognition if configured, mock otherwise."""
+    SELFIE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+    if selfie.content_type not in SELFIE_TYPES:
+        raise HTTPException(status_code=400, detail="Selfie must be JPEG, PNG or WebP")
+
+    data = await selfie.read()
+    if len(data) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Selfie too large (max {settings.max_upload_bytes // 1_000_000} MB)",
+        )
+
+    if not is_configured():
+        raise HTTPException(status_code=503, detail="Storage not configured — contact support")
+
+    selfie_url = await upload_kyc_document(data, selfie.content_type, f"selfie-{uuid.uuid4()}")
+
+    try:
+        from app.services.photo_verification_service import PhotoVerificationService
+        pv = PhotoVerificationService(db).submit(user_id=user_id, selfie_url=selfie_url)
+
+        # Award PHOTO_VERIFIED badge if passed
+        if pv.status == "VERIFIED":
+            try:
+                from app.services.trust_service import TrustService
+                TrustService(db).compute_for_user(user_id)
+            except Exception:
+                pass
+
+        return success_response(_pv_serialize(pv))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Photo verification failed") from exc
+
+
+@router.get("/photo-verification/me")
+def get_photo_verification_status(
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    from app.services.photo_verification_service import PhotoVerificationService
+    pv = PhotoVerificationService(db).get_status(user_id)
+    if pv is None:
+        return success_response({"status": "not_submitted"})
+    return success_response(_pv_serialize(pv))

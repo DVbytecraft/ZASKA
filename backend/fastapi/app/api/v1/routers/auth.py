@@ -64,6 +64,11 @@ def register(
     country_code: str = Depends(get_country_code),
 ):
     _check_register_rate_limit(request)
+    # Turnstile anti-bot check
+    from app.services.turnstile_service import verify_turnstile_token
+    ip = request.client.host if request.client else None
+    if not verify_turnstile_token(payload.cf_turnstile_response, ip):
+        raise HTTPException(status_code=403, detail="Vérification anti-bot échouée — rechargez la page et réessayez")
     try:
         data = service.register(
             phone=payload.phone,
@@ -131,6 +136,11 @@ def login(
 ):
     try:
         _check_login_rate_limit(request)
+        # Turnstile anti-bot check
+        from app.services.turnstile_service import verify_turnstile_token
+        ip = request.client.host if request.client else None
+        if not verify_turnstile_token(payload.cf_turnstile_response, ip):
+            raise HTTPException(status_code=403, detail="Vérification anti-bot échouée — rechargez la page et réessayez")
         data = service.login(email=payload.email, password=payload.password, country_code=country_code)
 
         # Priority: user's registered country_code from DB > IP-detected fallback.

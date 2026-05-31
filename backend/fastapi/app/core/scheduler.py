@@ -47,6 +47,8 @@ _JOB_MAX_SILENCE: dict[str, float] = {
     "reconciliation": 900,
     "otp_cleanup": 1800,
     "backup_postgres": 172800,
+    "trust_score_recompute": 90000,   # daily job — alert after 25h silence
+    "moderation_auto_escalate": 7200, # hourly job — alert after 2h silence
 }
 
 
@@ -263,6 +265,36 @@ def _check_pending_payouts() -> None:
         db.close()
 
 
+def _recompute_trust_scores() -> None:
+    # Lock TTL = 86390s (daily job)
+    if not _acquire_job_lock("trust_score_recompute", 86390):
+        return
+    from app.services.trust_service import TrustService
+    db = SessionLocal()
+    try:
+        count = TrustService(db).recompute_all()
+        logger.info("trust_score_recompute: processed=%s", count)
+    except Exception as exc:
+        logger.error("trust_score_recompute: failed — %s", exc)
+    finally:
+        db.close()
+
+
+def _moderation_auto_escalate() -> None:
+    # Lock TTL = 3590s (hourly job)
+    if not _acquire_job_lock("moderation_auto_escalate", 3590):
+        return
+    from app.services.moderation_service import ModerationService
+    db = SessionLocal()
+    try:
+        count = ModerationService(db).auto_escalate_stale()
+        logger.info("moderation_auto_escalate: escalated=%s", count)
+    except Exception as exc:
+        logger.error("moderation_auto_escalate: failed — %s", exc)
+    finally:
+        db.close()
+
+
 def _backup_postgres() -> None:
     # Lock TTL = 86390s (interval 86400s - 10s).  Only one replica runs the daily backup.
     if not _acquire_job_lock("backup_postgres", 86390):
@@ -320,12 +352,14 @@ def _backup_postgres() -> None:
 def start_scheduler() -> None:
     """Create asyncio background tasks for all periodic jobs + watchdog."""
     jobs = [
-        (300,   "otp_cleanup",           _cleanup_otp),
-        (300,   "release_held_escrows",  _release_held_escrows),
-        (30,    "process_outbox",        _process_outbox),
-        (60,    "check_pending_payouts", _check_pending_payouts),
-        (300,   "reconciliation",        _run_reconciliation),
-        (86400, "backup_postgres",       _backup_postgres),
+        (300,   "otp_cleanup",              _cleanup_otp),
+        (300,   "release_held_escrows",     _release_held_escrows),
+        (30,    "process_outbox",           _process_outbox),
+        (60,    "check_pending_payouts",    _check_pending_payouts),
+        (300,   "reconciliation",           _run_reconciliation),
+        (86400, "backup_postgres",          _backup_postgres),
+        (86400, "trust_score_recompute",    _recompute_trust_scores),
+        (3600,  "moderation_auto_escalate", _moderation_auto_escalate),
     ]
     for interval, name, fn in jobs:
         task = asyncio.create_task(_run_every(interval, name, fn))

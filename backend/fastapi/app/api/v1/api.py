@@ -10,11 +10,13 @@ from app.api.v1.routers import (
     feature_flags,
     fx,
     kyc,
+    moderation,
     notifications,
     payments,
     statement,
     system,
     tasks,
+    trust,
     users,
     wallet,
 )
@@ -36,3 +38,5 @@ api_router.include_router(cards.router)
 api_router.include_router(statement.router)
 api_router.include_router(notifications.router)
 api_router.include_router(fx.router)
+api_router.include_router(trust.router)
+api_router.include_router(moderation.router)

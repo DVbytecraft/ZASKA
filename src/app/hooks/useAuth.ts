@@ -52,11 +52,11 @@ export function useAuth() {
     }
   };
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string, turnstileToken?: string) => {
     setLoading(true);
     setError(null);
     try {
-      const data = await authService.login({ email, password });
+      const data = await authService.login({ email, password, cf_turnstile_response: turnstileToken });
       setSession(data);
       return data;
     } catch (err) {

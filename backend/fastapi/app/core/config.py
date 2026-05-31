@@ -128,6 +128,21 @@ class Settings(BaseSettings):
 
     sentry_dsn: str = ""
 
+    # ── Cloudflare Turnstile (anti-bot) ──────────────────────────────────────
+    # Leave empty in dev → auto-bypass. Set to Cloudflare test key in staging.
+    turnstile_secret_key: str = ""
+
+    # ── Anthropic (AI moderation) ─────────────────────────────────────────────
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-haiku-4-5-20251001"
+
+    # ── AWS (photo liveness via Rekognition) ──────────────────────────────────
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_region: str = "eu-west-1"
+    # Minimum face confidence score (0.0–1.0) to pass liveness check
+    photo_liveness_threshold: float = 0.80
+
     # ── Database connection pool ──────────────────────────────────────────
     # pool_size: connections kept open permanently (per process).
     # max_overflow: extra connections allowed above pool_size under burst load.

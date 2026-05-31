@@ -8,6 +8,7 @@ class LoginPayload(BaseModel):
 
     email: str = Field(min_length=5, max_length=255)
     password: str = Field(min_length=6, max_length=128)
+    cf_turnstile_response: str | None = Field(default=None, max_length=2000)
 
     @field_validator("email")
     @classmethod
@@ -25,6 +26,7 @@ class RegisterPayload(BaseModel):
     email: str | None = Field(default=None, min_length=5, max_length=255)
     role: str = Field(default="client", pattern="^(client|tasker)$")
     country: str | None = Field(default=None, max_length=2)
+    cf_turnstile_response: str | None = Field(default=None, max_length=2000)
 
     @field_validator("email")
     @classmethod

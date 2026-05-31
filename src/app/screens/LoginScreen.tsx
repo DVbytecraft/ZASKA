@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Eye, EyeOff, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { useTurnstile } from '../components/TurnstileWidget';
 import { setAppLanguage } from '../../i18n';
 
 interface LoginScreenProps {
@@ -15,10 +16,11 @@ export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword }: Log
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const { login, loading, error } = useAuth();
+  const { token: turnstileToken, isVerified, TurnstileWidget } = useTurnstile('login');
 
   const handleContinue = async () => {
     try {
-      const session = await login(email, password);
+      const session = await login(email, password, turnstileToken ?? undefined);
       setAppLanguage(session?.country);
       onLogin();
     } catch {
@@ -27,7 +29,7 @@ export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword }: Log
   };
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  const isValid = emailValid && password.length >= 8;
+  const isValid = emailValid && password.length >= 8 && isVerified;
 
   return (
     <div className="h-full flex flex-col" style={{ fontFamily: "'Poppins', sans-serif" }}>
@@ -124,6 +126,10 @@ export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword }: Log
         {error && (
           <p className="text-sm text-red-600 bg-red-50 rounded-xl px-3 py-2">{error}</p>
         )}
+
+        <div className="flex justify-center mb-4">
+          {TurnstileWidget}
+        </div>
 
         <button
           onClick={handleContinue}

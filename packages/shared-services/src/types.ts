@@ -19,6 +19,7 @@ export interface AuthSession {
 export interface LoginPayload {
   email: string;
   password: string;
+  cf_turnstile_response?: string;
 }
 
 export interface RegisterPayload {
@@ -29,6 +30,7 @@ export interface RegisterPayload {
   password: string;
   role: string;
   country?: string;
+  cf_turnstile_response?: string;
 }
 
 export interface RegisterResponse {

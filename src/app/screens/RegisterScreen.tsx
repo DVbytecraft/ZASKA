@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft, Briefcase, User, Eye, EyeOff, Check, X, ChevronDown } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { useTurnstile } from '../components/TurnstileWidget';
 import { SUPPORTED_COUNTRIES, type SupportedCountry } from '../config/countries';
 import { setAppLanguage } from '../../i18n';
 
@@ -20,6 +21,7 @@ export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
   const [selectedCountry, setSelectedCountry] = useState<SupportedCountry>(SUPPORTED_COUNTRIES[0]);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
   const { register, loading, error } = useAuth();
+  const { token: turnstileToken, isVerified, TurnstileWidget } = useTurnstile('register');
 
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   const passwordRules = {
@@ -34,7 +36,8 @@ export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
     firstName.trim().length >= 2 &&
     lastName.trim().length >= 2 &&
     phoneValid &&
-    Object.values(passwordRules).every(Boolean);
+    Object.values(passwordRules).every(Boolean) &&
+    isVerified;
 
   const handleRegister = async () => {
     try {
@@ -46,6 +49,7 @@ export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
         password,
         role,
         country: selectedCountry.code,
+        cf_turnstile_response: turnstileToken ?? undefined,
       });
       onRegistered(phone, email.trim().toLowerCase() || undefined);
     } catch {
@@ -288,6 +292,10 @@ export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
         </div>
 
         {error && <p className="text-sm text-red-600 bg-red-50 rounded-xl px-3 py-2 mb-3">{error}</p>}
+
+        <div className="flex justify-center mb-3">
+          {TurnstileWidget}
+        </div>
 
         <button
           onClick={handleRegister}

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -8,6 +9,14 @@ from app.models.user import User
 from app.schemas.user import UpdateProfilePayload, UserProfileResponse
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+class UpdateEnrichedProfilePayload(BaseModel):
+    bio: str | None = Field(default=None, max_length=512)
+    city: str | None = Field(default=None, max_length=64)
+    availability: str | None = Field(default=None, pattern="^(full_time|part_time|weekends|evenings|on_demand)?$")
+    hourly_rate: float | None = Field(default=None, ge=0, le=10000)
+    response_time: str | None = Field(default=None, pattern="^(within_1h|within_4h|within_24h|within_48h)?$")
 
 
 def _user_response(user: User) -> dict:
@@ -30,7 +39,29 @@ def get_me(user_id: str = Depends(get_current_user_id), db: Session = Depends(ge
     user = db.execute(select(User).where(User.id == user_id)).scalars().one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
-    return success_response(_user_response(user))
+    data = _user_response(user)
+    # Enrich with trust score, skills and badges
+    try:
+        from app.services.trust_service import TrustService
+        svc = TrustService(db)
+        ts = svc.get_trust_score(user_id)
+        if ts:
+            data["trustScore"] = {
+                "totalScore": ts.total_score,
+                "level": ts.level,
+                "computedAt": ts.computed_at.isoformat(),
+            }
+        data["skills"] = svc.get_user_skills(user_id)
+        data["badges"] = svc.get_user_badges(user_id)
+    except Exception:
+        pass
+    # Enriched profile fields
+    data["bio"]          = getattr(user, "bio", None)
+    data["city"]         = getattr(user, "city", None)
+    data["availability"] = getattr(user, "availability", None)
+    data["hourlyRate"]   = getattr(user, "hourly_rate", None)
+    data["responseTime"] = getattr(user, "response_time", None)
+    return success_response(data)
 
 
 @router.get("/{user_id}")
@@ -49,6 +80,43 @@ def get_user_public(
         "last_name": user.last_name,
         "full_name": user.full_name,
         "avatar_url": user.avatar_url,
+    })
+
+
+@router.patch("/me/profile")
+def update_enriched_profile(
+    payload: UpdateEnrichedProfilePayload,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Update enriched profile fields: bio, city, availability, hourly_rate, response_time."""
+    user = db.execute(
+        select(User).where(User.id == user_id).with_for_update()
+    ).scalars().one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if payload.bio is not None:
+        user.bio = payload.bio.strip() or None
+    if payload.city is not None:
+        user.city = payload.city.strip() or None
+    if payload.availability is not None:
+        user.availability = payload.availability or None
+    if payload.hourly_rate is not None:
+        user.hourly_rate = payload.hourly_rate
+    if payload.response_time is not None:
+        user.response_time = payload.response_time or None
+
+    db.commit()
+    db.refresh(user)
+
+    return success_response({
+        "id": user.id,
+        "bio": user.bio,
+        "city": user.city,
+        "availability": user.availability,
+        "hourlyRate": user.hourly_rate,
+        "responseTime": user.response_time,
     })
 
 
