@@ -176,15 +176,17 @@ class ModerationService:
 
         Designed to run as a FastAPI BackgroundTask after report_content_sync().
         Blocking calls are acceptable here since this runs off the request thread.
+        All exceptions are caught — a failed enrichment never crashes the worker.
         """
         from app.db.session import SessionLocal
 
         safe_reason = _sanitize_for_prompt(reason)
-        severity = _ai_severity(safe_reason, content_type)
-        analysis = _ai_analysis(safe_reason, content_type)
 
         db = SessionLocal()
         try:
+            severity = _ai_severity(safe_reason, content_type)
+            analysis = _ai_analysis(safe_reason, content_type)
+
             case = db.get(ModerationCase, case_id)
             if case:
                 case.severity = severity

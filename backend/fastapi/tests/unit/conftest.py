@@ -1,7 +1,7 @@
 """Pytest fixtures for ZASKA backend tests (unit / fast — no live server needed)."""
 import pytest
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
@@ -10,6 +10,12 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.core.config import settings
+
+
+@pytest.fixture(scope="session", autouse=True)
+def wait_for_live_api():
+    """Override: unit tests run without a live API server."""
+    return
 
 # SQLite in-memory for fast tests
 TEST_DATABASE_URL = "sqlite:///./test_zaska.db"
@@ -50,7 +56,8 @@ def client(db):
     app.dependency_overrides[get_db] = override_get_db
 
     # Mock Redis globally so no real Redis connection is attempted
-    with patch("app.core.redis_client.redis_sync") as mock_redis:
+    with patch("app.core.redis_client.redis_sync") as mock_redis, \
+         patch("app.core.redis_client.redis_async") as mock_async_redis:
         mock_redis.get.return_value = None
         mock_redis.set.return_value = True
         mock_redis.setex.return_value = True
@@ -58,9 +65,15 @@ def client(db):
         mock_redis.expire.return_value = True
         mock_redis.delete.return_value = True
         mock_redis.incrbyfloat.return_value = 0.0
-        # Also patch rate-limit middleware and deps that import redis_sync directly
-        with patch("app.core.rate_limit.redis_sync", mock_redis), \
-             patch("app.api.deps.redis_sync", mock_redis):
+        mock_async_redis.eval = AsyncMock(return_value=1)
+        mock_async_redis.get = AsyncMock(return_value=None)
+        mock_async_redis.setex = AsyncMock(return_value=True)
+        mock_async_redis.publish = AsyncMock(return_value=0)
+        mock_async_redis.subscribe = AsyncMock(return_value=None)
+        mock_async_redis.info = AsyncMock(return_value={})
+        # Patch all modules that import redis clients directly
+        with patch("app.api.deps.redis_sync", mock_redis), \
+             patch("app.core.rate_limit.redis_async", mock_async_redis):
             with TestClient(app) as c:
                 yield c
 
