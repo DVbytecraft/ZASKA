@@ -95,11 +95,12 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
+  # ── Redis HA: master + replica + 3 sentinels ───────────────────────────────
+  # Sentinel quorum = 2: any 2 of 3 sentinels must agree before failover.
+  # With 3 sentinels, the cluster survives loss of 1 sentinel node.
+  redis-master:
     image: redis:7-alpine
-    container_name: zaska-redis
-    # If REDIS_PASSWORD is set, AUTH is required on all connections.
-    # Leave unset in local dev (no auth). Always set in staging/production.
+    container_name: zaska-redis-master
     command: >
       sh -c '
         if [ -n "$$REDIS_PASSWORD" ]; then
@@ -108,29 +109,82 @@ services:
           redis-server --maxmemory 512mb --maxmemory-policy volatile-lru --save "" --appendonly no;
         fi
       '
-    # volatile-lru: only evict keys that have a TTL set, using LRU ordering.
-    # allkeys-lru was unsafe: Redis could evict distributed locks, idempotency keys,
-    # or WS auth tickets under memory pressure → double payment execution / auth bypass.
-    # All ZASKA keys carry explicit TTLs, so volatile-lru gives the same memory relief
-    # with no risk of evicting safety-critical keys.
-    # --save "" --appendonly no: disable RDB snapshots (latency spikes) and AOF
-    # (not needed — Redis is a cache/broker, not persistent store).
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-    # DEV ONLY: set REDIS_PUBLISH_PORT=16379 in .env to expose locally. Never expose in production.
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    # DEV ONLY: set REDIS_PUBLISH_PORT=16379 in .env
     ports:
       - "${REDIS_PUBLISH_PORT:-}:6379"
     networks:
       - zaska-network
     healthcheck:
-      test: >
-        sh -c '
-          if [ -n "$$REDIS_PASSWORD" ]; then
-            redis-cli -a "$$REDIS_PASSWORD" ping;
-          else
-            redis-cli ping;
-          fi
-        '
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis-replica:
+    image: redis:7-alpine
+    container_name: zaska-redis-replica
+    command: >
+      sh -c '
+        redis-server --replicaof redis-master 6379 --requirepass "$$REDIS_PASSWORD" --masterauth "$$REDIS_PASSWORD"
+          --maxmemory 512mb --maxmemory-policy volatile-lru --save "" --appendonly no --replica-read-only yes;
+      '
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - zaska-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis-sentinel-1: &sentinel
+    image: redis:7-alpine
+    container_name: zaska-sentinel-1
+    command: >
+      sh -c '
+        echo "sentinel monitor zaska-master redis-master 6379 2" > /tmp/sentinel.conf &&
+        echo "sentinel down-after-milliseconds zaska-master 5000" >> /tmp/sentinel.conf &&
+        echo "sentinel parallel-syncs zaska-master 1" >> /tmp/sentinel.conf &&
+        echo "sentinel failover-timeout zaska-master 120000" >> /tmp/sentinel.conf &&
+        echo "sentinel auth-pass zaska-master $$REDIS_PASSWORD" >> /tmp/sentinel.conf &&
+        redis-sentinel /tmp/sentinel.conf
+      '
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica:
+        condition: service_healthy
+    networks:
+      - zaska-network
+
+  redis-sentinel-2:
+    <<: *sentinel
+    container_name: zaska-sentinel-2
+
+  redis-sentinel-3:
+    <<: *sentinel
+    container_name: zaska-sentinel-3
+
+  # Convenience alias for backward compat — services that reference "redis" still work
+  redis:
+    image: redis:7-alpine
+    container_name: zaska-redis
+    command: >
+      sh -c 'redis-server --port 6379 --requirepass "$$REDIS_PASSWORD" --maxmemory 256mb --maxmemory-policy volatile-lru --save "" --appendonly no'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    networks:
+      - zaska-network
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -277,6 +331,73 @@ services:
       - zaska-network
     restart: unless-stopped
 
+  # ── Observability stack ────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: zaska-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - zaska-prometheus-data:/prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    networks:
+      - zaska-network
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: zaska-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD is required}
+      GF_INSTALL_PLUGINS: ''
+      GF_SERVER_ROOT_URL: '%(protocol)s://%(domain)s/grafana/'
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - zaska-grafana-data:/var/lib/grafana
+    ports:
+      - "${GRAFANA_PORT:-3200}:3000"
+    networks:
+      - zaska-network
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    container_name: zaska-redis-exporter
+    environment:
+      REDIS_ADDR: redis://redis-master:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    networks:
+      - zaska-network
+    restart: unless-stopped
+    depends_on:
+      redis-master:
+        condition: service_healthy
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: zaska-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: postgresql://zaska_admin:${POSTGRES_PASSWORD}@postgres:5432/zaska?sslmode=disable
+    networks:
+      - zaska-network
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 networks:
   zaska-network:
     driver: bridge
@@ -284,6 +405,8 @@ networks:
 volumes:
   zaska-postgres-data:
   zaska-backups:
+  zaska-prometheus-data:
+  zaska-grafana-data:
   # WAL archive volume — stores continuous WAL segments for PITR.
   # In production, mount a fast SSD or use an NFS path that syncs to S3/B2.
   # Retention: keep at least 7 days of WALs (24h × WAL-per-60s × 7 = ~10k files, ~10GB).

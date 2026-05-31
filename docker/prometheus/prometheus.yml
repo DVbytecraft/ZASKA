@@ -1,0 +1,44 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: '${ENVIRONMENT:-production}'
+    project: 'zaska'
+
+# Alerting rules (optional — extend with AlertManager later)
+# rule_files:
+#   - "alerts/*.yml"
+
+scrape_configs:
+  # ZASKA Backend API — /api/v1/metrics
+  - job_name: 'zaska-api'
+    metrics_path: '/api/v1/metrics'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['backend:6969']
+        labels:
+          service: 'api'
+
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Redis master (requires redis-exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+
+  # PostgreSQL (requires postgres-exporter)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: 'postgres'
+
+  # Nginx (requires nginx-exporter, optional)
+  # - job_name: 'nginx'
+  #   static_configs:
+  #     - targets: ['nginx-exporter:9113']

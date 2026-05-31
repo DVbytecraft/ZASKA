@@ -1,0 +1,21 @@
+# Redis Sentinel configuration template
+# Copied at container start via entrypoint; env vars substituted by envsubst
+
+# Monitor the redis-master service (Docker network hostname)
+sentinel monitor zaska-master redis-master 6379 2
+
+# Time in ms before sentinel considers master unreachable
+sentinel down-after-milliseconds zaska-master 5000
+
+# Number of concurrent replicas that can be reconfigured during failover
+sentinel parallel-syncs zaska-master 1
+
+# Failover timeout in ms (2 minutes)
+sentinel failover-timeout zaska-master 120000
+
+# Authentication — must match redis-master requirepass
+sentinel auth-pass zaska-master ${REDIS_PASSWORD}
+
+# Announce the sentinel's own IP for cross-host discovery (not needed for Docker bridge)
+# sentinel announce-ip <ip>
+# sentinel announce-port 26379
