@@ -61,6 +61,23 @@ class WebhookQueue:
         return False
 
     @classmethod
+    def claim(cls, idempotency_key: str) -> bool:
+        """Atomically claim an idempotency key via Redis SETNX.
+
+        Returns True if this caller won the race and should proceed with processing.
+        Returns False if another concurrent request already claimed the key.
+        The claim TTL matches mark_processed (7 days).
+        """
+        full_key = f"{cls.PROCESSED_PREFIX}{idempotency_key}"
+        result = redis_sync.set(full_key, "1", nx=True, ex=86400 * 7)
+        return result is not None
+
+    @classmethod
+    def unclaim(cls, idempotency_key: str) -> None:
+        """Release a claim so the webhook provider can retry on transient failure."""
+        redis_sync.delete(f"{cls.PROCESSED_PREFIX}{idempotency_key}")
+
+    @classmethod
     def _persist_to_db(
         cls,
         db: "Session",

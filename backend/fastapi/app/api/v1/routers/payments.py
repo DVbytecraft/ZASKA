@@ -219,14 +219,19 @@ def _credit_wallet_from_topup_event(
 ) -> tuple[bool, str]:
     """
     Crédite le wallet suite à un événement wallet_topup vérifié.
-    Idempotent — marks BEFORE crediting to prevent double-credit on retry.
+    Idempotent — uses atomic Redis SETNX claim to prevent double-credit under concurrency.
 
     Returns (processed: bool, idem_key: str).
     """
     stripe_event_id: str = event.raw_data.get("stripe_event_id") or event.provider_tx_id
     idem_key = f"{provider_name}:topup:{stripe_event_id}"
 
+    # Fast path: obvious duplicate already in Redis or DB
     if WebhookQueue.is_processed(idem_key, db=db):
+        return False, idem_key
+
+    # Atomic SETNX claim — only one concurrent caller wins; others return duplicate
+    if not WebhookQueue.claim(idem_key):
         return False, idem_key
 
     user_id_meta: str = event.raw_data.get("user_id", "")
@@ -238,21 +243,23 @@ def _credit_wallet_from_topup_event(
             "webhook:topup_missing_metadata provider={} idem_key={} payload={}",
             provider_name, idem_key, _safe_log_payload(event.raw_data),
         )
+        # Keep claim — bad payload is permanently skipped, not retried
         return True, idem_key
 
-    # Credit FIRST: if the credit fails the webhook is not marked processed and
-    # the provider can retry safely. The reverse order (mark before credit) would
-    # permanently lose the user's funds on any DB error between the two calls.
-    # Double-credit on crash is detectable via audit log and correctable; lost
-    # funds are not.
-    wallet_svc.credit_wallet(
-        user_id=user_id_meta,
-        currency=currency_meta,
-        amount=event.amount,
-        reference=reference,
-        provider=provider_name,
-        metadata={"type": "wallet_topup", "provider_tx_id": event.provider_tx_id},
-    )
+    try:
+        wallet_svc.credit_wallet(
+            user_id=user_id_meta,
+            currency=currency_meta,
+            amount=event.amount,
+            reference=reference,
+            provider=provider_name,
+            metadata={"type": "wallet_topup", "provider_tx_id": event.provider_tx_id},
+        )
+    except Exception:
+        # Transient failure — release claim so the provider can retry
+        WebhookQueue.unclaim(idem_key)
+        raise
+
     WebhookQueue.mark_processed(idem_key, db=db, provider=provider_name, event_type="wallet_topup")
 
     # Record deposit timestamp so rapid deposit→withdraw detection works
