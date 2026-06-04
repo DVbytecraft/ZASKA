@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Link, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet } from "react-router-dom";
 import { useAuthStore } from "../store";
 
 export function AppLayout() {
@@ -15,15 +15,26 @@ export function AppLayout() {
     ? `${profile.first_name ?? ""} ${profile.last_name ?? ""}`.trim() || profile.email
     : null;
 
+  const navLink = (to: string, label: string) => (
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        `text-sm font-medium transition-colors ${isActive ? "text-gray-900 underline underline-offset-4" : "text-gray-500 hover:text-gray-800"}`
+      }
+    >
+      {label}
+    </NavLink>
+  );
+
   return (
     <div className="min-h-screen">
-      <nav className="bg-white border-b p-4 flex gap-4 items-center">
-        <Link to="/">Dashboard</Link>
-        <Link to="/tasks/new">Créer</Link>
-        <Link to="/tasks">Tâches</Link>
-        <Link to="/wallet">Wallet</Link>
-        <Link to="/profile">Profil</Link>
-        <div className="ml-auto flex items-center gap-3">
+      <nav className="bg-white border-b p-4 flex gap-4 items-center overflow-x-auto">
+        {navLink("/", "Dashboard")}
+        {navLink("/tasks/new", "Créer")}
+        {navLink("/tasks", "Tâches")}
+        {navLink("/wallet", "Wallet")}
+        {navLink("/profile", "Profil")}
+        <div className="ml-auto flex items-center gap-3 flex-shrink-0">
           {displayName && (
             <span className="text-sm text-gray-600 font-medium">{displayName}</span>
           )}

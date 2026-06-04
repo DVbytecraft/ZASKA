@@ -7,6 +7,7 @@ import { ChatPage } from "./pages/ChatPage";
 import { CreateTaskPage } from "./pages/CreateTaskPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ProfilePage } from "./pages/ProfilePage";
+import { TaskApplicantsPage } from "./pages/TaskApplicantsPage";
 import { TaskDetailPage } from "./pages/TaskDetailPage";
 import { TaskListPage } from "./pages/TaskListPage";
 import { WalletPage } from "./pages/WalletPage";
@@ -36,6 +37,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="tasks/new" element={<CreateTaskPage />} />
           <Route path="tasks" element={<TaskListPage />} />
           <Route path="tasks/:taskId" element={<TaskDetailPage />} />
+          <Route path="tasks/:taskId/applicants" element={<TaskApplicantsPage />} />
           <Route path="chat/:taskId" element={<ChatPage />} />
           <Route path="wallet" element={<WalletPage />} />
           <Route path="profile" element={<ProfilePage />} />

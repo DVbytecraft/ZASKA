@@ -1,14 +1,15 @@
 """Tests pour le service wallet ZASKA — ACID, escrow, transfer."""
 import pytest
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 
 class TestWalletCreate:
     def test_create_wallet(self, client, auth_headers):
         with patch("app.api.v1.routers.wallet.redis_sync") as mock_redis:
-            mock_redis.incr.return_value = 1
-            mock_redis.expire.return_value = True
+            mock_pipe = MagicMock()
+            mock_pipe.execute.return_value = [1]
+            mock_redis.pipeline.return_value = mock_pipe
             with patch("app.api.deps.redis_sync") as mock_deps_redis:
                 mock_deps_redis.get.return_value = None
                 resp = client.post(
@@ -23,8 +24,9 @@ class TestWalletCreate:
     def test_create_wallet_duplicate_ok(self, client, auth_headers):
         """Creating twice the same wallet returns the existing one."""
         with patch("app.api.v1.routers.wallet.redis_sync") as mr:
-            mr.incr.return_value = 1
-            mr.expire.return_value = True
+            mock_pipe = MagicMock()
+            mock_pipe.execute.return_value = [1]
+            mr.pipeline.return_value = mock_pipe
             with patch("app.api.deps.redis_sync") as md:
                 md.get.return_value = None
                 client.post(
@@ -155,7 +157,8 @@ class TestWalletService:
 
         escrow = svc.release_escrow(escrow.id)
         assert escrow.status == "released"
-        assert svc.get_balance(tasker.id, "USD") == Decimal("50")
+        # 15% platform commission deducted: tasker receives 85% of 50 = 42.5
+        assert svc.get_balance(tasker.id, "USD") == Decimal("42.5")
 
 
 class TestCreditEndpointSecurity:

@@ -51,7 +51,7 @@ class TestLogin:
         with patch("app.services.auth_service.redis_sync") as mock_redis:
             mock_redis.get.return_value = None
             resp = client.post("/api/auth/login", json={
-                "phone": test_user.phone,
+                "email": test_user.email,
                 "password": "TestPass1",
             })
         assert resp.status_code == 200
@@ -61,14 +61,14 @@ class TestLogin:
 
     def test_login_wrong_password(self, client, test_user):
         resp = client.post("/api/auth/login", json={
-            "phone": test_user.phone,
+            "email": test_user.email,
             "password": "WrongPass1",
         })
         assert resp.status_code == 401
 
     def test_login_unknown_phone(self, client):
         resp = client.post("/api/auth/login", json={
-            "phone": "+00000000000",
+            "email": "unknown@zaska.app",
             "password": "TestPass1",
         })
         assert resp.status_code == 401

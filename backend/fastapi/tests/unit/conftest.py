@@ -29,6 +29,7 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 
 @pytest.fixture(scope="session", autouse=True)
 def create_test_tables():
+    Base.metadata.drop_all(bind=engine_test)
     Base.metadata.create_all(bind=engine_test)
     yield
     Base.metadata.drop_all(bind=engine_test)
@@ -65,14 +66,21 @@ def client(db):
         mock_redis.expire.return_value = True
         mock_redis.delete.return_value = True
         mock_redis.incrbyfloat.return_value = 0.0
+        mock_redis.eval.return_value = 1  # Lua rate-limit scripts in auth router
+        mock_pipe = MagicMock()
+        mock_pipe.execute.return_value = [1]
+        mock_redis.pipeline.return_value = mock_pipe
         mock_async_redis.eval = AsyncMock(return_value=1)
         mock_async_redis.get = AsyncMock(return_value=None)
         mock_async_redis.setex = AsyncMock(return_value=True)
         mock_async_redis.publish = AsyncMock(return_value=0)
         mock_async_redis.subscribe = AsyncMock(return_value=None)
         mock_async_redis.info = AsyncMock(return_value={})
-        # Patch all modules that import redis clients directly
+        # Patch all modules that import redis clients directly at module level
         with patch("app.api.deps.redis_sync", mock_redis), \
+             patch("app.api.v1.routers.auth.redis_sync", mock_redis), \
+             patch("app.api.v1.routers.wallet.redis_sync", mock_redis), \
+             patch("app.api.v1.routers.payments.redis_sync", mock_redis), \
              patch("app.core.rate_limit.redis_async", mock_async_redis):
             with TestClient(app) as c:
                 yield c
