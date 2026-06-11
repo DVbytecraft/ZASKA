@@ -30,7 +30,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.models.wallet import Escrow
+from app.models.wallet import Escrow, Transaction, Wallet
 from app.payment.audit_logger import FinancialAuditLogger
 from app.services.wallet_service import WalletService
 
@@ -44,11 +44,15 @@ _JOB_MAX_SILENCE: dict[str, float] = {
     "release_held_escrows": 900,
     "process_outbox": 120,
     "check_pending_payouts": 300,
+    "kyc_lifecycle_cycle": 90000,
     "reconciliation": 900,
     "otp_cleanup": 1800,
     "backup_postgres": 172800,
+    "social_protection_cycle": 43200,
     "trust_score_recompute": 90000,   # daily job — alert after 25h silence
     "moderation_auto_escalate": 7200, # hourly job — alert after 2h silence
+    "operations_resilience_cycle": 900,
+    "sandbox_data_cleanup": 90000,  # daily job — alert after 25h silence
 }
 
 
@@ -280,6 +284,50 @@ def _recompute_trust_scores() -> None:
         db.close()
 
 
+def _run_social_protection_cycle() -> None:
+    # Lock TTL = 21590s (6h interval - 10s)
+    if not _acquire_job_lock("social_protection_cycle", 21590):
+        return
+    from app.services.social_protection_service import SocialProtectionService
+
+    db = SessionLocal()
+    try:
+        results = SocialProtectionService(db).run_periodic_cycle()
+        logger.info(
+            "social_protection_cycle: taskers=%s health_alerts=%s pension_alerts=%s interventions=%s reimbursements=%s",
+            results["taskers_scanned"],
+            results["health_alerts_sent"],
+            results["pension_alerts_sent"],
+            results["smoothing_interventions"],
+            results["smoothing_reimbursements"],
+        )
+    except Exception as exc:
+        logger.error("social_protection_cycle: failed — %s", exc)
+    finally:
+        db.close()
+
+
+def _run_kyc_lifecycle_cycle() -> None:
+    if not _acquire_job_lock("kyc_lifecycle_cycle", 86390):
+        return
+    from app.services.kyc_service import KycService
+
+    db = SessionLocal()
+    try:
+        results = KycService(db).process_lifecycle()
+        logger.info(
+            "kyc_lifecycle_cycle: reminders_30d=%s reminders_7d=%s expired=%s reactivated=%s",
+            results["reminders_30d"],
+            results["reminders_7d"],
+            results["expired"],
+            results["reactivated"],
+        )
+    except Exception as exc:
+        logger.error("kyc_lifecycle_cycle: failed — %s", exc)
+    finally:
+        db.close()
+
+
 def _moderation_auto_escalate() -> None:
     # Lock TTL = 3590s (hourly job)
     if not _acquire_job_lock("moderation_auto_escalate", 3590):
@@ -291,6 +339,26 @@ def _moderation_auto_escalate() -> None:
         logger.info("moderation_auto_escalate: escalated=%s", count)
     except Exception as exc:
         logger.error("moderation_auto_escalate: failed — %s", exc)
+    finally:
+        db.close()
+
+
+def _run_operations_resilience_cycle() -> None:
+    if not _acquire_job_lock("operations_resilience_cycle", 290):
+        return
+    from app.services.operations_resilience_service import OperationsResilienceService
+    db = SessionLocal()
+    try:
+        results = OperationsResilienceService(db).run_cycle()
+        logger.info(
+            "operations_resilience_cycle: expired_vtc_offers=%s redispatched_vtc_rides=%s stale_shop_orders=%s stale_food_orders=%s",
+            results["expired_vtc_offers"],
+            results["redispatched_vtc_rides"],
+            results["stale_shop_orders"],
+            results["stale_food_orders"],
+        )
+    except Exception as exc:
+        logger.error("operations_resilience_cycle: failed — %s", exc)
     finally:
         db.close()
 
@@ -347,6 +415,57 @@ def _backup_postgres() -> None:
             logger.info("backup_postgres: rotated %s", f.name)
 
 
+def _cleanup_sandbox_data() -> None:
+    """Purge sandbox wallets/transactions/escrows older than the retention window.
+
+    Sandbox data (created via a sandbox API key, is_sandbox=True) never touches
+    real money or the accounting ledger — it only exists to let B2B integrators
+    test against the API. We delete in FK-safe order: escrows -> transactions ->
+    wallets, each older than settings.sandbox_data_retention_days.
+    """
+    if not _acquire_job_lock("sandbox_data_cleanup", 86390):
+        return
+
+    cutoff = datetime.utcnow() - timedelta(days=settings.sandbox_data_retention_days)
+    db = SessionLocal()
+    try:
+        escrows = db.execute(
+            select(Escrow).where(Escrow.is_sandbox.is_(True), Escrow.created_at < cutoff)
+        ).scalars().all()
+        escrow_count = len(escrows)
+        for escrow in escrows:
+            escrow.funding_tx_id = None
+            escrow.settlement_tx_id = None
+            db.delete(escrow)
+        db.flush()
+
+        transactions = db.execute(
+            select(Transaction).where(Transaction.is_sandbox.is_(True), Transaction.created_at < cutoff)
+        ).scalars().all()
+        tx_count = len(transactions)
+        for tx in transactions:
+            db.delete(tx)
+        db.flush()
+
+        wallets = db.execute(
+            select(Wallet).where(Wallet.is_sandbox.is_(True), Wallet.created_at < cutoff)
+        ).scalars().all()
+        wallet_count = len(wallets)
+        for wallet in wallets:
+            db.delete(wallet)
+
+        db.commit()
+        logger.info(
+            "sandbox_data_cleanup: escrows=%s transactions=%s wallets=%s cutoff=%s",
+            escrow_count, tx_count, wallet_count, cutoff.isoformat(),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.error("sandbox_data_cleanup: failed — %s", exc)
+    finally:
+        db.close()
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def start_scheduler() -> None:
@@ -357,9 +476,13 @@ def start_scheduler() -> None:
         (30,    "process_outbox",           _process_outbox),
         (60,    "check_pending_payouts",    _check_pending_payouts),
         (300,   "reconciliation",           _run_reconciliation),
+        (21600, "social_protection_cycle",  _run_social_protection_cycle),
+        (86400, "kyc_lifecycle_cycle",      _run_kyc_lifecycle_cycle),
         (86400, "backup_postgres",          _backup_postgres),
         (86400, "trust_score_recompute",    _recompute_trust_scores),
         (3600,  "moderation_auto_escalate", _moderation_auto_escalate),
+        (300,   "operations_resilience_cycle", _run_operations_resilience_cycle),
+        (86400, "sandbox_data_cleanup",     _cleanup_sandbox_data),
     ]
     for interval, name, fn in jobs:
         task = asyncio.create_task(_run_every(interval, name, fn))

@@ -35,6 +35,8 @@ from app.core.config import settings
 from app.core.redis_client import redis_sync
 from app.core.responses import success_response
 from app.db.session import get_db
+from app.services.geo_hierarchy_service import GeoHierarchyService
+from app.services.module_control_service import ModuleControlService
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -59,6 +61,8 @@ def bootstrap(
 
     route = PaymentRouterService.route_payment(country_code, 0, config.currency)
     flags = FeatureFlagEngine(redis_sync, db).get_flags(country_code)
+    modules = ModuleControlService(db).resolve_modules_for_country(country_code)
+    geo = GeoHierarchyService(db).resolve_country_geo(country_code)
 
     return success_response(
         {
@@ -73,6 +77,8 @@ def bootstrap(
             "escrow_enabled": config.escrow_enabled,
             "payout_delay_minutes": config.payout_delay_minutes,
             "features": flags,
+            "modules": modules,
+            "geo": geo,
             "timezone": config.timezone,
             "emergency_numbers": config.emergency_numbers,
         }
@@ -94,6 +100,8 @@ def bootstrap_for_country(
 
     route = PaymentRouterService.route_payment(cc, 0, config.currency)
     flags = FeatureFlagEngine(redis_sync, db).get_flags(cc)
+    modules = ModuleControlService(db).resolve_modules_for_country(cc)
+    geo = GeoHierarchyService(db).resolve_country_geo(cc)
 
     return success_response(
         {
@@ -108,6 +116,8 @@ def bootstrap_for_country(
             "escrow_enabled": config.escrow_enabled,
             "payout_delay_minutes": config.payout_delay_minutes,
             "features": flags,
+            "modules": modules,
+            "geo": geo,
             "timezone": config.timezone,
             "emergency_numbers": config.emergency_numbers,
         }

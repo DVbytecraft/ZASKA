@@ -1,19 +1,163 @@
+from app.models.aml import AmlCase, AmlEvent
+from app.models.accounting import (
+    CountryRevenueSnapshot,
+    FinancialAccount,
+    FinancialAccountScope,
+    FundTransfer,
+    LedgerEntry,
+    ReconciliationSnapshot,
+)
+from app.models.access_control import AdminScope, Permission, Role, RolePermission, UserRoleAssignment
+from app.models.b2b import (
+    AdminExportJob,
+    ApiKey,
+    BusinessContract,
+    BusinessMembership,
+    BusinessOrganization,
+    BusinessTaskTemplate,
+    BusinessWorkOrder,
+)
 from app.models.chat_message import ChatMessage
+from app.models.dispute import DisputeEvent, DisputeRecord, ReconciliationReport
 from app.models.feature_flag import FeatureFlag
+from app.models.food import (
+    FoodPaymentHold,
+    FoodOrder,
+    FoodOrderItem,
+    FoodOrderItemModifierSelection,
+    RestaurantComboItem,
+    RestaurantComboOffer,
+    RestaurantPayoutSnapshot,
+    RestaurantMenu,
+    RestaurantMenuItemModifierGroup,
+    RestaurantMenuItemModifierOption,
+    RestaurantMenuItem,
+    RestaurantPartner,
+    RestaurantSpecialClosure,
+    RestaurantStaffAssignment,
+)
+from app.models.geography import City, Continent, ServiceZone
 from app.models.kyc import KycSubmission
 from app.models.location_config import Country, Currency, EmergencyNumber, PaymentMethodConfig
+from app.models.module_control import ModuleActivationAudit, ModuleActivationSetting, PlatformModule
 from app.models.outbox_event import OutboxEvent
 from app.models.payment_method import PaymentMethod
+from app.models.payout import Payout
+from app.models.referral import ReferralEvent, ReferralProgram, ReferralReward
+from app.models.social_protection import SocialProtectionEvent
+from app.models.shop import (
+    MerchantCatalog,
+    MerchantCatalogItem,
+    MerchantPartner,
+    MerchantStaffAssignment,
+    ShopMerchantPayoutSnapshot,
+    ShopOrder,
+    ShopOrderEvent,
+    ShopOrderItem,
+    ShopPaymentHold,
+)
+from app.models.subscription import SubscriptionPlan, SubscriptionUsage, UserSubscription
 from app.models.task import Task
+from app.models.trust import (
+    Badge,
+    ModerationCase,
+    PhotoVerification,
+    Skill,
+    TrustScore,
+    UserBadge,
+    UserReview,
+    UserSkill,
+)
 from app.models.user import User
+from app.models.vtc import (
+    VtcDriverProfile,
+    VtcFleetOperator,
+    VtcRideDispatchOffer,
+    VtcRideEvent,
+    VtcRideRequest,
+    VtcVehicle,
+)
 from app.models.wallet import Escrow, Transaction, Wallet
 
 __all__ = [
     "User",
+    "AmlCase",
+    "AmlEvent",
+    "BusinessOrganization",
+    "BusinessMembership",
+    "BusinessContract",
+    "BusinessTaskTemplate",
+    "BusinessWorkOrder",
+    "ApiKey",
+    "AdminExportJob",
+    "TrustScore",
+    "Badge",
+    "UserBadge",
+    "Skill",
+    "UserSkill",
+    "PhotoVerification",
+    "ModerationCase",
+    "UserReview",
+    "FinancialAccount",
+    "FinancialAccountScope",
+    "LedgerEntry",
+    "FundTransfer",
+    "ReconciliationSnapshot",
+    "CountryRevenueSnapshot",
+    "Role",
+    "Permission",
+    "RolePermission",
+    "UserRoleAssignment",
+    "AdminScope",
     "Task",
     "PaymentMethod",
+    "ReferralProgram",
+    "ReferralEvent",
+    "ReferralReward",
+    "SocialProtectionEvent",
+    "MerchantPartner",
+    "MerchantStaffAssignment",
+    "MerchantCatalog",
+    "MerchantCatalogItem",
+    "ShopOrder",
+    "ShopOrderItem",
+    "ShopPaymentHold",
+    "ShopMerchantPayoutSnapshot",
+    "ShopOrderEvent",
+    "VtcFleetOperator",
+    "VtcDriverProfile",
+    "VtcVehicle",
+    "VtcRideRequest",
+    "VtcRideDispatchOffer",
+    "VtcRideEvent",
+    "SubscriptionPlan",
+    "UserSubscription",
+    "SubscriptionUsage",
     "ChatMessage",
+    "DisputeRecord",
+    "DisputeEvent",
+    "ReconciliationReport",
+    "RestaurantPartner",
+    "RestaurantStaffAssignment",
+    "RestaurantMenu",
+    "RestaurantMenuItem",
+    "FoodOrder",
+    "FoodOrderItem",
+    "FoodOrderItemModifierSelection",
+    "FoodPaymentHold",
+    "RestaurantComboOffer",
+    "RestaurantComboItem",
+    "RestaurantPayoutSnapshot",
     "FeatureFlag",
+    "RestaurantMenuItemModifierGroup",
+    "RestaurantMenuItemModifierOption",
+    "RestaurantSpecialClosure",
+    "Continent",
+    "City",
+    "ServiceZone",
+    "PlatformModule",
+    "ModuleActivationSetting",
+    "ModuleActivationAudit",
     "Country",
     "Currency",
     "PaymentMethodConfig",
@@ -23,4 +167,5 @@ __all__ = [
     "Transaction",
     "Escrow",
     "OutboxEvent",
+    "Payout",
 ]

@@ -45,6 +45,9 @@ class Task(Base):
 
     # Task mode: "fast" (instant accept) | "choose" (applications)
     mode: Mapped[str] = mapped_column(String(8), default="fast", nullable=False, server_default="fast")
+    service_category: Mapped[str] = mapped_column(String(32), default="TASK", nullable=False, server_default="TASK")
+    is_urgent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    escrow_auto_release_minutes: Mapped[int] = mapped_column(Integer, default=180, nullable=False, server_default="180")
 
     # Creation idempotency — prevents double-submit
     idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
@@ -57,7 +60,12 @@ class Task(Base):
     country: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Rating — True once the creator has rated the tasker for this task
+    aml_status: Mapped[str] = mapped_column(String(24), default="clear", nullable=False, server_default="clear")
+    aml_case_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    aml_hold_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    aml_flagged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     creator_rated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
+    tasker_rated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
 
     # Proof photo submitted by the tasker when declaring completion
     proof_photo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)

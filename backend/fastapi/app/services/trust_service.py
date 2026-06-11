@@ -39,8 +39,11 @@ _BADGE_CATALOG: list[dict[str, str]] = [
     {"code": "VERIFIED_EMAIL",  "label": "Email vérifié",     "description": "A fourni une adresse email",                   "icon": "mail"},
     {"code": "VERIFIED_KYC",    "label": "KYC approuvé",      "description": "Identité vérifiée par nos équipes",            "icon": "shield-check"},
     {"code": "PHOTO_VERIFIED",  "label": "Photo vérifiée",    "description": "Selfie liveness confirmé",                    "icon": "camera"},
+    {"code": "CERTIFIED_ZASKA", "label": "Certifié Zaska",    "description": "Identité et casier vérifiés par Zaska",       "icon": "badge-check"},
+    {"code": "PROTECTED_ZASKA", "label": "Protégé Zaska",     "description": "Ce Tasker bénéficie de la protection sociale Zaska", "icon": "heart-handshake"},
+    {"code": "TASKER_SENIOR",   "label": "Tasker Senior",     "description": "Tasker expérimenté — pension garantie activée", "icon": "shield"},
     {"code": "FIRST_TASK",      "label": "Première mission",  "description": "A complété sa première tâche",                 "icon": "star"},
-    {"code": "TOP_RATED",       "label": "Très bien noté",    "description": "Note moyenne ≥ 4.8 sur au moins 10 avis",      "icon": "award"},
+    {"code": "TOP_RATED",       "label": "Top Rated",         "description": "Note moyenne > 4.8 avec au moins 50 tâches complétées", "icon": "award"},
     {"code": "EARLY_ADOPTER",   "label": "Pionnier",          "description": "A rejoint la plateforme avant novembre 2026",  "icon": "zap"},
     {"code": "TRUSTED_MEMBER",  "label": "Membre de confiance","description": "A atteint le niveau GOLD ou supérieur",       "icon": "heart"},
 ]
@@ -147,6 +150,77 @@ class TrustService:
             }
             for ub, b in rows
         ]
+
+    def get_tasker_badge_overview(self, limit: int = 200) -> dict[str, Any]:
+        from app.services.wallet_service import WalletService
+
+        now = datetime.now(timezone.utc)
+        wallet_service = WalletService(self.db)
+        public_codes = {
+            "CERTIFIED_ZASKA",
+            "PROTECTED_ZASKA",
+            "TASKER_SENIOR",
+            "TOP_RATED",
+        }
+
+        badge_counts: dict[str, dict[str, Any]] = {}
+        tasker_rows: list[dict[str, Any]] = []
+        taskers = self.db.execute(
+            select(User).where(User.role == "tasker").order_by(User.created_at.desc())
+        ).scalars().all()
+
+        for tasker in taskers:
+            try:
+                self.compute_for_user(tasker.id)
+            except Exception:
+                pass
+
+            badges = [
+                badge for badge in self.get_user_badges(tasker.id)
+                if badge["code"] in public_codes
+            ]
+            for badge in badges:
+                bucket = badge_counts.setdefault(
+                    badge["code"],
+                    {
+                        "code": badge["code"],
+                        "label": badge["label"],
+                        "description": badge["description"],
+                        "count": 0,
+                    },
+                )
+                bucket["count"] += 1
+
+            overview = wallet_service.get_social_protection_overview(tasker.id)
+            rating_avg = round(tasker.rating_sum / tasker.rating_count, 2) if tasker.rating_count else None
+            tasker_rows.append({
+                "tasker_id": tasker.id,
+                "tasker_name": " ".join(filter(None, [tasker.first_name, tasker.last_name])) or tasker.email or tasker.id,
+                "country_code": tasker.country_code,
+                "rating_avg": rating_avg,
+                "rating_count": tasker.rating_count,
+                "completed_tasks": overview.get("total_completed_tasks", 0),
+                "active_months": overview.get("active_months", 0),
+                "tasker_security_verified": tasker.tasker_security_verified,
+                "criminal_record_status": tasker.criminal_record_status,
+                "social_badge": overview.get("badge"),
+                "public_badges": badges,
+            })
+
+        tasker_rows.sort(
+            key=lambda row: (
+                len(row["public_badges"]),
+                row["completed_tasks"],
+                row["active_months"],
+            ),
+            reverse=True,
+        )
+
+        return {
+            "counts": sorted(badge_counts.values(), key=lambda item: item["count"], reverse=True),
+            "taskers": tasker_rows[:limit],
+            "generated_at": now.isoformat(),
+        }
 
     def list_skills_catalog(self) -> list[dict[str, Any]]:
         rows = self.db.execute(select(Skill).order_by(Skill.category, Skill.name)).scalars().all()
@@ -318,13 +392,18 @@ class TrustService:
         return 0.0
 
     def _community(self, user: User) -> float:
-        if user.rating_count < 3:
+        rating_sum = user.rating_sum
+        rating_count = user.rating_count
+        if user.role != "tasker" and getattr(user, "client_rating_count", 0) > 0:
+            rating_sum = getattr(user, "client_rating_sum", 0.0) or 0.0
+            rating_count = getattr(user, "client_rating_count", 0) or 0
+        if rating_count < 3:
             # Penalize sparse ratings — only half credit until 3 reviews
-            if user.rating_count == 0:
+            if rating_count == 0:
                 return 0.0
-            avg = user.rating_sum / user.rating_count
+            avg = rating_sum / rating_count
             return min(20.0, (avg / 5.0) * 20.0 * 0.5)
-        avg = user.rating_sum / user.rating_count
+        avg = rating_sum / rating_count
         return min(20.0, (avg / 5.0) * 20.0)
 
     def _behavior(self, user: User) -> float:
@@ -440,48 +519,94 @@ class TrustService:
 
     def _award_badges(self, user: User, ts: TrustScore) -> None:
         """Auto-award badges based on current state. Idempotent — won't re-award."""
-        to_award: list[str] = []
+        from app.models.task import Task
+        from app.services.wallet_service import WalletService
+
+        to_award: set[str] = set()
+        revocable_codes = {
+            "VERIFIED_PHONE",
+            "VERIFIED_EMAIL",
+            "VERIFIED_KYC",
+            "PHOTO_VERIFIED",
+            "CERTIFIED_ZASKA",
+            "PROTECTED_ZASKA",
+            "TASKER_SENIOR",
+            "TOP_RATED",
+            "TRUSTED_MEMBER",
+        }
 
         if user.is_verified:
-            to_award.append("VERIFIED_PHONE")
+            to_award.add("VERIFIED_PHONE")
         if user.email:
-            to_award.append("VERIFIED_EMAIL")
-        if ts.identity_score >= 10.0:  # KYC gives 10 pts
-            to_award.append("VERIFIED_KYC")
+            to_award.add("VERIFIED_EMAIL")
+
+        latest_kyc = self.db.execute(
+            select(KycSubmission)
+            .where(KycSubmission.user_id == user.id)
+            .order_by(KycSubmission.created_at.desc())
+        ).scalars().first()
+        has_active_kyc = bool(latest_kyc and latest_kyc.status == "approved" and not latest_kyc.is_expired)
+        has_clear_record = (user.criminal_record_status or "pending") in {"clear", "approved"} or (
+            latest_kyc is not None and getattr(latest_kyc, "criminal_record_status", "pending") in {"clear", "approved"}
+        )
+
+        if has_active_kyc and ts.identity_score >= 10.0:
+            to_award.add("VERIFIED_KYC")
 
         pv = self.db.execute(
             text("SELECT status FROM photo_verifications WHERE user_id = :uid")
             .bindparams(uid=user.id)
         ).one_or_none()
         if pv and pv.status == "VERIFIED":
-            to_award.append("PHOTO_VERIFIED")
+            to_award.add("PHOTO_VERIFIED")
 
-        if user.rating_count >= 10 and user.rating_count > 0:
-            avg = user.rating_sum / user.rating_count
-            if avg >= 4.8:
-                to_award.append("TOP_RATED")
+        rating_avg = (user.rating_sum / user.rating_count) if user.rating_count > 0 else 0.0
 
         created = user.created_at
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
         cutoff = datetime(2026, 11, 1, tzinfo=timezone.utc)
         if created < cutoff:
-            to_award.append("EARLY_ADOPTER")
+            to_award.add("EARLY_ADOPTER")
 
         if ts.level in ("GOLD", "PLATINUM", "DIAMOND"):
-            to_award.append("TRUSTED_MEMBER")
+            to_award.add("TRUSTED_MEMBER")
 
-        from app.models.task import Task
         completed_count = self.db.execute(
             select(func.count(Task.id)).where(
-                Task.created_by == user.id,
+                Task.assigned_to == user.id,
                 Task.status == "COMPLETED",
             )
         ).scalar() or 0
         if completed_count >= 1:
-            to_award.append("FIRST_TASK")
+            to_award.add("FIRST_TASK")
+
+        if user.role == "tasker":
+            overview = WalletService(self.db).get_social_protection_overview(user.id)
+            active_months = int(overview.get("active_months", 0) or 0)
+            currencies = overview.get("currencies", [])
+            has_social_contributions = any(
+                float(item["pension"]["total_contributed"]) > 0
+                and float(item["health"]["total_paid_to_authorities"]) > 0
+                for item in currencies
+            )
+            if user.tasker_security_verified and has_active_kyc and has_clear_record:
+                to_award.add("CERTIFIED_ZASKA")
+            if active_months >= 1 and has_social_contributions:
+                to_award.add("PROTECTED_ZASKA")
+            if rating_avg > 4.8 and completed_count >= 50:
+                to_award.add("TOP_RATED")
+            if active_months >= 60 and rating_avg > 4.5 and has_social_contributions:
+                to_award.add("TASKER_SENIOR")
 
         now = datetime.now(timezone.utc)
+        existing_badges = self.db.execute(
+            select(UserBadge).where(UserBadge.user_id == user.id)
+        ).scalars().all()
+        existing_by_code = {badge.badge_code: badge for badge in existing_badges}
+        for code in revocable_codes:
+            if code not in to_award and code in existing_by_code:
+                self.db.delete(existing_by_code[code])
         for code in to_award:
             existing = self.db.execute(
                 select(UserBadge).where(

@@ -20,7 +20,11 @@ build/
 backend/fastapi/.env
 backend/fastapi/.env.sandbox
 backend/fastapi/.env.production
+backend/fastapi/.env.certification
+backend/fastapi/.env.certification.staging
 !backend/fastapi/.env.example
+!backend/fastapi/.env.certification.example
+!backend/fastapi/.env.certification.staging.example
 
 # Python
 __pycache__/

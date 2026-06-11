@@ -17,7 +17,12 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.models.task import Task
 from app.models.user import User
-from app.services.wallet_service import EscrowError, InsufficientFundsError, WalletService
+from app.services.internal_wallet_seed_service import InternalWalletSeedService
+from app.services.wallet_service import (
+    EscrowError,
+    InsufficientFundsError,
+    WalletService,
+)
 
 
 @pytest.fixture()
@@ -45,6 +50,15 @@ def db_session():
         )
     )
     session.commit()
+    # Provision the platform/pension/health/smoothing fund wallets and bind their
+    # user ids onto settings — release_escrow hard-fails (SocialSplitConfigError)
+    # if these are not configured, see _credit_social_split. Reset any ids bound by
+    # a previous test's (separate, in-memory) database first, since settings is a
+    # process-wide singleton and _bind_setting only binds when empty.
+    from app.core.config import settings as _settings
+    for _name in ("zaska_wallet_user_id", "pension_fund_user_id", "health_fund_user_id", "smoothing_fund_user_id"):
+        setattr(_settings, _name, "")
+    InternalWalletSeedService(session).ensure_all()
     yield session
     session.close()
 
@@ -70,10 +84,9 @@ def test_internal_escrow_release_credits_payee(db_session):
     escrow = svc.create_escrow("task-1", "payer", "payee", Decimal("500"), "XOF")
     svc.release_escrow(escrow.id)
 
-    from app.core.config import settings as _s
-    commission = (Decimal("500") * Decimal(str(_s.zaska_commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
+    split = svc.calculate_social_split(Decimal("500"))
     assert svc.get_balance("payer", "XOF") == Decimal("500")
-    assert svc.get_balance("payee", "XOF") == Decimal("500") - commission
+    assert svc.get_balance("payee", "XOF") == split["tasker_net"]
 
 
 def test_internal_escrow_refund_returns_to_payer(db_session):
@@ -145,9 +158,8 @@ def test_external_escrow_fund_then_release_credits_payee(db_session):
     assert escrow_funded.status == "funded"
 
     svc.release_escrow(escrow.id)
-    from app.core.config import settings as _s
-    commission = (Decimal("500") * Decimal(str(_s.zaska_commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
-    assert svc.get_balance("payee", "XOF") == Decimal("500") - commission
+    split = svc.calculate_social_split(Decimal("500"))
+    assert svc.get_balance("payee", "XOF") == split["tasker_net"]
 
 
 def test_external_escrow_fund_idempotent(db_session):
@@ -174,22 +186,36 @@ def test_external_escrow_cannot_fund_already_funded(db_session):
 # ── Conservation invariant ────────────────────────────────────────────────────
 
 def test_no_money_created_in_internal_flow(db_session):
-    """Total wallet balance is reduced by exactly the ZASKA commission — no extra money created or destroyed."""
+    """Releasing an escrow only redistributes the gross amount across payer/payee/social-split
+    funds — no money is created or destroyed (wallet == ledger invariant)."""
+    from app.core.config import settings as _s
+
     svc = WalletService(db_session)
     svc.create_wallet("payer", "XOF")
     svc.create_wallet("payee", "XOF")
     svc.credit_wallet("payer", "XOF", Decimal("1000"), "seed")
 
-    total_before = svc.get_balance("payer", "XOF") + svc.get_balance("payee", "XOF")
+    fund_user_ids = [
+        _s.zaska_wallet_user_id,
+        _s.pension_fund_user_id,
+        _s.health_fund_user_id,
+        _s.smoothing_fund_user_id,
+    ]
+
+    def _total_balance() -> Decimal:
+        total = svc.get_balance("payer", "XOF") + svc.get_balance("payee", "XOF")
+        for uid in fund_user_ids:
+            total += svc.get_balance(uid, "XOF")
+        return total
+
+    total_before = _total_balance()
 
     escrow = svc.create_escrow("task-1", "payer", "payee", Decimal("600"), "XOF")
     svc.release_escrow(escrow.id)
 
-    total_after = svc.get_balance("payer", "XOF") + svc.get_balance("payee", "XOF")
-    # 15% ZASKA commission goes to platform wallet (unconfigured in test env → not credited here).
-    # Verify total reduction == commission exactly — no phantom creation or extra loss.
-    from app.core.config import settings as _s
-    commission = (Decimal("600") * Decimal(str(_s.zaska_commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
-    assert total_before - commission == total_after, (
-        f"Expected={total_before - commission} (total_before={total_before} - commission={commission}), got={total_after}"
+    total_after = _total_balance()
+    # The escrow gross (600) is fully redistributed: payee + 4 social-split funds sum to 600,
+    # payer's debit at create_escrow already removed it from the total above.
+    assert total_before == total_after, (
+        f"Expected conservation: total_before={total_before}, got total_after={total_after}"
     )

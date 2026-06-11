@@ -28,6 +28,22 @@ class DisputeRecord(Base):
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=False, index=True
     )
+    task_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("tasks.id"), nullable=True, index=True
+    )
+    escrow_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("escrows.id"), nullable=True, index=True
+    )
+    counterparty_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True, index=True
+    )
+    opened_by_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    assigned_agent_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True, index=True
+    )
+    escalated_to_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True, index=True
+    )
     # At least one of these must be set
     transaction_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("transactions.id"), nullable=True, index=True
@@ -39,21 +55,52 @@ class DisputeRecord(Base):
     # "reversal" | "dispute" | "fraud_report"
     dispute_type: Mapped[str] = mapped_column(String(24), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[str] = mapped_column(String(16), nullable=False, default="medium")
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 6), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
-    # "open" | "resolved" | "rejected"
+    # "open" | "under_review" | "resolved" | "rejected" | "escalated"
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    resolution_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_channel: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     admin_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Set when dispute is resolved via a reversal transaction
     resolution_tx_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("transactions.id"), nullable=True
     )
+    task_snapshot_json: Mapped[str | None] = mapped_column("task_snapshot", Text, nullable=True)
+    chat_snapshot_json: Mapped[str | None] = mapped_column("chat_snapshot", Text, nullable=True)
+    geo_snapshot_json: Mapped[str | None] = mapped_column("geo_snapshot", Text, nullable=True)
+    photos_snapshot_json: Mapped[str | None] = mapped_column("photos_snapshot", Text, nullable=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    latest_action_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
+class DisputeEvent(Base):
+    __tablename__ = "dispute_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    dispute_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("disputes.id"), nullable=False, index=True
+    )
+    actor_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True, index=True
+    )
+    actor_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload_json: Mapped[str | None] = mapped_column("payload", Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
     )
 
 

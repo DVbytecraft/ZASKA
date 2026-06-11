@@ -33,6 +33,21 @@ elif [ -n "${ZASKA_WALLET_USER_ID:-}" ]; then
     echo "[entrypoint] ZASKA_WALLET_USER_ID already configured: ${ZASKA_WALLET_USER_ID}"
 fi
 
+echo "[entrypoint] Seeding social fund wallet users..."
+_SEEDED_SOCIAL_EXPORTS=$(python /app/backend/fastapi/scripts/seed_social_funds.py)
+
+for _ASSIGNMENT in $_SEEDED_SOCIAL_EXPORTS; do
+    _KEY=${_ASSIGNMENT%%=*}
+    _VALUE=${_ASSIGNMENT#*=}
+    eval "_CURRENT=\${${_KEY}:-}"
+    if [ -z "${_CURRENT}" ] && [ -n "${_VALUE}" ]; then
+        export "${_KEY}=${_VALUE}"
+        echo "[entrypoint] ${_KEY} auto-set from seed: ${_VALUE}"
+    elif [ -n "${_CURRENT}" ]; then
+        echo "[entrypoint] ${_KEY} already configured: ${_CURRENT}"
+    fi
+done
+
 echo "[entrypoint] Starting API server..."
 
 # WEB_CONCURRENCY: number of uvicorn worker processes.

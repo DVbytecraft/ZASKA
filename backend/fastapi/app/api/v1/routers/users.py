@@ -7,6 +7,10 @@ from app.api.deps import get_current_user_id, get_db
 from app.core.responses import success_response
 from app.models.user import User
 from app.schemas.user import UpdateProfilePayload, UserProfileResponse
+from app.services.country_rollout_service import CountryRolloutService
+from app.services.geo_hierarchy_service import GeoHierarchyService
+from app.services.module_control_service import ModuleControlService
+from app.services.rating_service import RatingService
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -31,6 +35,11 @@ def _user_response(user: User) -> dict:
         avatar_url=user.avatar_url,
         country_code=user.country_code,
         is_verified=user.is_verified,
+        tasker_security_verified=user.tasker_security_verified,
+        biometric_enabled=user.biometric_enabled,
+        criminal_record_status=user.criminal_record_status,
+        premium_access_restricted=bool(getattr(user, "premium_access_restricted", False)),
+        premium_access_restricted_reason=getattr(user, "premium_access_restricted_reason", None),
     ).model_dump()
 
 
@@ -45,6 +54,8 @@ def get_me(user_id: str = Depends(get_current_user_id), db: Session = Depends(ge
         from app.services.trust_service import TrustService
         svc = TrustService(db)
         ts = svc.get_trust_score(user_id)
+        if user.role == "tasker" or ts is None:
+            ts = svc.compute_for_user(user_id)
         if ts:
             data["trustScore"] = {
                 "totalScore": ts.total_score,
@@ -61,6 +72,24 @@ def get_me(user_id: str = Depends(get_current_user_id), db: Session = Depends(ge
     data["availability"] = getattr(user, "availability", None)
     data["hourlyRate"]   = getattr(user, "hourly_rate", None)
     data["responseTime"] = getattr(user, "response_time", None)
+    if user.country_code:
+        try:
+            country = CountryRolloutService(db).ensure_country(user.country_code)
+            runtime_modules = ModuleControlService(db).resolve_modules_for_country(user.country_code)
+            geo = GeoHierarchyService(db).resolve_country_geo(user.country_code)
+            data["countryLaunchStatus"] = country.launch_status
+            data["countryActive"] = bool(country.is_active)
+            data["foodDeliveryEnabled"] = bool(runtime_modules.get("FOOD", {}).get("enabled", country.food_delivery_enabled))
+            data["runtimeModules"] = runtime_modules
+            data["geoHierarchy"] = geo
+        except Exception:
+            pass
+    data["referralCode"] = getattr(user, "referral_code", None)
+    data["referredByUserId"] = getattr(user, "referred_by_user_id", None)
+    try:
+        data["ratings"] = RatingService(db).get_public_rating_summary(user_id)
+    except Exception:
+        pass
     return success_response(data)
 
 
@@ -139,13 +168,25 @@ def get_user_public(
         "response_time": getattr(user, "response_time", None),
         "rating_avg": round(user.rating_sum / user.rating_count, 2) if user.rating_count > 0 else None,
         "rating_count": user.rating_count,
+        "client_rating_avg": round(user.client_rating_sum / user.client_rating_count, 2) if user.client_rating_count > 0 else None,
+        "client_rating_count": user.client_rating_count,
+        "premium_access_restricted": bool(getattr(user, "premium_access_restricted", False)),
         "member_since": user.created_at.isoformat(),
     }
+    if getattr(user, "referred_by_user_id", None):
+        sponsor = db.execute(select(User).where(User.id == user.referred_by_user_id)).scalars().one_or_none()
+        if sponsor is not None:
+            data["sponsoredBy"] = {
+                "userId": sponsor.id,
+                "name": " ".join(filter(None, [sponsor.first_name, sponsor.last_name])) or sponsor.full_name or sponsor.email,
+            }
 
     try:
         from app.services.trust_service import TrustService
         svc = TrustService(db)
         ts = svc.get_trust_score(user_id)
+        if user.role == "tasker" or ts is None:
+            ts = svc.compute_for_user(user_id)
         if ts:
             data["trustScore"] = {
                 "totalScore": ts.total_score,
@@ -157,6 +198,13 @@ def get_user_public(
     except Exception:
         data["skills"] = []
         data["badges"] = []
+    try:
+        rating_service = RatingService(db)
+        data["ratings"] = rating_service.get_public_rating_summary(user_id)
+        data["recentReviews"] = rating_service.list_user_reviews(user_id, limit=10)
+    except Exception:
+        data["ratings"] = {"asTasker": {"average": None, "count": 0, "dimensions": {}}, "asClient": {"average": None, "count": 0, "dimensions": {}}}
+        data["recentReviews"] = []
 
     return success_response(data)
 

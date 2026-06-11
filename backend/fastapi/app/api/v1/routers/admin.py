@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,10 +9,29 @@ from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_wallet_service, require_admin
+from app.api.deps import (
+    assert_admin_scope_access,
+    filter_records_for_admin_scope,
+    get_access_control_service,
+    get_accounting_ledger_service,
+    get_aml_service,
+    get_b2b_service,
+    get_db,
+    get_dispute_service,
+    get_food_service,
+    get_geo_hierarchy_service,
+    get_module_control_service,
+    get_shop_service,
+    get_subscription_service,
+    get_vtc_service,
+    get_wallet_service,
+    require_admin,
+    require_permission,
+)
 from app.core.config import settings
 from app.core.country_engine.definitions import COUNTRY_REGISTRY as COUNTRY_CONFIGS
 from app.core.fx_rate import get_live_fx_rate
+from app.core.pricing_catalog import build_continent_pricing_profile, build_country_pricing_profile
 from app.core.redis_client import redis_sync
 from app.core.responses import success_response
 from app.models.dispute import DisputeRecord, ReconciliationReport
@@ -22,6 +42,19 @@ from app.models.task import Task
 from app.models.user import User
 from app.models.wallet import Escrow, Transaction, Wallet
 from app.payment.limits import TransactionLimits
+from app.services.access_control_service import AccessControlService
+from app.services.accounting_ledger_service import AccountingLedgerService
+from app.services.aml_service import AmlService
+from app.services.b2b_service import B2BService
+from app.services.country_rollout_service import CountryRolloutService
+from app.services.dispute_service import DisputeService
+from app.services.food_service import FoodService
+from app.services.geo_hierarchy_service import GeoHierarchyService
+from app.services.module_control_service import ModuleControlService
+from app.services.shop_service import ShopService
+from app.services.social_protection_service import SocialProtectionService
+from app.services.subscription_service import SubscriptionService
+from app.services.vtc_service import VtcService
 from app.services.wallet_service import InsufficientFundsError, WalletService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -32,6 +65,299 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 class BootstrapPayload(BaseModel):
     email: str
     secret: str
+
+
+class StaffScopePayload(BaseModel):
+    scope_type: str
+    scope_value: str = "*"
+    module_key: str = "*"
+    can_read: bool = True
+    can_write: bool = False
+
+
+class StaffCreatePayload(BaseModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    role_codes: list[str]
+    scopes: list[StaffScopePayload] = []
+    country_code: str | None = None
+    phone: str | None = None
+
+
+class StaffRolesUpdatePayload(BaseModel):
+    role_codes: list[str]
+
+
+class StaffScopesUpdatePayload(BaseModel):
+    scopes: list[StaffScopePayload]
+
+
+class ModuleSettingPayload(BaseModel):
+    scope_type: str
+    scope_value: str
+    enabled: bool
+    config: dict | None = None
+    reason: str | None = None
+
+
+class AdminCityPayload(BaseModel):
+    country_code: str
+    name: str
+    timezone_name: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    is_primary: bool = False
+    is_active: bool = True
+    launch_status: str = "CONFIGURED"
+
+
+class AdminServiceZonePayload(BaseModel):
+    country_code: str
+    city_name: str
+    module_code: str
+    name: str
+    zone_type: str = "radius"
+    is_active: bool = False
+    launch_status: str = "CONFIGURED"
+    center_latitude: float | None = None
+    center_longitude: float | None = None
+    radius_km: float | None = None
+    coverage: dict | None = None
+    pricing_profile: dict | None = None
+
+
+class AdminPricingProfilePayload(BaseModel):
+    pricing_profile: dict | None = None
+
+
+class RestaurantUserCreatePayload(BaseModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    country_code: str
+    phone: str | None = None
+
+
+class AdminRestaurantPayload(BaseModel):
+    public_name: str
+    country_code: str
+    city_name: str
+    currency: str
+    owner_user_id: str | None = None
+    service_zone_id: str | None = None
+    legal_name: str | None = None
+    description: str | None = None
+    address: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    phone: str | None = None
+    email: str | None = None
+    accepts_cash_on_delivery: bool = False
+    is_active: bool = True
+    accepting_orders: bool = True
+    is_temporarily_closed: bool = False
+    prep_buffer_minutes: int = 0
+    launch_status: str = "CONFIGURED"
+    opening_hours: dict | None = None
+
+
+class AdminRestaurantStaffPayload(BaseModel):
+    user_id: str
+    staff_role: str = "manager"
+    is_primary: bool = False
+
+
+class AdminRestaurantMenuPayload(BaseModel):
+    name: str
+    description: str | None = None
+    is_active: bool = True
+    is_default: bool = False
+
+
+class AdminRestaurantMenuItemPayload(BaseModel):
+    name: str
+    price: str
+    currency: str
+    description: str | None = None
+    category: str | None = None
+    prep_minutes: int = 20
+    is_available: bool = True
+    is_sold_out: bool = False
+    track_inventory: bool = False
+    stock_quantity: int | None = None
+    available_from_hour: str | None = None
+    available_to_hour: str | None = None
+    image_url: str | None = None
+
+
+class AdminRestaurantOpsPayload(BaseModel):
+    service_zone_id: str | None = None
+    accepting_orders: bool | None = None
+    is_temporarily_closed: bool | None = None
+    prep_buffer_minutes: int | None = None
+    opening_hours: dict | None = None
+
+
+class AdminMenuItemOpsPayload(BaseModel):
+    is_available: bool | None = None
+    is_sold_out: bool | None = None
+    track_inventory: bool | None = None
+    stock_quantity: int | None = None
+    available_from_hour: str | None = None
+    available_to_hour: str | None = None
+
+
+class AdminModifierGroupPayload(BaseModel):
+    name: str
+    is_required: bool = False
+    min_select: int = 0
+    max_select: int = 1
+    is_active: bool = True
+
+
+class AdminModifierOptionPayload(BaseModel):
+    name: str
+    currency: str
+    price_delta: str = "0"
+    is_default: bool = False
+    is_active: bool = True
+
+
+class AdminSpecialClosurePayload(BaseModel):
+    starts_at: datetime
+    ends_at: datetime
+    reason: str | None = None
+    is_active: bool = True
+
+
+class AdminComboOfferPayload(BaseModel):
+    name: str
+    price: str
+    currency: str
+    description: str | None = None
+    is_active: bool = True
+    available_from_hour: str | None = None
+    available_to_hour: str | None = None
+
+
+class AdminComboItemPayload(BaseModel):
+    menu_item_id: str
+    quantity: int = 1
+
+
+def _parse_iso_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    return date.fromisoformat(value)
+
+
+def _serialize_restaurant_admin(restaurant) -> dict[str, object]:
+    return {
+        "id": restaurant.id,
+        "owner_user_id": restaurant.owner_user_id,
+        "service_zone_id": restaurant.service_zone_id,
+        "public_name": restaurant.public_name,
+        "legal_name": restaurant.legal_name,
+        "description": restaurant.description,
+        "country_code": restaurant.country_code,
+        "city_name": restaurant.city_name,
+        "address": restaurant.address,
+        "latitude": restaurant.latitude,
+        "longitude": restaurant.longitude,
+        "currency": restaurant.currency,
+        "phone": restaurant.phone,
+        "email": restaurant.email,
+        "accepts_cash_on_delivery": bool(restaurant.accepts_cash_on_delivery),
+        "is_active": bool(restaurant.is_active),
+        "accepting_orders": bool(restaurant.accepting_orders),
+        "is_temporarily_closed": bool(restaurant.is_temporarily_closed),
+        "prep_buffer_minutes": restaurant.prep_buffer_minutes,
+        "launch_status": restaurant.launch_status,
+        "opening_hours": json.loads(restaurant.opening_hours_json) if restaurant.opening_hours_json else None,
+        "created_at": restaurant.created_at.isoformat() if restaurant.created_at else None,
+    }
+
+
+def _serialize_menu_admin(menu) -> dict[str, object]:
+    return {
+        "id": menu.id,
+        "restaurant_id": menu.restaurant_id,
+        "name": menu.name,
+        "description": menu.description,
+        "is_active": bool(menu.is_active),
+        "is_default": bool(menu.is_default),
+        "created_at": menu.created_at.isoformat() if menu.created_at else None,
+    }
+
+
+def _serialize_menu_item_admin(item) -> dict[str, object]:
+    return {
+        "id": item.id,
+        "menu_id": item.menu_id,
+        "name": item.name,
+        "description": item.description,
+        "category": item.category,
+        "price": str(item.price),
+        "currency": item.currency,
+        "is_available": bool(item.is_available),
+        "is_sold_out": bool(item.is_sold_out),
+        "track_inventory": bool(item.track_inventory),
+        "stock_quantity": item.stock_quantity,
+        "prep_minutes": item.prep_minutes,
+        "available_from_hour": item.available_from_hour,
+        "available_to_hour": item.available_to_hour,
+        "image_url": item.image_url,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+    }
+
+
+def _serialize_modifier_group_admin(group, options: list[object]) -> dict[str, object]:
+    return {
+        "id": group.id,
+        "menu_item_id": group.menu_item_id,
+        "name": group.name,
+        "is_required": bool(group.is_required),
+        "min_select": group.min_select,
+        "max_select": group.max_select,
+        "is_active": bool(group.is_active),
+        "options": [
+            {
+                "id": option.id,
+                "modifier_group_id": option.modifier_group_id,
+                "name": option.name,
+                "price_delta": str(option.price_delta),
+                "currency": option.currency,
+                "is_default": bool(option.is_default),
+                "is_active": bool(option.is_active),
+            }
+            for option in options
+        ],
+    }
+
+
+def _serialize_combo_offer_admin(combo, combo_items: list[object]) -> dict[str, object]:
+    return {
+        "id": combo.id,
+        "restaurant_id": combo.restaurant_id,
+        "name": combo.name,
+        "description": combo.description,
+        "price": str(combo.price),
+        "currency": combo.currency,
+        "is_active": bool(combo.is_active),
+        "available_from_hour": combo.available_from_hour,
+        "available_to_hour": combo.available_to_hour,
+        "items": [
+            {
+                "id": item.id,
+                "menu_item_id": item.menu_item_id,
+                "quantity": item.quantity,
+            }
+            for item in combo_items
+        ],
+    }
 
 
 @router.post("/bootstrap", include_in_schema=False)
@@ -106,6 +432,930 @@ def bootstrap_admin(payload: BootstrapPayload, db: Session = Depends(get_db)):
         "action_required": "REMOVE ADMIN_BOOTSTRAP_SECRET from your environment immediately. "
                            "This endpoint is now permanently locked (one admin already exists).",
     })
+
+
+@router.get("/access-control/catalog")
+def access_control_catalog(
+    svc: AccessControlService = Depends(get_access_control_service),
+    _: str = Depends(require_permission("admin.staff.manage")),
+):
+    return success_response({"roles": svc.list_role_catalog()})
+
+
+@router.get("/staff")
+def list_staff_accounts(
+    svc: AccessControlService = Depends(get_access_control_service),
+    _: str = Depends(require_permission("admin.staff.manage")),
+):
+    return success_response(svc.list_staff_accounts())
+
+
+@router.get("/modules/catalog")
+def module_catalog(
+    svc: ModuleControlService = Depends(get_module_control_service),
+    _: str = Depends(require_permission("admin.modules.manage")),
+):
+    return success_response({"modules": svc.list_modules()})
+
+
+@router.get("/modules/settings")
+def list_module_settings(
+    module_code: str | None = Query(default=None),
+    scope_type: str | None = Query(default=None),
+    scope_value: str | None = Query(default=None),
+    svc: ModuleControlService = Depends(get_module_control_service),
+    _: str = Depends(require_permission("admin.modules.manage")),
+):
+    return success_response(
+        svc.list_settings(
+            module_code=module_code,
+            scope_type=scope_type,
+            scope_value=scope_value,
+        )
+    )
+
+
+@router.get("/modules/runtime/{country_code}")
+def module_runtime_for_country(
+    country_code: str,
+    svc: ModuleControlService = Depends(get_module_control_service),
+    _: str = Depends(require_permission("admin.modules.manage")),
+):
+    return success_response(svc.resolve_modules_for_country(country_code))
+
+
+@router.put("/modules/{module_code}/settings")
+def upsert_module_setting(
+    module_code: str,
+    payload: ModuleSettingPayload,
+    svc: ModuleControlService = Depends(get_module_control_service),
+    admin_id: str = Depends(require_permission("admin.modules.manage")),
+):
+    try:
+        return success_response(
+            svc.upsert_setting(
+                module_code=module_code,
+                scope_type=payload.scope_type,
+                scope_value=payload.scope_value,
+                enabled=payload.enabled,
+                changed_by_user_id=admin_id,
+                config=payload.config,
+                reason=payload.reason,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/geo/continents")
+def list_geo_continents(
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    return success_response(geo.list_continents())
+
+
+@router.put("/geo/continents/{continent_code}/pricing")
+def upsert_geo_continent_pricing(
+    continent_code: str,
+    payload: AdminPricingProfilePayload,
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    try:
+        return success_response(
+            geo.upsert_continent_pricing_profile(
+                continent_code=continent_code,
+                pricing_profile=payload.pricing_profile,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/geo/countries")
+def list_geo_countries(
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    return success_response(geo.list_countries())
+
+
+@router.get("/geo/countries/{country_code}")
+def get_geo_country_runtime(
+    country_code: str,
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    return success_response(geo.resolve_country_geo(country_code))
+
+
+@router.put("/geo/countries/{country_code}/pricing")
+def upsert_geo_country_pricing(
+    country_code: str,
+    payload: AdminPricingProfilePayload,
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    try:
+        return success_response(
+            geo.upsert_country_pricing_profile(
+                country_code=country_code,
+                pricing_profile=payload.pricing_profile,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/pricing/templates/continents/{continent_code}")
+def get_continent_pricing_template(
+    continent_code: str,
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    return success_response(
+        {
+            "continent_code": continent_code.strip().upper(),
+            "pricing_profile": build_continent_pricing_profile(continent_code),
+        }
+    )
+
+
+@router.get("/pricing/templates/countries/{country_code}")
+def get_country_pricing_template(
+    country_code: str,
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    runtime = geo.resolve_country_geo(country_code)
+    return success_response(
+        {
+            "country_code": country_code.strip().upper(),
+            "continent_code": runtime.get("continent_code"),
+            "pricing_profile": build_country_pricing_profile(country_code, runtime.get("continent_code")),
+        }
+    )
+
+
+@router.get("/geo/cities")
+def list_geo_cities(
+    country_code: str | None = Query(default=None),
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    return success_response(geo.list_cities(country_code=country_code))
+
+
+@router.put("/geo/cities")
+def upsert_geo_city(
+    payload: AdminCityPayload,
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    try:
+        return success_response(
+            geo.upsert_city(
+                country_code=payload.country_code,
+                name=payload.name,
+                timezone_name=payload.timezone_name,
+                latitude=payload.latitude,
+                longitude=payload.longitude,
+                is_primary=payload.is_primary,
+                is_active=payload.is_active,
+                launch_status=payload.launch_status,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/geo/service-zones")
+def list_geo_service_zones(
+    module_code: str | None = Query(default=None),
+    country_code: str | None = Query(default=None),
+    city_code: str | None = Query(default=None),
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    return success_response(
+        geo.list_service_zones(
+            module_code=module_code,
+            country_code=country_code,
+            city_code=city_code,
+        )
+    )
+
+
+@router.put("/geo/service-zones")
+def upsert_geo_service_zone(
+    payload: AdminServiceZonePayload,
+    geo: GeoHierarchyService = Depends(get_geo_hierarchy_service),
+    _: str = Depends(require_permission("admin.countries.manage")),
+):
+    try:
+        return success_response(
+            geo.upsert_service_zone(
+                country_code=payload.country_code,
+                city_name=payload.city_name,
+                module_code=payload.module_code,
+                name=payload.name,
+                zone_type=payload.zone_type,
+                is_active=payload.is_active,
+                launch_status=payload.launch_status,
+                center_latitude=payload.center_latitude,
+                center_longitude=payload.center_longitude,
+                radius_km=payload.radius_km,
+                coverage=payload.coverage,
+                pricing_profile=payload.pricing_profile,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/food/restaurant-users")
+def create_food_restaurant_user(
+    payload: RestaurantUserCreatePayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        user = svc.create_restaurant_user(
+            email=payload.email,
+            password=payload.password,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+            country_code=payload.country_code,
+            phone=payload.phone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(
+        {
+            "user_id": user.id,
+            "email": user.email,
+            "role": user.role,
+            "country_code": user.country_code,
+        }
+    )
+
+
+@router.get("/food/restaurants")
+def list_food_restaurants_admin(
+    country_code: str | None = Query(default=None),
+    city_name: str | None = Query(default=None),
+    include_inactive: bool = Query(default=True),
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.read")),
+):
+    restaurants = svc.list_restaurants(
+        country_code=country_code,
+        city_name=city_name,
+        include_inactive=include_inactive,
+    )
+    return success_response([_serialize_restaurant_admin(restaurant) for restaurant in restaurants])
+
+
+@router.post("/food/restaurants")
+def create_food_restaurant_admin(
+    payload: AdminRestaurantPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        restaurant = svc.create_restaurant(
+            public_name=payload.public_name,
+            country_code=payload.country_code,
+            city_name=payload.city_name,
+            currency=payload.currency,
+            owner_user_id=payload.owner_user_id,
+            service_zone_id=payload.service_zone_id,
+            legal_name=payload.legal_name,
+            description=payload.description,
+            address=payload.address,
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            phone=payload.phone,
+            email=payload.email,
+            accepts_cash_on_delivery=payload.accepts_cash_on_delivery,
+            is_active=payload.is_active,
+            accepting_orders=payload.accepting_orders,
+            is_temporarily_closed=payload.is_temporarily_closed,
+            prep_buffer_minutes=payload.prep_buffer_minutes,
+            launch_status=payload.launch_status,
+            opening_hours=payload.opening_hours,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(_serialize_restaurant_admin(restaurant))
+
+
+@router.post("/food/restaurants/{restaurant_id}/staff")
+def assign_food_restaurant_staff_admin(
+    restaurant_id: str,
+    payload: AdminRestaurantStaffPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        assignment = svc.assign_restaurant_staff(
+            restaurant_id=restaurant_id,
+            user_id=payload.user_id,
+            staff_role=payload.staff_role,
+            is_primary=payload.is_primary,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(
+        {
+            "id": assignment.id,
+            "restaurant_id": assignment.restaurant_id,
+            "user_id": assignment.user_id,
+            "staff_role": assignment.staff_role,
+            "is_primary": bool(assignment.is_primary),
+            "is_active": bool(assignment.is_active),
+        }
+    )
+
+
+@router.patch("/food/restaurants/{restaurant_id}/operations")
+def update_food_restaurant_operations_admin(
+    restaurant_id: str,
+    payload: AdminRestaurantOpsPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        restaurant = svc.update_restaurant_operations(
+            restaurant_id=restaurant_id,
+            service_zone_id=payload.service_zone_id,
+            accepting_orders=payload.accepting_orders,
+            is_temporarily_closed=payload.is_temporarily_closed,
+            prep_buffer_minutes=payload.prep_buffer_minutes,
+            opening_hours=payload.opening_hours,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(_serialize_restaurant_admin(restaurant))
+
+
+@router.get("/food/restaurants/{restaurant_id}/menus")
+def list_food_restaurant_menus_admin(
+    restaurant_id: str,
+    include_inactive: bool = Query(default=True),
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.read")),
+):
+    menus = svc.list_menus(restaurant_id, include_inactive=include_inactive)
+    items = svc.list_menu_items(restaurant_id=restaurant_id, include_unavailable=include_inactive)
+    return success_response(
+        {
+            "menus": [_serialize_menu_admin(menu) for menu in menus],
+            "menu_items": [_serialize_menu_item_admin(item) for item in items],
+        }
+    )
+
+
+@router.post("/food/restaurants/{restaurant_id}/menus")
+def create_food_restaurant_menu_admin(
+    restaurant_id: str,
+    payload: AdminRestaurantMenuPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        menu = svc.create_menu(
+            restaurant_id=restaurant_id,
+            name=payload.name,
+            description=payload.description,
+            is_active=payload.is_active,
+            is_default=payload.is_default,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(_serialize_menu_admin(menu))
+
+
+@router.post("/food/menus/{menu_id}/items")
+def create_food_menu_item_admin(
+    menu_id: str,
+    payload: AdminRestaurantMenuItemPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        item = svc.create_menu_item(
+            menu_id=menu_id,
+            name=payload.name,
+            price=Decimal(payload.price),
+            currency=payload.currency,
+            description=payload.description,
+            category=payload.category,
+            prep_minutes=payload.prep_minutes,
+            is_available=payload.is_available,
+            is_sold_out=payload.is_sold_out,
+            track_inventory=payload.track_inventory,
+            stock_quantity=payload.stock_quantity,
+            available_from_hour=payload.available_from_hour,
+            available_to_hour=payload.available_to_hour,
+            image_url=payload.image_url,
+        )
+    except (ValueError, ArithmeticError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(_serialize_menu_item_admin(item))
+
+
+@router.patch("/food/menu-items/{item_id}/operations")
+def update_food_menu_item_operations_admin(
+    item_id: str,
+    payload: AdminMenuItemOpsPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        item = svc.update_menu_item_operations(
+            item_id=item_id,
+            is_available=payload.is_available,
+            is_sold_out=payload.is_sold_out,
+            track_inventory=payload.track_inventory,
+            stock_quantity=payload.stock_quantity,
+            available_from_hour=payload.available_from_hour,
+            available_to_hour=payload.available_to_hour,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(_serialize_menu_item_admin(item))
+
+
+@router.get("/food/menu-items/{item_id}/modifiers")
+def list_food_menu_item_modifiers_admin(
+    item_id: str,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.read")),
+):
+    groups = svc.list_modifier_groups(menu_item_id=item_id)
+    return success_response(
+        [
+            _serialize_modifier_group_admin(group, svc.list_modifier_options(modifier_group_id=group.id))
+            for group in groups
+        ]
+    )
+
+
+@router.get("/food/restaurants/{restaurant_id}/closures")
+def list_food_restaurant_closures_admin(
+    restaurant_id: str,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.read")),
+):
+    closures = svc.list_special_closures(restaurant_id=restaurant_id)
+    return success_response(
+        [
+            {
+                "id": closure.id,
+                "restaurant_id": closure.restaurant_id,
+                "reason": closure.reason,
+                "starts_at": closure.starts_at.isoformat() if closure.starts_at else None,
+                "ends_at": closure.ends_at.isoformat() if closure.ends_at else None,
+                "is_active": bool(closure.is_active),
+            }
+            for closure in closures
+        ]
+    )
+
+
+@router.post("/food/restaurants/{restaurant_id}/closures")
+def create_food_restaurant_closure_admin(
+    restaurant_id: str,
+    payload: AdminSpecialClosurePayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        closure = svc.create_special_closure(
+            restaurant_id=restaurant_id,
+            starts_at=payload.starts_at,
+            ends_at=payload.ends_at,
+            reason=payload.reason,
+            is_active=payload.is_active,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(
+        {
+            "id": closure.id,
+            "restaurant_id": closure.restaurant_id,
+            "reason": closure.reason,
+            "starts_at": closure.starts_at.isoformat() if closure.starts_at else None,
+            "ends_at": closure.ends_at.isoformat() if closure.ends_at else None,
+            "is_active": bool(closure.is_active),
+        }
+    )
+
+
+@router.post("/food/menu-items/{item_id}/modifier-groups")
+def create_food_modifier_group_admin(
+    item_id: str,
+    payload: AdminModifierGroupPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        group = svc.create_modifier_group(
+            menu_item_id=item_id,
+            name=payload.name,
+            is_required=payload.is_required,
+            min_select=payload.min_select,
+            max_select=payload.max_select,
+            is_active=payload.is_active,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(_serialize_modifier_group_admin(group, []))
+
+
+@router.get("/food/restaurants/{restaurant_id}/combos")
+def list_food_combo_offers_admin(
+    restaurant_id: str,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.read")),
+):
+    combos = svc.list_combo_offers(restaurant_id=restaurant_id)
+    return success_response(
+        [
+            _serialize_combo_offer_admin(combo, svc.list_combo_items(combo_offer_id=combo.id))
+            for combo in combos
+        ]
+    )
+
+
+@router.post("/food/restaurants/{restaurant_id}/combos")
+def create_food_combo_offer_admin(
+    restaurant_id: str,
+    payload: AdminComboOfferPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        combo = svc.create_combo_offer(
+            restaurant_id=restaurant_id,
+            name=payload.name,
+            price=Decimal(payload.price),
+            currency=payload.currency,
+            description=payload.description,
+            is_active=payload.is_active,
+            available_from_hour=payload.available_from_hour,
+            available_to_hour=payload.available_to_hour,
+        )
+    except (ValueError, ArithmeticError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(_serialize_combo_offer_admin(combo, []))
+
+
+@router.post("/food/combos/{combo_id}/items")
+def add_food_combo_item_admin(
+    combo_id: str,
+    payload: AdminComboItemPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        row = svc.add_combo_item(
+            combo_offer_id=combo_id,
+            menu_item_id=payload.menu_item_id,
+            quantity=payload.quantity,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(
+        {
+            "id": row.id,
+            "combo_offer_id": row.combo_offer_id,
+            "menu_item_id": row.menu_item_id,
+            "quantity": row.quantity,
+        }
+    )
+
+
+@router.post("/food/modifier-groups/{group_id}/options")
+def create_food_modifier_option_admin(
+    group_id: str,
+    payload: AdminModifierOptionPayload,
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.manage")),
+):
+    try:
+        option = svc.create_modifier_option(
+            modifier_group_id=group_id,
+            name=payload.name,
+            currency=payload.currency,
+            price_delta=Decimal(payload.price_delta),
+            is_default=payload.is_default,
+            is_active=payload.is_active,
+        )
+    except (ValueError, ArithmeticError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response(
+        {
+            "id": option.id,
+            "modifier_group_id": option.modifier_group_id,
+            "name": option.name,
+            "price_delta": str(option.price_delta),
+            "currency": option.currency,
+            "is_default": bool(option.is_default),
+            "is_active": bool(option.is_active),
+        }
+    )
+
+
+@router.get("/food/orders")
+def list_food_orders_admin(
+    actor_user_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.read")),
+):
+    if actor_user_id:
+        orders = svc.list_restaurant_orders(actor_user_id)
+    else:
+        from app.models.food import FoodOrder
+
+        orders = db.execute(select(FoodOrder).order_by(FoodOrder.created_at.desc()).limit(500)).scalars().all()
+    return success_response(
+        [
+            {
+                "id": order.id,
+                "customer_user_id": order.customer_user_id,
+                "restaurant_id": order.restaurant_id,
+                "status": order.status,
+                "payment_status": order.payment_status,
+                "currency": order.currency,
+                "total_amount": str(order.total_amount),
+                "delivery_amount": str(order.delivery_amount),
+                "restaurant_amount": str(order.restaurant_amount),
+                "country_code": order.country_code,
+                "city_name": order.city_name,
+                "created_at": order.created_at.isoformat() if order.created_at else None,
+            }
+            for order in orders
+        ]
+    )
+
+
+@router.post("/food/dispatch-candidates")
+def list_food_dispatch_candidates_admin(
+    latitude: float = Query(...),
+    longitude: float = Query(...),
+    country_code: str | None = Query(default=None),
+    city_name: str | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=100),
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.read")),
+):
+    return success_response(
+        svc.get_dispatch_candidates(
+            tasker_latitude=latitude,
+            tasker_longitude=longitude,
+            country_code=country_code,
+            city_name=city_name,
+            limit=limit,
+        )
+    )
+
+
+@router.post("/food/payout-snapshots")
+def build_food_payout_snapshots_admin(
+    period_key: str | None = Query(default=None),
+    restaurant_id: str | None = Query(default=None),
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.read")),
+):
+    return success_response(
+        svc.build_restaurant_payout_snapshots(
+            period_key=period_key,
+            restaurant_id=restaurant_id,
+        )
+    )
+
+
+@router.get("/food/payout-snapshots")
+def list_food_payout_snapshots_admin(
+    period_key: str | None = Query(default=None),
+    restaurant_id: str | None = Query(default=None),
+    currency: str | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=2000),
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.food.read")),
+):
+    return success_response(
+        svc.list_restaurant_payout_snapshots(
+            period_key=period_key,
+            restaurant_id=restaurant_id,
+            currency=currency,
+            limit=limit,
+        )
+    )
+
+
+@router.post("/food/payout-snapshots/sync-ledger")
+def sync_food_payout_snapshots_to_ledger_admin(
+    period_key: str | None = Query(default=None),
+    restaurant_id: str | None = Query(default=None),
+    svc: FoodService = Depends(get_food_service),
+    _: str = Depends(require_permission("admin.finance.read")),
+):
+    return success_response(
+        svc.sync_payout_snapshots_to_accounting(
+            period_key=period_key,
+            restaurant_id=restaurant_id,
+        )
+    )
+
+
+@router.get("/ledger/overview")
+def get_ledger_overview(
+    svc: AccountingLedgerService = Depends(get_accounting_ledger_service),
+    _: str = Depends(require_permission("admin.finance.read")),
+):
+    return success_response(svc.get_ledger_overview())
+
+
+@router.get("/ledger/accounts")
+def list_ledger_accounts(
+    currency: str | None = Query(default=None),
+    code: str | None = Query(default=None),
+    account_type: str | None = Query(default=None),
+    svc: AccountingLedgerService = Depends(get_accounting_ledger_service),
+    _: str = Depends(require_permission("admin.finance.read")),
+):
+    return success_response(
+        svc.list_accounts(
+            currency=currency,
+            code=code,
+            account_type=account_type,
+        )
+    )
+
+
+@router.post("/ledger/ingest-wallet-mirror")
+def ingest_ledger_wallet_mirror(
+    svc: AccountingLedgerService = Depends(get_accounting_ledger_service),
+    _: str = Depends(require_permission("admin.finance.read")),
+):
+    return success_response(svc.ingest_wallet_mirror_entries())
+
+
+@router.post("/ledger/reconciliation-snapshots")
+def create_ledger_reconciliation_snapshots(
+    snapshot_date: str | None = Query(default=None),
+    currency: str | None = Query(default=None),
+    svc: AccountingLedgerService = Depends(get_accounting_ledger_service),
+    _: str = Depends(require_permission("admin.finance.read")),
+):
+    try:
+        parsed_date = _parse_iso_date(snapshot_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Date invalide. Utilisez YYYY-MM-DD.") from exc
+    return success_response(
+        svc.create_reconciliation_snapshots(
+            snapshot_date=parsed_date,
+            currency=currency,
+        )
+    )
+
+
+@router.get("/ledger/reconciliation-snapshots")
+def list_ledger_reconciliation_snapshots(
+    snapshot_date: str | None = Query(default=None),
+    currency: str | None = Query(default=None),
+    limit: int = Query(default=200, le=1000),
+    svc: AccountingLedgerService = Depends(get_accounting_ledger_service),
+    _: str = Depends(require_permission("admin.finance.read")),
+):
+    try:
+        parsed_date = _parse_iso_date(snapshot_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Date invalide. Utilisez YYYY-MM-DD.") from exc
+    return success_response(
+        svc.list_reconciliation_snapshots(
+            snapshot_date=parsed_date,
+            currency=currency,
+            limit=limit,
+        )
+    )
+
+
+@router.post("/ledger/country-revenue-snapshots")
+def create_country_revenue_snapshots(
+    period_key: str | None = Query(default=None),
+    country_code: str | None = Query(default=None),
+    svc: AccountingLedgerService = Depends(get_accounting_ledger_service),
+    _: str = Depends(require_permission("admin.finance.read")),
+):
+    return success_response(
+        svc.build_country_revenue_snapshots(
+            period_key=period_key,
+            country_code=country_code,
+        )
+    )
+
+
+@router.get("/ledger/country-revenue-snapshots")
+def list_country_revenue_snapshots(
+    period_key: str | None = Query(default=None),
+    country_code: str | None = Query(default=None),
+    currency: str | None = Query(default=None),
+    limit: int = Query(default=500, le=2000),
+    svc: AccountingLedgerService = Depends(get_accounting_ledger_service),
+    _: str = Depends(require_permission("admin.finance.read")),
+):
+    return success_response(
+        svc.list_country_revenue_snapshots(
+            period_key=period_key,
+            country_code=country_code,
+            currency=currency,
+            limit=limit,
+        )
+    )
+
+
+@router.post("/staff")
+def create_staff_account(
+    payload: StaffCreatePayload,
+    svc: AccessControlService = Depends(get_access_control_service),
+    admin_id: str = Depends(require_permission("admin.staff.manage")),
+):
+    try:
+        user = svc.create_staff_account(
+            email=payload.email,
+            password=payload.password,
+            first_name=payload.first_name,
+            last_name=payload.last_name,
+            created_by_user_id=admin_id,
+            role_codes=payload.role_codes,
+            scopes=[scope.model_dump() for scope in payload.scopes],
+            country_code=payload.country_code,
+            phone=payload.phone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return success_response(
+        {
+            "user_id": user.id,
+            "email": user.email,
+            "role": user.role,
+            "admin_roles": svc.get_user_role_codes(user.id),
+            "scopes": svc.get_user_scopes(user.id),
+        }
+    )
+
+
+@router.put("/staff/{user_id}/roles")
+def update_staff_roles(
+    user_id: str,
+    payload: StaffRolesUpdatePayload,
+    db: Session = Depends(get_db),
+    svc: AccessControlService = Depends(get_access_control_service),
+    admin_id: str = Depends(require_permission("admin.staff.manage")),
+):
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    if user.role != settings.admin_role:
+        user.role = "staff"
+    try:
+        role_codes = svc.replace_role_assignments(
+            user_id=user_id,
+            role_codes=payload.role_codes,
+            granted_by_user_id=admin_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.refresh(user)
+    return success_response({"user_id": user_id, "role": user.role, "admin_roles": role_codes})
+
+
+@router.put("/staff/{user_id}/scopes")
+def update_staff_scopes(
+    user_id: str,
+    payload: StaffScopesUpdatePayload,
+    db: Session = Depends(get_db),
+    svc: AccessControlService = Depends(get_access_control_service),
+    admin_id: str = Depends(require_permission("admin.staff.manage")),
+):
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    try:
+        scopes = svc.replace_scopes(
+            user_id=user_id,
+            scopes=[scope.model_dump() for scope in payload.scopes],
+            granted_by_user_id=admin_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return success_response({"user_id": user_id, "scopes": scopes})
 
 
 # ── Existing endpoints (preserved) ───────────────────────────────────────────
@@ -444,19 +1694,90 @@ def admin_cancel_task(
 
 @router.get("/countries")
 def list_countries(
+    db: Session = Depends(get_db),
     _: str = Depends(require_admin),
 ):
+    countries = CountryRolloutService(db).list_countries()
     return success_response(
         [
             {
-                "code": cfg.country_code,
-                "currency": cfg.currency,
-                "mobile_money_enabled": cfg.mobile_money_enabled,
-                "payment_providers": cfg.payment_providers,
+                "code": country.iso_code or country.name,
+                "name_en": country.display_name_en or country.name,
+                "name_fr": country.display_name_fr or country.display_name_en or country.name,
+                "currency": country.currency_code or "EUR",
+                "mobile_money_enabled": bool(country.mobile_money_enabled),
+                "payment_providers": json.loads(country.payment_providers_json or "[]"),
+                "is_active": bool(country.is_active),
+                "signup_enabled": bool(country.signup_enabled),
+                "launch_status": country.launch_status,
+                "food_delivery_enabled": bool(country.food_delivery_enabled),
+                "food_delivery_escrow_minutes": country.food_delivery_escrow_minutes,
             }
-            for cfg in COUNTRY_CONFIGS.values()
+            for country in countries
         ]
     )
+
+
+class AdminCountryUpdatePayload(BaseModel):
+    is_active: bool | None = None
+    signup_enabled: bool | None = None
+    launch_status: str | None = None
+    food_delivery_enabled: bool | None = None
+    food_delivery_escrow_minutes: int | None = None
+
+
+@router.patch("/countries/{country_code}")
+def update_country_rollout(
+    country_code: str,
+    payload: AdminCountryUpdatePayload,
+    db: Session = Depends(get_db),
+    admin_id: str = Depends(require_admin),
+    module_svc: ModuleControlService = Depends(get_module_control_service),
+):
+    country = CountryRolloutService(db).update_country(
+        country_code=country_code,
+        is_active=payload.is_active,
+        signup_enabled=payload.signup_enabled,
+        launch_status=payload.launch_status,
+        food_delivery_enabled=payload.food_delivery_enabled,
+        food_delivery_escrow_minutes=payload.food_delivery_escrow_minutes,
+    )
+    if payload.food_delivery_enabled is not None:
+        module_svc.upsert_setting(
+            module_code="FOOD",
+            scope_type="country",
+            scope_value=country_code,
+            enabled=payload.food_delivery_enabled,
+            changed_by_user_id=admin_id,
+            config={"escrow_minutes": country.food_delivery_escrow_minutes},
+            reason="country_rollout_sync",
+        )
+    return success_response(
+        {
+            "code": country.iso_code or country.name,
+            "is_active": bool(country.is_active),
+            "signup_enabled": bool(country.signup_enabled),
+            "launch_status": country.launch_status,
+            "food_delivery_enabled": bool(country.food_delivery_enabled),
+            "food_delivery_escrow_minutes": country.food_delivery_escrow_minutes,
+        }
+    )
+
+
+@router.get("/social-protection/overview")
+def social_protection_overview(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+):
+    return success_response(SocialProtectionService(db).get_admin_overview())
+
+
+@router.get("/accounting/overview")
+def accounting_overview(
+    db: Session = Depends(get_db),
+    _: str = Depends(require_admin),
+):
+    return success_response(SocialProtectionService(db).get_accounting_overview())
 
 
 @router.get("/users")
@@ -634,10 +1955,24 @@ def list_kyc(
             "id": s.id,
             "user_id": s.user_id,
             "status": s.status,
+            "submission_kind": getattr(s, "submission_kind", "full"),
             "id_document_url": s.id_document_url,
+            "id_document_back_url": getattr(s, "id_document_back_url", None),
             "selfie_url": s.selfie_url,
+            "biometric_selfie_url": getattr(s, "biometric_selfie_url", None),
+            "biometric_status": getattr(s, "biometric_status", None),
+            "ocr_status": getattr(s, "ocr_status", None),
+            "id_document_type": getattr(s, "id_document_type", None),
+            "id_document_number_masked": getattr(s, "id_document_number_masked", None),
+            "document_country_code": getattr(s, "document_country_code", None),
+            "criminal_record_url": getattr(s, "criminal_record_url", None),
+            "criminal_record_status": getattr(s, "criminal_record_status", None),
+            "criminal_record_risk_level": getattr(s, "criminal_record_risk_level", None),
             "reviewed_by": s.reviewed_by,
             "reviewer_note": s.reviewer_note,
+            "approved_at": s.approved_at.isoformat() if s.approved_at else None,
+            "expires_at": s.expires_at.isoformat() if s.expires_at else None,
+            "is_expired": bool(s.is_expired),
             "created_at": s.created_at.isoformat(),
         }
         for s in submissions
@@ -773,62 +2108,128 @@ def reverse_transaction(
 @router.get("/disputes")
 def list_disputes(
     status: str | None = "open",
+    priority: str | None = None,
     limit: int = 50,
-    db: Session = Depends(get_db),
-    _: str = Depends(require_admin),
+    svc: DisputeService = Depends(get_dispute_service),
+    _: str = Depends(require_permission("admin.disputes.manage")),
 ):
-    stmt = (
-        select(DisputeRecord)
-        .order_by(desc(DisputeRecord.created_at))
-        .limit(min(limit, 200))
+    items = svc.list_disputes(
+        admin_view=True,
+        status=status,
+        priority=priority,
+        limit=limit,
     )
-    if status:
-        stmt = stmt.where(DisputeRecord.status == status)
-    disputes = db.execute(stmt).scalars().all()
-    return success_response([
-        {
-            "id": d.id,
-            "user_id": d.user_id,
-            "transaction_id": d.transaction_id,
-            "payout_id": d.payout_id,
-            "dispute_type": d.dispute_type,
-            "reason": d.reason,
-            "status": d.status,
-            "admin_notes": d.admin_notes,
-            "resolution_tx_id": d.resolution_tx_id,
-            "created_at": d.created_at.isoformat(),
-        }
-        for d in disputes
-    ])
+    order = {"urgent": 0, "high": 1, "medium": 2, "low": 3}
+    items.sort(key=lambda item: (order.get(item.get("priority", "medium"), 9), item.get("createdAt") or ""))
+    return success_response(items)
 
+
+class DisputeAssignPayload(BaseModel):
+    agent_user_id: str
+
+
+class DisputeNotePayload(BaseModel):
+    note: str
+
+
+class DisputeEscalationPayload(BaseModel):
+    escalate_to_user_id: str | None = None
+    note: str = ""
 
 class DisputeResolutionPayload(BaseModel):
-    resolution: str   # "resolved" | "rejected"
+    resolution: str
     admin_notes: str = ""
+    tasker_percent: int | None = None
+
+
+@router.get("/disputes/{dispute_id}")
+def get_dispute_detail(
+    dispute_id: str,
+    svc: DisputeService = Depends(get_dispute_service),
+    _: str = Depends(require_permission("admin.disputes.manage")),
+):
+    try:
+        return success_response(svc.get_dispute_detail(dispute_id=dispute_id, admin_view=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/disputes/{dispute_id}/assign")
+def assign_dispute(
+    dispute_id: str,
+    payload: DisputeAssignPayload,
+    admin_user_id: str = Depends(require_permission("admin.disputes.manage")),
+    svc: DisputeService = Depends(get_dispute_service),
+):
+    try:
+        return success_response(
+            svc.assign_agent(
+                dispute_id=dispute_id,
+                agent_user_id=payload.agent_user_id,
+                actor_user_id=admin_user_id,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/disputes/{dispute_id}/note")
+def add_dispute_note(
+    dispute_id: str,
+    payload: DisputeNotePayload,
+    admin_user_id: str = Depends(require_permission("admin.disputes.manage")),
+    svc: DisputeService = Depends(get_dispute_service),
+):
+    try:
+        return success_response(
+            svc.add_note(
+                dispute_id=dispute_id,
+                note=payload.note,
+                actor_user_id=admin_user_id,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/disputes/{dispute_id}/escalate")
+def escalate_dispute(
+    dispute_id: str,
+    payload: DisputeEscalationPayload,
+    admin_user_id: str = Depends(require_permission("admin.disputes.manage")),
+    svc: DisputeService = Depends(get_dispute_service),
+):
+    try:
+        return success_response(
+            svc.escalate(
+                dispute_id=dispute_id,
+                actor_user_id=admin_user_id,
+                escalate_to_user_id=payload.escalate_to_user_id,
+                note=payload.note,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/disputes/{dispute_id}/resolve")
 def resolve_dispute(
     dispute_id: str,
     payload: DisputeResolutionPayload,
-    db: Session = Depends(get_db),
-    admin_user_id: str = Depends(require_admin),
-    svc: WalletService = Depends(get_wallet_service),
+    admin_user_id: str = Depends(require_permission("admin.disputes.manage")),
+    svc: DisputeService = Depends(get_dispute_service),
 ):
     try:
-        dispute = svc.resolve_dispute(
+        dispute = svc.decide(
             dispute_id=dispute_id,
-            admin_user_id=admin_user_id,
-            resolution=payload.resolution,
+            actor_user_id=admin_user_id,
+            decision=payload.resolution,
             admin_notes=payload.admin_notes,
+            tasker_percent=payload.tasker_percent,
         )
+        return success_response(dispute)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return success_response({
-        "dispute_id": dispute.id,
-        "status": dispute.status,
-        "admin_notes": dispute.admin_notes,
-    })
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # ── Reconciliation reports ────────────────────────────────────────────────────
@@ -1796,3 +3197,1717 @@ def send_notification(
         "note": "SMS envoyé" if (sent and payload.channel == "sms")
         else ("Push envoyé" if sent else "Token FCM manquant ou FCM non configuré"),
     })
+
+
+class AdminSubscriptionPlanPayload(BaseModel):
+    code: str
+    name: str
+    description: str | None = None
+    subscription_type: str
+    service_category: str | None = None
+    price_monthly: Decimal
+    currency: str = "EUR"
+    tasks_included_monthly: int | None = None
+    overage_price: Decimal | None = None
+    priority_enabled: bool = False
+    diaspora_included: bool = False
+    support_priority: bool = False
+    is_active: bool = True
+    is_public: bool = True
+
+
+class AdminSubscriptionPlanUpdatePayload(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    subscription_type: str | None = None
+    service_category: str | None = None
+    price_monthly: Decimal | None = None
+    currency: str | None = None
+    tasks_included_monthly: int | None = None
+    overage_price: Decimal | None = None
+    priority_enabled: bool | None = None
+    diaspora_included: bool | None = None
+    support_priority: bool | None = None
+    is_active: bool | None = None
+    is_public: bool | None = None
+
+
+class AdminAssignSubscriptionPayload(BaseModel):
+    user_id: str
+    plan_code: str
+    auto_renew: bool = True
+
+
+@router.get("/subscriptions/plans")
+def admin_list_subscription_plans(
+    service: SubscriptionService = Depends(get_subscription_service),
+    _: str = Depends(require_permission("admin.subscriptions.read")),
+):
+    return success_response(service.list_all_plans())
+
+
+@router.post("/subscriptions/plans")
+def admin_create_subscription_plan(
+    payload: AdminSubscriptionPlanPayload,
+    service: SubscriptionService = Depends(get_subscription_service),
+    _: str = Depends(require_permission("admin.subscriptions.manage")),
+):
+    try:
+        return success_response(service.create_plan(payload.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.patch("/subscriptions/plans/{plan_id}")
+def admin_update_subscription_plan(
+    plan_id: str,
+    payload: AdminSubscriptionPlanUpdatePayload,
+    service: SubscriptionService = Depends(get_subscription_service),
+    _: str = Depends(require_permission("admin.subscriptions.manage")),
+):
+    try:
+        return success_response(service.update_plan(plan_id, payload.model_dump(exclude_unset=True)))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/subscriptions/users")
+def admin_list_user_subscriptions(
+    status: str | None = Query(default=None),
+    country_code: str | None = Query(default=None),
+    service: SubscriptionService = Depends(get_subscription_service),
+    _: str = Depends(require_permission("admin.subscriptions.read")),
+):
+    return success_response(service.list_all_user_subscriptions(status=status, country_code=country_code))
+
+
+@router.post("/subscriptions/assign")
+def admin_assign_subscription(
+    payload: AdminAssignSubscriptionPayload,
+    db: Session = Depends(get_db),
+    service: SubscriptionService = Depends(get_subscription_service),
+    _: str = Depends(require_permission("admin.subscriptions.manage")),
+):
+    user = db.get(User, payload.user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    try:
+        return success_response(
+            service.subscribe_user(
+                user_id=payload.user_id,
+                plan_code=payload.plan_code,
+                country_code=user.country_code,
+                source="admin",
+                auto_renew=payload.auto_renew,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+class AdminAmlReviewPayload(BaseModel):
+    decision: str
+    notes: str = ""
+    assign_to_user_id: str | None = None
+
+
+class AdminB2BUserPayload(BaseModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    country_code: str | None = None
+    phone: str | None = None
+
+
+class AdminB2BOrganizationPayload(BaseModel):
+    name: str
+    legal_name: str | None = None
+    registration_number: str | None = None
+    country_code: str | None = None
+    continent_code: str | None = None
+    billing_mode: str = "monthly_invoice"
+    metadata: dict | None = None
+
+
+class AdminB2BMembershipPayload(BaseModel):
+    user_id: str
+    member_role: str = "manager"
+    is_primary: bool = False
+
+
+class AdminB2BContractPayload(BaseModel):
+    organization_id: str
+    plan_name: str
+    monthly_task_quota: int | None = None
+    overage_price: Decimal | None = None
+    currency: str = "EUR"
+    status: str = "active"
+    start_date: datetime | None = None
+    end_date: datetime | None = None
+    terms: dict | None = None
+
+
+class AdminB2BTemplatePayload(BaseModel):
+    organization_id: str
+    title: str
+    description: str
+    service_category: str = "TASK"
+    default_price: Decimal
+    currency: str = "EUR"
+    city: str | None = None
+    country_code: str | None = None
+    is_active: bool = True
+    template: dict | None = None
+
+
+class AdminB2BWorkOrderPayload(BaseModel):
+    organization_id: str
+    requested_by_user_id: str
+    template_id: str | None = None
+    beneficiary_name: str | None = None
+    beneficiary_phone: str | None = None
+    scheduled_at: datetime | None = None
+    price: Decimal
+    currency: str = "EUR"
+    notes: str | None = None
+    assigned_tasker_id: str | None = None
+    linked_task_id: str | None = None
+    status: str = "draft"
+
+
+class AdminExportGeneratePayload(BaseModel):
+    report_type: str
+    export_format: str = "csv"
+    country_code: str | None = None
+    continent_code: str | None = None
+    filters: dict | None = None
+
+
+class MerchantUserCreatePayload(BaseModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    country_code: str
+    phone: str | None = None
+
+
+class AdminMerchantPayload(BaseModel):
+    public_name: str
+    country_code: str
+    city_name: str
+    currency: str
+    owner_user_id: str | None = None
+    service_zone_id: str | None = None
+    legal_name: str | None = None
+    description: str | None = None
+    address: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    phone: str | None = None
+    email: str | None = None
+    accepts_cash_on_delivery: bool = False
+    is_active: bool = True
+    accepting_orders: bool = True
+    launch_status: str = "CONFIGURED"
+    metadata: dict | None = None
+
+
+class AdminMerchantStaffPayload(BaseModel):
+    user_id: str
+    staff_role: str = "manager"
+    is_primary: bool = False
+
+
+class AdminMerchantCatalogPayload(BaseModel):
+    name: str
+    description: str | None = None
+    is_active: bool = True
+    is_default: bool = False
+
+
+class AdminMerchantItemPayload(BaseModel):
+    name: str
+    price: str
+    currency: str
+    description: str | None = None
+    category: str | None = None
+    sku: str | None = None
+    stock_quantity: int | None = None
+    track_inventory: bool = False
+    is_available: bool = True
+    is_sold_out: bool = False
+    image_url: str | None = None
+    attributes: dict | None = None
+
+
+class AdminShopOrderLinePayload(BaseModel):
+    catalog_item_id: str
+    quantity: int
+
+
+class AdminShopOrderPayload(BaseModel):
+    merchant_id: str
+    customer_user_id: str
+    items: list[AdminShopOrderLinePayload]
+    beneficiary_name: str | None = None
+    beneficiary_phone: str | None = None
+    ordered_for_other: bool = False
+    delivery_address: str | None = None
+    delivery_latitude: float | None = None
+    delivery_longitude: float | None = None
+    delivery_amount: str | None = None
+    notes: str | None = None
+    customer_note: str | None = None
+    metadata: dict | None = None
+
+
+class AdminShopOrderStatusPayload(BaseModel):
+    status: str
+    note: str | None = None
+
+
+class DriverUserCreatePayload(BaseModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    country_code: str
+    phone: str | None = None
+
+
+class AdminVtcOperatorPayload(BaseModel):
+    public_name: str
+    country_code: str
+    city_name: str
+    currency: str
+    owner_user_id: str | None = None
+    service_zone_id: str | None = None
+    legal_name: str | None = None
+    description: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    is_active: bool = True
+    accepting_rides: bool = True
+    launch_status: str = "CONFIGURED"
+    metadata: dict | None = None
+
+
+class AdminVtcDriverProfilePayload(BaseModel):
+    user_id: str
+    operator_id: str | None = None
+    license_number: str | None = None
+    license_country_code: str | None = None
+    license_expires_at: datetime | None = None
+    vehicle_ready: bool = False
+    is_active: bool = True
+    verification_status: str = "pending"
+    metadata: dict | None = None
+
+
+class AdminVtcVehiclePayload(BaseModel):
+    make: str
+    model: str
+    plate_number: str
+    seats_count: int
+    operator_id: str | None = None
+    driver_user_id: str | None = None
+    color: str | None = None
+    category: str = "standard"
+    is_active: bool = True
+    verification_status: str = "pending"
+    metadata: dict | None = None
+
+
+class AdminVtcRidePayload(BaseModel):
+    customer_user_id: str
+    pickup_address: str
+    destination_address: str
+    currency: str
+    operator_id: str | None = None
+    driver_user_id: str | None = None
+    linked_task_id: str | None = None
+    pickup_latitude: float | None = None
+    pickup_longitude: float | None = None
+    destination_latitude: float | None = None
+    destination_longitude: float | None = None
+    scheduled_at: datetime | None = None
+    estimated_distance_km: Decimal | None = None
+    estimated_duration_minutes: int | None = None
+    estimated_fare: Decimal | None = None
+    passenger_name: str | None = None
+    passenger_phone: str | None = None
+    ride_type: str = "standard"
+    metadata: dict | None = None
+
+
+@router.get("/aml/cases")
+def admin_list_aml_cases(
+    status: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    country_code: str | None = Query(default=None),
+    user_id: str | None = Query(default=None),
+    limit: int = Query(default=100, le=200),
+    service: AmlService = Depends(get_aml_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    items = service.list_cases(
+            status=status,
+            severity=severity,
+            country_code=country_code,
+            user_id=user_id,
+            limit=limit,
+        )
+    items = filter_records_for_admin_scope(
+        records=items,
+        user_id=admin_user_id,
+        db=db,
+        module_key="AML",
+    )
+    return success_response(items)
+
+
+@router.get("/aml/cases/{case_id}")
+def admin_get_aml_case(
+    case_id: str,
+    service: AmlService = Depends(get_aml_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        payload = service.get_case_detail(case_id)
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="AML",
+            country_code=payload.get("countryCode"),
+            write=False,
+        )
+        return success_response(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/aml/cases/{case_id}/review")
+def admin_review_aml_case(
+    case_id: str,
+    payload: AdminAmlReviewPayload,
+    admin_user_id: str = Depends(require_admin),
+    service: AmlService = Depends(get_aml_service),
+    db: Session = Depends(get_db),
+):
+    try:
+        current = service.get_case_detail(case_id)
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="AML",
+            country_code=current.get("countryCode"),
+            write=True,
+        )
+        return success_response(
+            service.review_case(
+                case_id=case_id,
+                admin_user_id=admin_user_id,
+                decision=payload.decision,
+                notes=payload.notes,
+                assign_to_user_id=payload.assign_to_user_id,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/b2b/users")
+def admin_create_b2b_user(
+    payload: AdminB2BUserPayload,
+    admin_user_id: str = Depends(require_admin),
+    service: B2BService = Depends(get_b2b_service),
+    db: Session = Depends(get_db),
+):
+    try:
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="B2B",
+            country_code=payload.country_code,
+            write=True,
+        )
+        return success_response(
+            service.create_business_user(
+                email=payload.email,
+                password=payload.password,
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+                country_code=payload.country_code,
+                phone=payload.phone,
+                created_by_user_id=admin_user_id,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/b2b/organizations")
+def admin_create_b2b_organization(
+    payload: AdminB2BOrganizationPayload,
+    admin_user_id: str = Depends(require_admin),
+    service: B2BService = Depends(get_b2b_service),
+    db: Session = Depends(get_db),
+):
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="B2B",
+        country_code=payload.country_code,
+        continent_code=payload.continent_code,
+        write=True,
+    )
+    return success_response(
+        service.create_organization(
+            name=payload.name,
+            legal_name=payload.legal_name,
+            registration_number=payload.registration_number,
+            country_code=payload.country_code,
+            continent_code=payload.continent_code,
+            billing_mode=payload.billing_mode,
+            created_by_user_id=admin_user_id,
+            metadata=payload.metadata,
+        )
+    )
+
+
+@router.get("/b2b/organizations")
+def admin_list_b2b_organizations(
+    country_code: str | None = Query(default=None),
+    continent_code: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    items = service.list_organizations(
+            country_code=country_code,
+            continent_code=continent_code,
+            status=status,
+        )
+    items = filter_records_for_admin_scope(
+        records=items,
+        user_id=admin_user_id,
+        db=db,
+        module_key="B2B",
+    )
+    return success_response(items)
+
+
+@router.post("/b2b/organizations/{organization_id}/members")
+def admin_add_b2b_membership(
+    organization_id: str,
+    payload: AdminB2BMembershipPayload,
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        organization = next((item for item in service.list_organizations() if item["id"] == organization_id), None)
+        if organization is None:
+            raise HTTPException(status_code=404, detail="Organisation introuvable")
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="B2B",
+            country_code=organization.get("countryCode"),
+            continent_code=organization.get("continentCode"),
+            write=True,
+        )
+        return success_response(
+            service.add_membership(
+                organization_id=organization_id,
+                user_id=payload.user_id,
+                member_role=payload.member_role,
+                is_primary=payload.is_primary,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/b2b/contracts")
+def admin_create_b2b_contract(
+    payload: AdminB2BContractPayload,
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        organization = next((item for item in service.list_organizations() if item["id"] == payload.organization_id), None)
+        if organization is None:
+            raise HTTPException(status_code=404, detail="Organisation introuvable")
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="B2B",
+            country_code=organization.get("countryCode"),
+            continent_code=organization.get("continentCode"),
+            write=True,
+        )
+        return success_response(
+            service.create_contract(
+                organization_id=payload.organization_id,
+                plan_name=payload.plan_name,
+                monthly_task_quota=payload.monthly_task_quota,
+                overage_price=payload.overage_price,
+                currency=payload.currency,
+                status=payload.status,
+                start_date=payload.start_date,
+                end_date=payload.end_date,
+                terms=payload.terms,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/b2b/contracts")
+def admin_list_b2b_contracts(
+    organization_id: str | None = Query(default=None),
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    items = service.list_contracts(organization_id)
+    org_map = {item["id"]: item for item in service.list_organizations()}
+    scoped = []
+    for item in items:
+        organization = org_map.get(item["organizationId"])
+        if organization is None:
+            continue
+        if filter_records_for_admin_scope(
+            records=[{**item, "countryCode": organization.get("countryCode"), "continentCode": organization.get("continentCode")}],
+            user_id=admin_user_id,
+            db=db,
+            module_key="B2B",
+        ):
+            scoped.append(item)
+    return success_response(scoped)
+
+
+@router.post("/b2b/templates")
+def admin_create_b2b_template(
+    payload: AdminB2BTemplatePayload,
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        organization = next((item for item in service.list_organizations() if item["id"] == payload.organization_id), None)
+        if organization is None:
+            raise HTTPException(status_code=404, detail="Organisation introuvable")
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="B2B",
+            country_code=organization.get("countryCode") or payload.country_code,
+            continent_code=organization.get("continentCode"),
+            write=True,
+        )
+        return success_response(
+            service.create_template(
+                organization_id=payload.organization_id,
+                title=payload.title,
+                description=payload.description,
+                service_category=payload.service_category,
+                default_price=payload.default_price,
+                currency=payload.currency,
+                city=payload.city,
+                country_code=payload.country_code,
+                is_active=payload.is_active,
+                template=payload.template,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/b2b/templates")
+def admin_list_b2b_templates(
+    organization_id: str | None = Query(default=None),
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    items = service.list_templates(organization_id)
+    org_map = {item["id"]: item for item in service.list_organizations()}
+    scoped = []
+    for item in items:
+        organization = org_map.get(item["organizationId"])
+        if organization is None:
+            continue
+        if filter_records_for_admin_scope(
+            records=[{**item, "countryCode": organization.get("countryCode"), "continentCode": organization.get("continentCode")}],
+            user_id=admin_user_id,
+            db=db,
+            module_key="B2B",
+        ):
+            scoped.append(item)
+    return success_response(scoped)
+
+
+@router.post("/b2b/orders")
+def admin_create_b2b_order(
+    payload: AdminB2BWorkOrderPayload,
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        organization = next((item for item in service.list_organizations() if item["id"] == payload.organization_id), None)
+        if organization is None:
+            raise HTTPException(status_code=404, detail="Organisation introuvable")
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="B2B",
+            country_code=organization.get("countryCode"),
+            continent_code=organization.get("continentCode"),
+            write=True,
+        )
+        return success_response(
+            service.create_work_order(
+                organization_id=payload.organization_id,
+                requested_by_user_id=payload.requested_by_user_id,
+                template_id=payload.template_id,
+                beneficiary_name=payload.beneficiary_name,
+                beneficiary_phone=payload.beneficiary_phone,
+                scheduled_at=payload.scheduled_at,
+                price=payload.price,
+                currency=payload.currency,
+                notes=payload.notes,
+                assigned_tasker_id=payload.assigned_tasker_id,
+                linked_task_id=payload.linked_task_id,
+                status=payload.status,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/b2b/orders")
+def admin_list_b2b_orders(
+    organization_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    items = service.list_work_orders(organization_id=organization_id, status=status)
+    org_map = {item["id"]: item for item in service.list_organizations()}
+    scoped = []
+    for item in items:
+        organization = org_map.get(item["organizationId"])
+        if organization is None:
+            continue
+        if filter_records_for_admin_scope(
+            records=[{**item, "countryCode": organization.get("countryCode"), "continentCode": organization.get("continentCode")}],
+            user_id=admin_user_id,
+            db=db,
+            module_key="B2B",
+        ):
+            scoped.append(item)
+    return success_response(scoped)
+
+
+@router.post("/exports/generate")
+def admin_generate_export(
+    payload: AdminExportGeneratePayload,
+    admin_user_id: str = Depends(require_admin),
+    service: B2BService = Depends(get_b2b_service),
+    db: Session = Depends(get_db),
+):
+    try:
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="EXPORTS",
+            country_code=payload.country_code,
+            continent_code=payload.continent_code,
+            write=True,
+        )
+        return success_response(
+            service.generate_export(
+                requested_by_user_id=admin_user_id,
+                report_type=payload.report_type,
+                export_format=payload.export_format,
+                country_code=payload.country_code,
+                continent_code=payload.continent_code,
+                filters=payload.filters,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/exports")
+def admin_list_exports(
+    report_type: str | None = Query(default=None),
+    requested_by_user_id: str | None = Query(default=None),
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    items = service.list_export_jobs(report_type=report_type, requested_by_user_id=requested_by_user_id)
+    items = filter_records_for_admin_scope(
+        records=items,
+        user_id=admin_user_id,
+        db=db,
+        module_key="EXPORTS",
+    )
+    return success_response(items)
+
+
+@router.get("/exports/{export_job_id}")
+def admin_get_export(
+    export_job_id: str,
+    service: B2BService = Depends(get_b2b_service),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    try:
+        payload = service.get_export_job(export_job_id)
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="EXPORTS",
+            country_code=payload.get("countryCode"),
+            continent_code=payload.get("continentCode"),
+            write=False,
+        )
+        return success_response(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/shop/merchant-users")
+def admin_create_shop_merchant_user(
+    payload: MerchantUserCreatePayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+        country_code=payload.country_code,
+        write=True,
+    )
+    try:
+        return success_response(
+            service.create_merchant_user(
+                email=payload.email,
+                password=payload.password,
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+                country_code=payload.country_code,
+                phone=payload.phone,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/shop/merchants")
+def admin_create_shop_merchant(
+    payload: AdminMerchantPayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+        country_code=payload.country_code,
+        write=True,
+    )
+    return success_response(
+        service.create_merchant(
+            public_name=payload.public_name,
+            country_code=payload.country_code,
+            city_name=payload.city_name,
+            currency=payload.currency,
+            owner_user_id=payload.owner_user_id,
+            service_zone_id=payload.service_zone_id,
+            legal_name=payload.legal_name,
+            description=payload.description,
+            address=payload.address,
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            phone=payload.phone,
+            email=payload.email,
+            accepts_cash_on_delivery=payload.accepts_cash_on_delivery,
+            is_active=payload.is_active,
+            accepting_orders=payload.accepting_orders,
+            launch_status=payload.launch_status,
+            metadata=payload.metadata,
+        )
+    )
+
+
+@router.get("/shop/merchants")
+def admin_list_shop_merchants(
+    country_code: str | None = Query(default=None),
+    city_name: str | None = Query(default=None),
+    active_only: bool = Query(default=False),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    items = service.list_merchants(
+        country_code=country_code,
+        city_name=city_name,
+        active_only=active_only,
+    )
+    items = filter_records_for_admin_scope(
+        records=items,
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+    )
+    return success_response(items)
+
+
+@router.post("/shop/merchants/{merchant_id}/staff")
+def admin_add_shop_merchant_staff(
+    merchant_id: str,
+    payload: AdminMerchantStaffPayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    merchant = next((item for item in service.list_merchants() if item["id"] == merchant_id), None)
+    if merchant is None:
+        raise HTTPException(status_code=404, detail="Marchand introuvable")
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+        country_code=merchant.get("countryCode"),
+        write=True,
+    )
+    try:
+        return success_response(
+            service.add_staff(
+                merchant_id=merchant_id,
+                user_id=payload.user_id,
+                staff_role=payload.staff_role,
+                is_primary=payload.is_primary,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/shop/merchants/{merchant_id}/catalogs")
+def admin_create_shop_catalog(
+    merchant_id: str,
+    payload: AdminMerchantCatalogPayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    merchant = next((item for item in service.list_merchants() if item["id"] == merchant_id), None)
+    if merchant is None:
+        raise HTTPException(status_code=404, detail="Marchand introuvable")
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+        country_code=merchant.get("countryCode"),
+        write=True,
+    )
+    try:
+        return success_response(
+            service.create_catalog(
+                merchant_id=merchant_id,
+                name=payload.name,
+                description=payload.description,
+                is_active=payload.is_active,
+                is_default=payload.is_default,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/shop/catalogs")
+def admin_list_shop_catalogs(
+    merchant_id: str | None = Query(default=None),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    items = service.list_catalogs(merchant_id=merchant_id)
+    if merchant_id:
+        merchant = next((item for item in service.list_merchants() if item["id"] == merchant_id), None)
+        if merchant is None:
+            raise HTTPException(status_code=404, detail="Marchand introuvable")
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="SHOP",
+            country_code=merchant.get("countryCode"),
+            write=False,
+        )
+        return success_response(items)
+
+    merchant_map = {item["id"]: item for item in service.list_merchants()}
+    scoped = []
+    for item in items:
+        merchant = merchant_map.get(item["merchantId"])
+        if merchant is None:
+            continue
+        if filter_records_for_admin_scope(
+            records=[{**item, "countryCode": merchant.get("countryCode")}],
+            user_id=admin_user_id,
+            db=db,
+            module_key="SHOP",
+        ):
+            scoped.append(item)
+    return success_response(scoped)
+
+
+@router.post("/shop/catalogs/{catalog_id}/items")
+def admin_create_shop_catalog_item(
+    catalog_id: str,
+    payload: AdminMerchantItemPayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    catalogs = service.list_catalogs()
+    catalog = next((item for item in catalogs if item["id"] == catalog_id), None)
+    if catalog is None:
+        raise HTTPException(status_code=404, detail="Catalogue introuvable")
+    merchant = next((item for item in service.list_merchants() if item["id"] == catalog["merchantId"]), None)
+    if merchant is None:
+        raise HTTPException(status_code=404, detail="Marchand introuvable")
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+        country_code=merchant.get("countryCode"),
+        write=True,
+    )
+    try:
+        return success_response(
+            service.create_catalog_item(
+                catalog_id=catalog_id,
+                name=payload.name,
+                price=Decimal(payload.price),
+                currency=payload.currency,
+                description=payload.description,
+                category=payload.category,
+                sku=payload.sku,
+                stock_quantity=payload.stock_quantity,
+                track_inventory=payload.track_inventory,
+                is_available=payload.is_available,
+                is_sold_out=payload.is_sold_out,
+                image_url=payload.image_url,
+                attributes=payload.attributes,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/shop/items")
+def admin_list_shop_items(
+    catalog_id: str | None = Query(default=None),
+    merchant_id: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    active_only: bool = Query(default=False),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    items = service.list_catalog_items(
+        catalog_id=catalog_id,
+        merchant_id=merchant_id,
+        category=category,
+        active_only=active_only,
+    )
+    if merchant_id:
+        merchant = next((item for item in service.list_merchants() if item["id"] == merchant_id), None)
+        if merchant is None:
+            raise HTTPException(status_code=404, detail="Marchand introuvable")
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="SHOP",
+            country_code=merchant.get("countryCode"),
+            write=False,
+        )
+        return success_response(items)
+
+    merchant_map = {item["id"]: item for item in service.list_merchants()}
+    catalog_map = {item["id"]: item for item in service.list_catalogs()}
+    scoped = []
+    for item in items:
+        catalog = catalog_map.get(item["catalogId"])
+        if catalog is None:
+            continue
+        merchant = merchant_map.get(catalog["merchantId"])
+        if merchant is None:
+            continue
+        if filter_records_for_admin_scope(
+            records=[{**item, "countryCode": merchant.get("countryCode")}],
+            user_id=admin_user_id,
+            db=db,
+            module_key="SHOP",
+        ):
+            scoped.append(item)
+    return success_response(scoped)
+
+
+@router.post("/shop/orders")
+def admin_create_shop_order(
+    payload: AdminShopOrderPayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    merchant = next((item for item in service.list_merchants() if item["id"] == payload.merchant_id), None)
+    if merchant is None:
+        raise HTTPException(status_code=404, detail="Marchand introuvable")
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+        country_code=merchant.get("countryCode"),
+        write=True,
+    )
+    try:
+        return success_response(
+            service.create_order(
+                merchant_id=payload.merchant_id,
+                customer_user_id=payload.customer_user_id,
+                items=[item.model_dump() for item in payload.items],
+                beneficiary_name=payload.beneficiary_name,
+                beneficiary_phone=payload.beneficiary_phone,
+                ordered_for_other=payload.ordered_for_other,
+                delivery_address=payload.delivery_address,
+                delivery_latitude=payload.delivery_latitude,
+                delivery_longitude=payload.delivery_longitude,
+                delivery_amount=Decimal(payload.delivery_amount) if payload.delivery_amount is not None else None,
+                notes=payload.notes,
+                customer_note=payload.customer_note,
+                metadata=payload.metadata,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/shop/orders")
+def admin_list_shop_orders(
+    merchant_id: str | None = Query(default=None),
+    customer_user_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    items = service.list_orders(
+        customer_user_id=customer_user_id,
+        merchant_id=merchant_id,
+        status=status,
+    )
+    merchant_map = {item["id"]: item for item in service.list_merchants()}
+    scoped = []
+    for item in items:
+        merchant = merchant_map.get(item["merchantId"])
+        if merchant is None:
+            continue
+        if filter_records_for_admin_scope(
+            records=[{**item, "countryCode": merchant.get("countryCode")}],
+            user_id=admin_user_id,
+            db=db,
+            module_key="SHOP",
+        ):
+            scoped.append(item)
+    return success_response(scoped)
+
+
+@router.get("/shop/orders/{order_id}")
+def admin_get_shop_order_detail(
+    order_id: str,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    try:
+        detail = service.get_order_detail(order_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    merchant = next((item for item in service.list_merchants() if item["id"] == detail.get("merchantId")), None)
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+        country_code=merchant.get("countryCode") if merchant else None,
+        write=False,
+    )
+    return success_response(detail)
+
+
+@router.post("/shop/orders/{order_id}/fund")
+def admin_fund_shop_order(
+    order_id: str,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    try:
+        detail = service.get_order_detail(order_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    merchant = next((item for item in service.list_merchants() if item["id"] == detail.get("merchantId")), None)
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+        country_code=merchant.get("countryCode") if merchant else None,
+        write=True,
+    )
+    try:
+        return success_response(service.fund_order(order_id=order_id, customer_user_id=detail["customerUserId"]))
+    except (ValueError, InsufficientFundsError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/shop/orders/{order_id}/status")
+def admin_update_shop_order_status(
+    order_id: str,
+    payload: AdminShopOrderStatusPayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    try:
+        detail = service.get_order_detail(order_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    merchant = next((item for item in service.list_merchants() if item["id"] == detail.get("merchantId")), None)
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+        country_code=merchant.get("countryCode") if merchant else None,
+        write=True,
+    )
+    owner_id = merchant.get("ownerUserId") if merchant else None
+    if not owner_id:
+        raise HTTPException(status_code=409, detail="Le marchand n'a pas de propriétaire défini pour cette opération")
+    try:
+        return success_response(
+            service.update_merchant_order_status(
+                actor_user_id=owner_id,
+                order_id=order_id,
+                status=payload.status,
+                note=payload.note,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/shop/payouts")
+def admin_list_shop_payouts(
+    period_key: str | None = Query(default=None),
+    merchant_id: str | None = Query(default=None),
+    currency: str | None = Query(default=None),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    if merchant_id:
+        merchant = next((item for item in service.list_merchants() if item["id"] == merchant_id), None)
+        if merchant is None:
+            raise HTTPException(status_code=404, detail="Marchand introuvable")
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="SHOP",
+            country_code=merchant.get("countryCode"),
+            write=False,
+        )
+    rows = service.list_merchant_payout_snapshots(
+        period_key=period_key,
+        merchant_id=merchant_id,
+        currency=currency,
+    )
+    rows = filter_records_for_admin_scope(
+        records=rows,
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+    )
+    return success_response(rows)
+
+
+@router.post("/shop/payouts/build")
+def admin_build_shop_payouts(
+    period_key: str | None = Query(default=None),
+    merchant_id: str | None = Query(default=None),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: ShopService = Depends(get_shop_service),
+):
+    if merchant_id:
+        merchant = next((item for item in service.list_merchants() if item["id"] == merchant_id), None)
+        if merchant is None:
+            raise HTTPException(status_code=404, detail="Marchand introuvable")
+        assert_admin_scope_access(
+            user_id=admin_user_id,
+            db=db,
+            module_key="SHOP",
+            country_code=merchant.get("countryCode"),
+            write=True,
+        )
+    rows = service.build_merchant_payout_snapshots(period_key=period_key, merchant_id=merchant_id)
+    rows = filter_records_for_admin_scope(
+        records=rows,
+        user_id=admin_user_id,
+        db=db,
+        module_key="SHOP",
+    )
+    return success_response(rows)
+
+
+@router.post("/vtc/driver-users")
+def admin_create_vtc_driver_user(
+    payload: DriverUserCreatePayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=payload.country_code,
+        write=True,
+    )
+    try:
+        return success_response(
+            service.create_driver_user(
+                email=payload.email,
+                password=payload.password,
+                first_name=payload.first_name,
+                last_name=payload.last_name,
+                country_code=payload.country_code,
+                phone=payload.phone,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/vtc/operators")
+def admin_create_vtc_operator(
+    payload: AdminVtcOperatorPayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=payload.country_code,
+        write=True,
+    )
+    return success_response(
+        service.create_operator(
+            public_name=payload.public_name,
+            country_code=payload.country_code,
+            city_name=payload.city_name,
+            currency=payload.currency,
+            owner_user_id=payload.owner_user_id,
+            service_zone_id=payload.service_zone_id,
+            legal_name=payload.legal_name,
+            description=payload.description,
+            phone=payload.phone,
+            email=payload.email,
+            is_active=payload.is_active,
+            accepting_rides=payload.accepting_rides,
+            launch_status=payload.launch_status,
+            metadata=payload.metadata,
+        )
+    )
+
+
+@router.get("/vtc/operators")
+def admin_list_vtc_operators(
+    country_code: str | None = Query(default=None),
+    city_name: str | None = Query(default=None),
+    active_only: bool = Query(default=False),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    items = service.list_operators(
+        country_code=country_code,
+        city_name=city_name,
+        active_only=active_only,
+    )
+    items = filter_records_for_admin_scope(
+        records=items,
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+    )
+    return success_response(items)
+
+
+@router.post("/vtc/drivers")
+def admin_create_vtc_driver_profile(
+    payload: AdminVtcDriverProfilePayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    operator_country = None
+    if payload.operator_id:
+        operator = next((item for item in service.list_operators() if item["id"] == payload.operator_id), None)
+        if operator is None:
+            raise HTTPException(status_code=404, detail="Opérateur introuvable")
+        operator_country = operator.get("countryCode")
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=operator_country,
+        write=True,
+    )
+    try:
+        return success_response(
+            service.create_driver_profile(
+                user_id=payload.user_id,
+                operator_id=payload.operator_id,
+                license_number=payload.license_number,
+                license_country_code=payload.license_country_code,
+                license_expires_at=payload.license_expires_at,
+                vehicle_ready=payload.vehicle_ready,
+                is_active=payload.is_active,
+                verification_status=payload.verification_status,
+                metadata=payload.metadata,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/vtc/drivers")
+def admin_list_vtc_driver_profiles(
+    operator_id: str | None = Query(default=None),
+    user_id: str | None = Query(default=None),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    items = service.list_driver_profiles(operator_id=operator_id, user_id=user_id)
+    operator_map = {item["id"]: item for item in service.list_operators()}
+    scoped = []
+    for item in items:
+        operator = operator_map.get(item.get("operatorId"))
+        country_code = operator.get("countryCode") if operator else None
+        if filter_records_for_admin_scope(
+            records=[{**item, "countryCode": country_code}],
+            user_id=admin_user_id,
+            db=db,
+            module_key="VTC",
+        ):
+            scoped.append(item)
+    return success_response(scoped)
+
+
+@router.post("/vtc/vehicles")
+def admin_create_vtc_vehicle(
+    payload: AdminVtcVehiclePayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    operator_country = None
+    if payload.operator_id:
+        operator = next((item for item in service.list_operators() if item["id"] == payload.operator_id), None)
+        if operator is None:
+            raise HTTPException(status_code=404, detail="Opérateur introuvable")
+        operator_country = operator.get("countryCode")
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=operator_country,
+        write=True,
+    )
+    try:
+        return success_response(
+            service.create_vehicle(
+                make=payload.make,
+                model=payload.model,
+                plate_number=payload.plate_number,
+                seats_count=payload.seats_count,
+                operator_id=payload.operator_id,
+                driver_user_id=payload.driver_user_id,
+                color=payload.color,
+                category=payload.category,
+                is_active=payload.is_active,
+                verification_status=payload.verification_status,
+                metadata=payload.metadata,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/vtc/vehicles")
+def admin_list_vtc_vehicles(
+    operator_id: str | None = Query(default=None),
+    driver_user_id: str | None = Query(default=None),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    items = service.list_vehicles(operator_id=operator_id, driver_user_id=driver_user_id)
+    operator_map = {item["id"]: item for item in service.list_operators()}
+    scoped = []
+    for item in items:
+        operator = operator_map.get(item.get("operatorId"))
+        country_code = operator.get("countryCode") if operator else None
+        if filter_records_for_admin_scope(
+            records=[{**item, "countryCode": country_code}],
+            user_id=admin_user_id,
+            db=db,
+            module_key="VTC",
+        ):
+            scoped.append(item)
+    return success_response(scoped)
+
+
+@router.post("/vtc/rides")
+def admin_create_vtc_ride(
+    payload: AdminVtcRidePayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    operator_country = None
+    if payload.operator_id:
+        operator = next((item for item in service.list_operators() if item["id"] == payload.operator_id), None)
+        if operator is None:
+            raise HTTPException(status_code=404, detail="Opérateur introuvable")
+        operator_country = operator.get("countryCode")
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=operator_country,
+        write=True,
+    )
+    try:
+        return success_response(
+            service.create_ride_request(
+                customer_user_id=payload.customer_user_id,
+                pickup_address=payload.pickup_address,
+                destination_address=payload.destination_address,
+                currency=payload.currency,
+                operator_id=payload.operator_id,
+                driver_user_id=payload.driver_user_id,
+                linked_task_id=payload.linked_task_id,
+                pickup_latitude=payload.pickup_latitude,
+                pickup_longitude=payload.pickup_longitude,
+                destination_latitude=payload.destination_latitude,
+                destination_longitude=payload.destination_longitude,
+                scheduled_at=payload.scheduled_at,
+                estimated_distance_km=payload.estimated_distance_km,
+                estimated_duration_minutes=payload.estimated_duration_minutes,
+                estimated_fare=payload.estimated_fare,
+                passenger_name=payload.passenger_name,
+                passenger_phone=payload.passenger_phone,
+                ride_type=payload.ride_type,
+                metadata=payload.metadata,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/vtc/rides")
+def admin_list_vtc_rides(
+    customer_user_id: str | None = Query(default=None),
+    operator_id: str | None = Query(default=None),
+    driver_user_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    items = service.list_rides(
+        customer_user_id=customer_user_id,
+        operator_id=operator_id,
+        driver_user_id=driver_user_id,
+        status=status,
+    )
+    operator_map = {item["id"]: item for item in service.list_operators()}
+    scoped = []
+    for item in items:
+        operator = operator_map.get(item.get("operatorId"))
+        country_code = operator.get("countryCode") if operator else None
+        if filter_records_for_admin_scope(
+            records=[{**item, "countryCode": country_code}],
+            user_id=admin_user_id,
+            db=db,
+            module_key="VTC",
+        ):
+            scoped.append(item)
+    return success_response(scoped)
+
+
+class AdminVtcAssignDriverPayload(BaseModel):
+    driver_user_id: str
+
+
+class AdminVtcRideActionPayload(BaseModel):
+    note: str | None = None
+
+
+@router.get("/vtc/rides/{ride_id}")
+def admin_get_vtc_ride_detail(
+    ride_id: str,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    try:
+        detail = service.get_ride_detail(ride_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    operator = next((item for item in service.list_operators() if item["id"] == detail.get("operatorId")), None)
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=operator.get("countryCode") if operator else None,
+        write=False,
+    )
+    return success_response(detail)
+
+
+@router.get("/vtc/rides/{ride_id}/offers")
+def admin_list_vtc_ride_offers(
+    ride_id: str,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    try:
+        detail = service.get_ride_detail(ride_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    operator = next((item for item in service.list_operators() if item["id"] == detail.get("operatorId")), None)
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=operator.get("countryCode") if operator else None,
+        write=False,
+    )
+    return success_response(detail["offers"])
+
+
+@router.post("/vtc/rides/{ride_id}/dispatch")
+def admin_dispatch_vtc_ride(
+    ride_id: str,
+    payload: AdminVtcRideActionPayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    try:
+        detail = service.get_ride_detail(ride_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    operator = next((item for item in service.list_operators() if item["id"] == detail.get("operatorId")), None)
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=operator.get("countryCode") if operator else None,
+        write=True,
+    )
+    try:
+        return success_response(service.dispatch_ride(ride_id=ride_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/vtc/rides/{ride_id}/assign-driver")
+def admin_assign_vtc_driver(
+    ride_id: str,
+    payload: AdminVtcAssignDriverPayload,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    try:
+        detail = service.get_ride_detail(ride_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    operator = next((item for item in service.list_operators() if item["id"] == detail.get("operatorId")), None)
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=operator.get("countryCode") if operator else None,
+        write=True,
+    )
+    try:
+        return success_response(
+            service.admin_assign_driver(
+                ride_id=ride_id,
+                driver_user_id=payload.driver_user_id,
+                actor_user_id=admin_user_id,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/vtc/rides/{ride_id}/settle")
+def admin_settle_vtc_ride(
+    ride_id: str,
+    admin_user_id: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+    service: VtcService = Depends(get_vtc_service),
+):
+    try:
+        detail = service.get_ride_detail(ride_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    operator = next((item for item in service.list_operators() if item["id"] == detail.get("operatorId")), None)
+    assert_admin_scope_access(
+        user_id=admin_user_id,
+        db=db,
+        module_key="VTC",
+        country_code=operator.get("countryCode") if operator else None,
+        write=True,
+    )
+    try:
+        return success_response(service.settle_ride_payout(ride_id=ride_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

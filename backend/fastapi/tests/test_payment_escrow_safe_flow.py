@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.db.base import Base
 from app.models.task import Task
 from app.models.user import User
+from app.services.internal_wallet_seed_service import InternalWalletSeedService
 from app.services.wallet_service import WalletService
 
 
@@ -32,6 +33,10 @@ def db_session():
         )
     )
     session.commit()
+    from app.core.config import settings as _settings
+    for _name in ("zaska_wallet_user_id", "pension_fund_user_id", "health_fund_user_id", "smoothing_fund_user_id"):
+        setattr(_settings, _name, "")
+    InternalWalletSeedService(session).ensure_all()
     yield session
     session.close()
 

@@ -5,6 +5,7 @@ Registre statique des configurations pays du Country Runtime Engine.
 from __future__ import annotations
 
 from pydantic import BaseModel
+from app.core.world_country_catalog import get_country_reference
 
 # ─────────────────────────────────────── zones géographiques ───────────────
 
@@ -143,6 +144,8 @@ _BASE_FLAGS: dict[str, bool] = {
     "kyc_required": False,
     "multi_currency": False,
     "real_money_enabled": False,
+    "food_delivery_enabled": False,
+    "strict_tasker_security": False,
 }
 
 _CFA_CONFIG = dict(
@@ -309,4 +312,32 @@ COUNTRY_REGISTRY: dict[str, CountryConfig] = {
 
 
 def get_config(country_code: str) -> CountryConfig:
-    return COUNTRY_REGISTRY.get(country_code.upper(), COUNTRY_REGISTRY["DEFAULT"])
+    cc = country_code.upper()
+    config = COUNTRY_REGISTRY.get(cc)
+    if config is not None:
+        return config
+
+    reference = get_country_reference(cc)
+    default_config = COUNTRY_REGISTRY["DEFAULT"]
+    if reference is None:
+        return default_config
+
+    continent_code = str(reference.get("continent_code") or "OTHER")
+    currency_code = str(reference.get("currency_code") or default_config.currency)
+    timezone_name = str(reference.get("timezone") or default_config.timezone)
+    is_africa = continent_code == "AF"
+    return CountryConfig(
+        country_code=cc,
+        currency=currency_code,
+        payment_methods=["card"] if not is_africa else ["card"],
+        payment_providers=["stripe"],
+        kyc_provider="manual",
+        sms_gateway="brevo_smtp",
+        mobile_money_enabled=False,
+        stripe_enabled=True,
+        escrow_enabled=False,
+        payout_delay_minutes=4320,
+        feature_flags_defaults={**_BASE_FLAGS, "escrow": False},
+        timezone=timezone_name,
+        emergency_numbers={"emergency": "112"},
+    )

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
@@ -32,13 +33,16 @@ def _uuid() -> str:
 
 class Wallet(Base):
     __tablename__ = "wallets"
-    __table_args__ = (UniqueConstraint("user_id", "currency", name="uq_wallet_user_currency"),)
+    __table_args__ = (UniqueConstraint("user_id", "currency", "is_sandbox", name="uq_wallet_user_currency_sandbox"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
     currency: Mapped[str] = mapped_column(String(8), nullable=False)
     # NUMERIC(20,6) → supporte XOF (entier) et EUR/USD (2 décimales)
     balance: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False, default=Decimal("0"))
+    # Sandbox wallets (created via a sandbox API key) are isolated from the
+    # production wallet for the same user/currency — see uq_wallet_user_currency_sandbox.
+    is_sandbox: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -61,6 +65,9 @@ class Transaction(Base):
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
     # JSON libre pour métadonnées (task_id, escrow_id, etc.)
     metadata_json: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+    # Mirrors the owning wallet's is_sandbox — sandbox transactions are excluded
+    # from the real accounting ledger (see record_transaction_realtime).
+    is_sandbox: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
@@ -93,5 +100,7 @@ class Escrow(Base):
     payout_available_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # timestamp when client contested the work
     contested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Sandbox escrows only ever touch is_sandbox=True wallets — see create_escrow.
+    is_sandbox: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)

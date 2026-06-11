@@ -67,6 +67,14 @@ export interface UserProfile {
   avatar_url: string | null;
   country_code: string | null;
   is_verified: boolean;
+  tasker_security_verified?: boolean;
+  biometric_enabled?: boolean;
+  criminal_record_status?: string | null;
+  countryLaunchStatus?: string;
+  countryActive?: boolean;
+  foodDeliveryEnabled?: boolean;
+  badges?: UserBadge[];
+  trustScore?: UserTrustScore;
 }
 
 export interface Transaction {
@@ -97,6 +105,95 @@ export interface VirtualCard {
 
 export interface WalletSummary {
   balances: Record<string, { balance: string; pending: string }>;
+}
+
+export interface NotificationItem {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  read: boolean;
+  task_id: string | null;
+  created_at: string;
+}
+
+export interface KycStatus {
+  status: string;
+  reviewerNote?: string | null;
+  reviewedAt?: string | null;
+  approvedAt?: string | null;
+  expiresAt?: string | null;
+  isExpired?: boolean;
+  daysRemaining?: number | null;
+  createdAt?: string | null;
+}
+
+export interface UserBadge {
+  code: string;
+  label: string;
+  description: string;
+  icon: string;
+  awarded_at: string;
+}
+
+export interface UserTrustScore {
+  totalScore: number;
+  level: string;
+  computedAt: string;
+}
+
+export interface SplitHistoryEntry {
+  transaction_id: string;
+  task_id: string | null;
+  task_title: string | null;
+  escrow_id: string | null;
+  currency: string;
+  gross_amount: string;
+  released_at: string;
+  reference: string;
+  split: {
+    tasker_net: string;
+    zaska_operations: string;
+    pension_fund: string;
+    health_fund: string;
+    smoothing_fund: string;
+  };
+}
+
+export interface SocialProtectionCurrencySummary {
+  currency: string;
+  pension: {
+    total_contributed: string;
+    simulated_interest: string;
+    projected_monthly_pension: string;
+    projection_basis: string;
+    progress_percent_to_guarantee: number;
+  };
+  health: {
+    status: "ACTIVE" | "INACTIVE";
+    activation_date: string | null;
+    active_days_this_month: number;
+    total_paid_to_authorities: string;
+  };
+  smoothing: {
+    available_balance: string;
+    total_contributed: string;
+    interest_redirected_to_pension: string;
+    interventions: Array<Record<string, string>>;
+  };
+}
+
+export interface SocialProtectionOverview {
+  balances: Array<{ currency: string; balance: string }>;
+  total_completed_tasks: number;
+  first_task_at: string | null;
+  active_months: number;
+  badge: {
+    code: string;
+    label: string;
+    description: string;
+  };
+  currencies: SocialProtectionCurrencySummary[];
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:6969/api";
@@ -193,6 +290,7 @@ export const api = {
   // ── User ──────────────────────────────────────────────────────────────────
   getMe: () => request<UserProfile>("/users/me"),
   getUserProfile: (userId: string) => request<UserProfile>(`/users/${userId}`),
+  getKycStatus: () => request<KycStatus>("/kyc/status"),
 
   // ── Tasks ─────────────────────────────────────────────────────────────────
   createTask: (payload: TaskCreateInput) =>
@@ -258,6 +356,15 @@ export const api = {
   getWalletTransactions: (currency: string) =>
     request<Transaction[]>(`/wallet/transactions/${currency}`),
   getWalletSummary: () => request<WalletSummary>("/wallet/summary"),
+  getWalletSplits: (currency?: string, limit = 20, offset = 0) => {
+    const qs = new URLSearchParams();
+    if (currency) qs.set("currency", currency);
+    qs.set("limit", String(limit));
+    qs.set("offset", String(offset));
+    return request<SplitHistoryEntry[]>(`/wallet/splits?${qs.toString()}`);
+  },
+  getSocialProtection: () =>
+    request<SocialProtectionOverview>("/wallet/social-protection"),
   deposit: (amount: string, currency: string) =>
     request<{ checkout_url?: string; status?: string; mode?: string }>("/wallet/deposit", {
       method: "POST",
@@ -301,6 +408,12 @@ export const api = {
   sendChat: (taskId: string, message: string) =>
     request<ChatMessage>("/chat", { method: "POST", body: JSON.stringify({ task_id: taskId, message }) }),
   listChat: (taskId: string) => request<ChatMessage[]>(`/chat/${taskId}`),
+  getNotifications: () => request<NotificationItem[]>("/notifications"),
+  getUnreadNotificationsCount: () => request<{ count: number }>("/notifications/unread-count"),
+  markNotificationRead: (notificationId: string) =>
+    request<NotificationItem>(`/notifications/${notificationId}/read`, { method: "PATCH", body: "{}" }),
+  markAllNotificationsRead: () =>
+    request<{ marked: boolean }>("/notifications/mark-all-read", { method: "POST", body: "{}" }),
 
   // ── Feature Flags ─────────────────────────────────────────────────────────
   listFlags: () => request<FeatureFlag[]>("/feature-flags"),

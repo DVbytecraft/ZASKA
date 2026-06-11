@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime, timezone
+import json
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -16,7 +17,26 @@ class KycSubmission(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
     id_document_url: Mapped[str] = mapped_column(String(500))
+    id_document_back_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     selfie_url: Mapped[str] = mapped_column(String(500))
+    submission_kind: Mapped[str] = mapped_column(String(16), default="full")
+    id_document_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    id_document_number_masked: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    document_country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    biometric_selfie_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    biometric_status: Mapped[str] = mapped_column(String(24), default="pending")
+    face_match_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    liveness_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ocr_status: Mapped[str] = mapped_column(String(24), default="pending")
+    ocr_payload_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    criminal_record_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    criminal_record_status: Mapped[str] = mapped_column(String(24), default="pending")
+    criminal_record_issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    criminal_record_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    criminal_record_risk_level: Mapped[str] = mapped_column(String(24), default="pending")
+    criminal_record_analysis_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    renewal_of_submission_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="pending")
     reviewed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -30,3 +50,12 @@ class KycSubmission(Base):
         if self.expires_at is None:
             return False
         return datetime.now(timezone.utc) > self.expires_at
+
+    @property
+    def metadata_payload(self) -> dict | None:
+        if not self.metadata_json:
+            return None
+        try:
+            return json.loads(self.metadata_json)
+        except Exception:
+            return None

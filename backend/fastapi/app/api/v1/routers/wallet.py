@@ -27,6 +27,7 @@ from app.core.fx_rate import get_live_fx_rate
 from app.core.observability import logger
 from app.core.redis_client import redis_sync
 from app.core.responses import success_response
+from app.models.user import User
 from app.models.payout import Payout
 from app.payment.audit_logger import FinancialAuditLogger
 from app.payment.limits import FraudDetected, LimitExceeded, TransactionLimits
@@ -202,6 +203,33 @@ def wallet_summary(
             for w in wallets
         ]
     )
+
+
+@router.get("/splits")
+def list_split_history(
+    currency: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    user_id: str = Depends(get_current_user_id),
+    svc: WalletService = Depends(get_wallet_service),
+):
+    _wallet_rate_limit(user_id)
+    history = svc.list_split_history(user_id=user_id, currency=currency, limit=limit, offset=offset)
+    return success_response(history)
+
+
+@router.get("/social-protection")
+def social_protection_dashboard(
+    user_id: str = Depends(get_current_user_id),
+    svc: WalletService = Depends(get_wallet_service),
+):
+    _wallet_rate_limit(user_id)
+    user = svc.db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+    if user.role != "tasker":
+        raise HTTPException(status_code=403, detail="Réservé aux taskers.")
+    return success_response(svc.get_social_protection_overview(user_id))
 
 
 @router.post("/credit")

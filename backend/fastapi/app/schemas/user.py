@@ -12,7 +12,7 @@ class UpdateProfilePayload(BaseModel):
 
 class UserProfileResponse(BaseModel):
     id: str
-    email: str
+    email: str | None
     role: str
     first_name: str | None
     last_name: str | None
@@ -21,3 +21,8 @@ class UserProfileResponse(BaseModel):
     avatar_url: str | None
     country_code: str | None
     is_verified: bool
+    tasker_security_verified: bool = False
+    biometric_enabled: bool = False
+    criminal_record_status: str | None = None
+    premium_access_restricted: bool = False
+    premium_access_restricted_reason: str | None = None

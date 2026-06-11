@@ -14,6 +14,8 @@ from app.core.security import create_token, get_password_hash, revoke_all_user_t
 from app.core.ws_ticket import create_ws_ticket
 from app.models.user import User
 from app.models.wallet import Wallet
+from app.services.access_control_service import AccessControlService
+from app.services.country_rollout_service import CountryRolloutService
 from app.services.email_service import EmailService
 
 
@@ -60,9 +62,15 @@ class AuthService:
         email: str | None = None,
         role: str = "client",
         country_code: str | None = None,
+        referral_code: str | None = None,
     ) -> dict:
         phone = phone.strip()
         email_norm = email.lower().strip() if email else None
+        rollout = CountryRolloutService(self.db)
+        resolved_country = None
+        if country_code:
+            resolved_country = rollout.assert_country_signup_open(country_code)
+            country_code = resolved_country.iso_code or country_code.upper()
 
         # ── Phone collision ───────────────────────────────────────────────
         existing_phone = _get_user_by_phone(self.db, phone)
@@ -100,6 +108,9 @@ class AuthService:
         # in the same transaction so all three objects commit atomically below.
         self.db.flush()
 
+        from app.services.referral_service import ReferralService
+        ReferralService(self.db).attach_referral_to_registration(user=user, referral_code=referral_code)
+
         # Create wallets atomically with the user.
         # OLD pattern (3 separate commits in the router) had a crash gap:
         #   user committed → crash → wallets never created → user exists without wallet.
@@ -113,33 +124,11 @@ class AuthService:
         from app.models.wallet import Wallet as _Wallet
         currencies_to_create = {"USD"}
         if country_code:
-            _COUNTRY_CURRENCY = {
-                # XOF — BCEAO zone (West Africa)
-                "TG": "XOF", "SN": "XOF", "CI": "XOF", "BJ": "XOF",
-                "BF": "XOF", "ML": "XOF", "NE": "XOF", "GW": "XOF",
-                # XAF — BEAC zone (Central Africa)
-                "CM": "XAF", "CG": "XAF", "GA": "XAF", "CF": "XAF",
-                "TD": "XAF", "GQ": "XAF",
-                # Other African currencies
-                "GH": "GHS",
-                "NG": "NGN",
-                "KE": "KES",
-                "ZA": "ZAR",
-                "ET": "ETB",
-                "TZ": "TZS",
-                "UG": "UGX",
-                "RW": "RWF",
-                "MA": "MAD",
-                # Europe
-                "FR": "EUR", "DE": "EUR", "ES": "EUR", "IT": "EUR",
-                "PT": "EUR", "NL": "EUR", "BE": "EUR", "AT": "EUR",
-                "FI": "EUR", "IE": "EUR", "LU": "EUR", "GR": "EUR",
-                "GB": "EUR",   # GBP not supported in platform — EUR fallback
-                # Americas
-                "US": "USD",   # USD already in currencies_to_create
-                "CA": "USD",
-            }
-            local_currency = _COUNTRY_CURRENCY.get(country_code.upper(), "XOF")
+            local_currency = (
+                resolved_country.currency_code
+                if resolved_country is not None and resolved_country.currency_code
+                else rollout.resolve_local_currency(country_code, fallback="EUR")
+            )
             currencies_to_create.add(local_currency)
         else:
             currencies_to_create.add("XOF")
@@ -177,8 +166,16 @@ class AuthService:
         # Single atomic commit: user + wallets + nothing else
         self.db.commit()
         self.db.refresh(user)
+        if user.country_code:
+            CountryRolloutService(self.db).ensure_country(user.country_code)
 
-        return {"userId": user.id, "phone": phone, "currencies": list(currencies_to_create)}
+        return {
+            "userId": user.id,
+            "phone": phone,
+            "currencies": list(currencies_to_create),
+            "referralCode": user.referral_code,
+            "referredByUserId": user.referred_by_user_id,
+        }
 
     def verify_otp(self, phone: str, code: str) -> dict:
         phone = phone.strip()
@@ -190,9 +187,14 @@ class AuthService:
         if user is None:
             raise ValueError("User not found")
 
+        from app.services.referral_service import ReferralService
+        ReferralService(self.db).ensure_user_referral_code(user, commit=False)
         user.is_verified = True
         self.db.commit()
         redis_sync.delete(f"otp:phone:{phone}")
+
+        if user.country_code:
+            CountryRolloutService(self.db).ensure_country(user.country_code)
 
         tokens = self._generate_tokens(user.id)
         tokens["userId"] = user.id
@@ -208,6 +210,20 @@ class AuthService:
             except Exception:
                 tokens["country"] = user.country_code
 
+        if user.email and user.welcome_email_sent_at is None:
+            try:
+                from datetime import datetime, timezone
+                from app.core.email import send_welcome_email
+
+                display_name = " ".join(filter(None, [user.first_name, user.last_name])) or user.full_name
+                if send_welcome_email(user.email, display_name):
+                    user.welcome_email_sent_at = datetime.now(timezone.utc)
+                    self.db.commit()
+            except Exception:
+                self.db.rollback()
+
+        tokens["referralCode"] = user.referral_code
+        tokens["referredByUserId"] = user.referred_by_user_id
         return tokens
 
     def resend_otp(self, phone: str) -> None:
@@ -250,12 +266,25 @@ class AuthService:
         if country_code and not user.country_code:
             user.country_code = country_code.upper()
             self.db.commit()
+        if user.country_code:
+            CountryRolloutService(self.db).ensure_country(user.country_code)
+        from app.services.referral_service import ReferralService
+        updated = False
+        if not user.referral_code:
+            ReferralService(self.db).ensure_user_referral_code(user, commit=False)
+            updated = True
+        if updated:
+            self.db.commit()
 
         tokens = self._generate_tokens(user.id)
+        access_control = AccessControlService(self.db)
         tokens["userId"] = user.id
         tokens["email"] = user.email
         tokens["role"] = user.role
-        tokens["isAdmin"] = (user.role == "admin")
+        tokens["isAdmin"] = access_control.user_has_admin_console_access(user.id, user=user)
+        tokens["adminRoles"] = access_control.get_user_role_codes(user.id)
+        tokens["referralCode"] = user.referral_code
+        tokens["referredByUserId"] = user.referred_by_user_id
         # Return the user's registered country so the router uses it
         # instead of the IP-detected fallback (which defaults to FR/EUR).
         tokens["_user_country_code"] = user.country_code

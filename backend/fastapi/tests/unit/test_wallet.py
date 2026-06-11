@@ -144,7 +144,15 @@ class TestWalletService:
         db.add(task)
         db.commit()
 
+        from app.services.internal_wallet_seed_service import InternalWalletSeedService
         from app.services.wallet_service import WalletService
+
+        # Provision platform/pension/health/smoothing fund wallets — release_escrow
+        # hard-fails (SocialSplitConfigError) if these are not configured.
+        from app.core.config import settings as _settings
+        for _name in ("zaska_wallet_user_id", "pension_fund_user_id", "health_fund_user_id", "smoothing_fund_user_id"):
+            setattr(_settings, _name, "")
+        InternalWalletSeedService(db).ensure_all()
 
         svc = WalletService(db)
         svc.create_wallet(test_user.id, "USD")
@@ -157,8 +165,9 @@ class TestWalletService:
 
         escrow = svc.release_escrow(escrow.id)
         assert escrow.status == "released"
-        # 15% platform commission deducted: tasker receives 85% of 50 = 42.5
-        assert svc.get_balance(tasker.id, "USD") == Decimal("42.5")
+        # New social split: tasker receives 77.5% of the gross (50)
+        split = svc.calculate_social_split(Decimal("50"))
+        assert svc.get_balance(tasker.id, "USD") == split["tasker_net"]
 
 
 class TestCreditEndpointSecurity:

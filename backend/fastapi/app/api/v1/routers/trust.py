@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user_id, get_db, require_verified_user
 from app.core.rate_limit import endpoint_rate_limit
 from app.core.responses import success_response
+from app.services.rating_service import RatingService
 from app.services.trust_service import TrustService
 
 router = APIRouter(prefix="/trust", tags=["trust"])
@@ -95,6 +96,32 @@ def get_my_skills(
     db: Session = Depends(get_db),
 ):
     return success_response(TrustService(db).get_user_skills(user_id))
+
+
+@router.get("/reviews/me")
+def get_my_reviews(
+    review_type: str | None = None,
+    user_id: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    return success_response({
+        "summary": RatingService(db).get_public_rating_summary(user_id),
+        "reviews": RatingService(db).list_user_reviews(user_id, review_type=review_type, limit=50),
+    })
+
+
+@router.get("/reviews/{user_id}")
+def get_user_reviews(
+    user_id: str,
+    review_type: str | None = None,
+    _: str = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    rating_service = RatingService(db)
+    return success_response({
+        "summary": rating_service.get_public_rating_summary(user_id),
+        "reviews": rating_service.list_user_reviews(user_id, review_type=review_type, limit=50),
+    })
 
 
 class AddSkillPayload(BaseModel):

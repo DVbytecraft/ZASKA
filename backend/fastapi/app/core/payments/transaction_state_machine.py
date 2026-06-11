@@ -30,7 +30,10 @@ ALLOWED_TRANSITIONS: dict[TransactionState, set[TransactionState]] = {
     TransactionState.FAILED: {TransactionState.RECONCILING, TransactionState.DISPUTED},
     TransactionState.RECONCILING: {TransactionState.SUCCESS, TransactionState.FAILED, TransactionState.REFUNDED},
     TransactionState.REFUNDED: {TransactionState.DISPUTED},
-    TransactionState.DISPUTED: {TransactionState.REVERSED, TransactionState.REFUNDED, TransactionState.RECONCILING},
+    TransactionState.DISPUTED: {
+        TransactionState.REVERSED, TransactionState.REFUNDED,
+        TransactionState.RECONCILING, TransactionState.PROCESSING,
+    },
     TransactionState.REVERSED: set(),
 }
 

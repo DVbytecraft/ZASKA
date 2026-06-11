@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import ForgotPasswordPayload, LoginPayload, LogoutPayload, RefreshPayload, RegisterPayload, ResendOtpPayload, ResetPasswordPayload, SetPasswordPayload, VerifyOtpPayload
 from app.services.auth_service import AuthService
+from app.services.country_rollout_service import CountryRolloutService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -90,6 +91,7 @@ def register(
             email=payload.email,
             role=payload.role,
             country_code=payload.country or country_code,
+            referral_code=payload.referralCode,
         )
         # Wallets are now created atomically inside service.register() — no separate calls needed.
         return success_response(data)
@@ -97,6 +99,31 @@ def register(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Registration failed") from exc
+
+
+@router.get("/signup-countries")
+def list_signup_countries(
+    query: str | None = None,
+    db: Session = Depends(get_db),
+):
+    countries = CountryRolloutService(db).list_signup_countries(query=query)
+    return success_response(
+        [
+            {
+                "code": country.iso_code or country.name,
+                "nameEn": country.display_name_en or country.name,
+                "nameFr": country.display_name_fr or country.display_name_en or country.name,
+                "phonePrefix": country.phone_prefix,
+                "currencyCode": country.currency_code,
+                "currencySymbol": country.currency_symbol,
+                "continentCode": country.continent_code,
+                "continentName": country.continent_name,
+                "primaryCityName": country.primary_city_name,
+                "timezone": country.timezone,
+            }
+            for country in countries
+        ]
+    )
 
 
 @router.post("/set-password")

@@ -3,7 +3,7 @@ FeatureFlagEngine — merge flags statiques (registry) + overrides DB.
 
 Stratégie de résolution (priorité décroissante) :
   1. Cache Redis (TTL 60 s)
-  2. Overrides DB  (table feature_flags, Country.name == country_code)
+  2. Overrides DB  (table feature_flags, Country.iso_code == country_code)
   3. Defaults statiques (CountryConfig.feature_flags_defaults)
 
 Les overrides DB permettent aux admins de modifier un flag sans redéploiement.
@@ -55,12 +55,12 @@ class FeatureFlagEngine:
         """Override DB d'un flag pour un pays. Invalide le cache Redis immédiatement."""
         cc = country_code.upper()
         country_row = self._db.execute(
-            select(Country).where(Country.name == cc)
+            select(Country).where((Country.iso_code == cc) | (Country.name == cc))
         ).scalars().one_or_none()
         if country_row is None:
             raise ValueError(
                 f"Pays '{cc}' introuvable en base. "
-                "Seed la table countries avec Country.name == country_code."
+                "Seed la table countries avec Country.iso_code == country_code."
             )
 
         # FOR UPDATE: prevents two concurrent admin set_flag for the same (feature, country)
@@ -93,7 +93,7 @@ class FeatureFlagEngine:
         """Override de plusieurs flags en une transaction."""
         cc = country_code.upper()
         country_row = self._db.execute(
-            select(Country).where(Country.name == cc)
+            select(Country).where((Country.iso_code == cc) | (Country.name == cc))
         ).scalars().one_or_none()
         if country_row is None:
             raise ValueError(f"Pays '{cc}' introuvable en base.")
@@ -121,7 +121,7 @@ class FeatureFlagEngine:
         config = get_config(cc)
         flags: dict[str, bool] = dict(config.feature_flags_defaults)
         country_row = self._db.execute(
-            select(Country).where(Country.name == cc)
+            select(Country).where((Country.iso_code == cc) | (Country.name == cc))
         ).scalars().one_or_none()
         if country_row is not None:
             db_flags = self._db.execute(
@@ -129,6 +129,13 @@ class FeatureFlagEngine:
             ).scalars().all()
             for f in db_flags:
                 flags[f.feature] = f.enabled
+        try:
+            from app.services.module_control_service import ModuleControlService
+
+            flags["food_delivery_enabled"] = ModuleControlService(self._db).is_module_enabled(cc, "FOOD")
+            flags["tasks_enabled"] = ModuleControlService(self._db).is_module_enabled(cc, "TASKS")
+        except Exception:
+            pass
         return flags
 
     def _invalidate_cache(self, cc: str) -> None:

@@ -25,6 +25,8 @@ class TaskCreatePayload(BaseModel):
     address: str | None = Field(default=None, max_length=512)
     mode: str | None = Field(default=None, pattern="^(fast|choose)$")
     status: str = Field(default="OPEN", pattern="^(OPEN|ASSIGNED|COMPLETED)$")
+    service_category: str = Field(default="TASK", max_length=32)
+    is_urgent: bool = False
     # Scheduling
     scheduled_at: datetime | None = None
     any_schedule: bool = False

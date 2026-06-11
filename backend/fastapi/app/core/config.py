@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     fx_usd_to_ngn: float = 1650.0  # Nigerian Naira
     fx_usd_to_kes: float = 130.0   # Kenyan Shilling
     fx_usd_to_eur: float = 0.92    # Euro
+    fx_usd_to_gbp: float = 0.79    # British Pound
+    fx_usd_to_cad: float = 1.36    # Canadian Dollar
     # Frais de conversion en basis points (50 bps = 0.5 %)
     fx_fee_bps: int = 50
     # Hard cap per single FX transaction (USD-equivalent)
@@ -92,6 +94,14 @@ class Settings(BaseSettings):
     payout_fail_block_threshold: int = 3
     # Minimum gap between a confirmed deposit and a withdrawal (minutes)
     rapid_cycle_window_minutes: int = 10
+
+    aml_single_tx_threshold_eur: float = 500.0
+    aml_monthly_threshold_eur: float = 2000.0
+    aml_repeated_amount_days: int = 14
+    aml_repeated_amount_count: int = 4
+    aml_same_pair_days: int = 30
+    aml_same_pair_count: int = 5
+    aml_rapid_validation_minutes: int = 2
 
     # ── FX exposure control ───────────────────────────────────────────────
     # Max cumulative USD-equivalent exposure per direction (to_xof | from_xof)
@@ -119,15 +129,26 @@ class Settings(BaseSettings):
     # Frontend base URL used in email CTA buttons
     app_frontend_url: str = "https://zaska-frontend.onrender.com"
 
+    # Maps / geocoding
+    maps_provider: Literal["mock", "google", "mapbox"] = "mock"
+    maps_requests_enabled: bool = False
+    google_maps_api_key: str = ""
+    mapbox_api_key: str = ""
+    maps_default_language: str = "fr"
+    maps_request_timeout_seconds: int = 8
+
     @property
     def admin_email_list(self) -> list[str]:
         return [e.strip() for e in self.admin_notification_emails.split(",") if e.strip()]
 
     # ── ZASKA Commission ──────────────────────────────────────────────────
-    # Platform commission in basis points (1500 = 15%)
-    zaska_commission_bps: int = 1500
+    # Platform commission in basis points (800 = 8%)
+    zaska_commission_bps: int = 800
     # System user ID whose wallet receives commission credits; set in env
     zaska_wallet_user_id: str = ""
+    pension_fund_user_id: str = ""
+    health_fund_user_id: str = ""
+    smoothing_fund_user_id: str = ""
 
     sentry_dsn: str = ""
 
@@ -170,6 +191,11 @@ class Settings(BaseSettings):
     # ── PostgreSQL backups ────────────────────────────────────────────────
     backup_dir: str = "/app/backups"
     backup_keep_days: int = 7
+
+    # ── API keys / sandbox ────────────────────────────────────────────────
+    # Wallets/transactions/escrows created via a sandbox API key are tagged
+    # is_sandbox=True and periodically purged after this many days.
+    sandbox_data_retention_days: int = 30
 
     # ── FCM push notifications ────────────────────────────────────────────
     # Path to Firebase service account JSON file (leave empty to disable push)

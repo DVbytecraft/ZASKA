@@ -24,6 +24,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 const get = <T>(path: string) => request<T>('GET', path);
 const post = <T>(path: string, body?: unknown) => request<T>('POST', path, body);
 const patch = <T>(path: string, body?: unknown) => request<T>('PATCH', path, body);
+const put = <T>(path: string, body?: unknown) => request<T>('PUT', path, body);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -152,9 +153,75 @@ export interface AdminPaymentProvider {
 
 export interface AdminCountry {
   code: string;
+  name_en?: string;
+  name_fr?: string;
   currency: string;
   mobile_money_enabled: boolean;
   payment_providers: string[];
+  is_active: boolean;
+  signup_enabled: boolean;
+  launch_status: 'PLANNED' | 'CONFIGURED' | 'ACTIVE' | 'SUSPENDED';
+  food_delivery_enabled: boolean;
+  food_delivery_escrow_minutes: number;
+}
+
+export interface AdminPlatformModule {
+  code: string;
+  label: string;
+  description: string;
+  module_group: string;
+  default_enabled: boolean;
+  is_public: boolean;
+  requires_country_active: boolean;
+}
+
+export interface AdminModuleSetting {
+  module_code: string;
+  scope_type: string;
+  scope_value: string;
+  enabled: boolean;
+  config?: Record<string, unknown> | null;
+  reason?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AdminModuleRuntimeEntry {
+  enabled: boolean;
+  source?: string;
+  country_active?: boolean;
+  config?: Record<string, unknown> | null;
+}
+
+export interface AdminGeoContinent {
+  code: string;
+  name?: string | null;
+  name_en?: string | null;
+  name_fr?: string | null;
+  pricing_profile?: Record<string, unknown> | null;
+  launch_status?: string | null;
+}
+
+export interface AdminGeoCountryRuntime {
+  code?: string;
+  country_code?: string;
+  countryCode?: string;
+  name?: string | null;
+  name_en?: string | null;
+  name_fr?: string | null;
+  continent_code?: string | null;
+  continentCode?: string | null;
+  primary_city_name?: string | null;
+  primaryCityName?: string | null;
+  pricing_profile?: Record<string, unknown> | null;
+  pricingProfile?: Record<string, unknown> | null;
+  launch_status?: string | null;
+  is_active?: boolean;
+}
+
+export interface AdminPricingTemplate {
+  continent_code?: string;
+  country_code?: string;
+  pricing_profile: Record<string, unknown>;
 }
 
 export interface AdminUserDetail extends AdminUser {
@@ -171,6 +238,9 @@ export interface AdminKycSubmission {
   selfie_url?: string | null;
   reviewed_by?: string | null;
   reviewer_note?: string | null;
+  approved_at?: string | null;
+  expires_at?: string | null;
+  is_expired?: boolean;
   created_at: string;
 }
 
@@ -191,6 +261,124 @@ export interface AdminAuditLog {
 export interface AdminFraudFlags {
   payout_blocked: { user_id: string; consecutive_failures: number }[];
   rapid_cycle_candidates: { user_id: string }[];
+}
+
+export interface AdminSocialProtectionCurrency {
+  currency: string;
+  pension_balance_total: string;
+  health_balance_total: string;
+  smoothing_balance_total: string;
+  pension_contributions_total: string;
+  health_contributions_total: string;
+  smoothing_contributions_total: string;
+  smoothing_interventions_month: number;
+  smoothing_outstanding_total: string;
+  simulated_interest_month: string;
+}
+
+export interface AdminSocialProtectionCountryRow {
+  country_code: string;
+  users: number;
+  taskers: number;
+  protected_taskers: number;
+}
+
+export interface AdminSocialProtectionTaskerRow {
+  tasker_id: string;
+  tasker_name: string;
+  country_code: string | null;
+  badge?: string | null;
+  active_months: number;
+  completed_tasks: number;
+  currencies: Array<{
+    currency: string;
+    badge?: string | null;
+    pension_total: string;
+    health_status: string;
+    smoothing_outstanding: string;
+  }>;
+}
+
+export interface AdminSocialProtectionOverview {
+  totals: {
+    countries_active: number;
+    registered_users: number;
+    taskers: number;
+    taskers_protected: number;
+    kyc_due_soon: number;
+  };
+  currencies: AdminSocialProtectionCurrency[];
+  countries: AdminSocialProtectionCountryRow[];
+  taskers: AdminSocialProtectionTaskerRow[];
+  generated_at: string;
+}
+
+export interface AdminTaskerBadgeCount {
+  code: string;
+  label: string;
+  description: string;
+  count: number;
+}
+
+export interface AdminTaskerBadgeRow {
+  tasker_id: string;
+  tasker_name: string;
+  country_code: string | null;
+  rating_avg: number | null;
+  rating_count: number;
+  completed_tasks: number;
+  active_months: number;
+  tasker_security_verified: boolean;
+  criminal_record_status: string;
+  social_badge?: {
+    code: string;
+    label: string;
+    description: string;
+  } | null;
+  public_badges: Array<{
+    code: string;
+    label: string;
+    description: string;
+    icon: string;
+    awarded_at: string;
+  }>;
+}
+
+export interface AdminAccountingCurrencyOverview {
+  currency: string;
+  lifetime: Record<string, string>;
+  today: Record<string, string>;
+  month: Record<string, string>;
+  year: Record<string, string>;
+  fund_balances: Record<string, {
+    wallet_balance: string;
+    ledger_balance: string;
+    drift: string;
+  }>;
+  event_totals: {
+    smoothing_interventions_total: string;
+    smoothing_reimbursements_total: string;
+    smoothing_interventions_month: number;
+    smoothing_reimbursements_month: number;
+  };
+  simulated_interest: {
+    pension_month: string;
+    smoothing_month: string;
+  };
+}
+
+export interface AdminAccountingOverview {
+  summary: {
+    released_tasks_count: number;
+    currencies_count: number;
+  };
+  currencies: AdminAccountingCurrencyOverview[];
+  tasker_badges: {
+    counts: AdminTaskerBadgeCount[];
+    taskers: AdminTaskerBadgeRow[];
+    generated_at: string;
+  };
+  generated_at: string;
 }
 
 // ─── API ──────────────────────────────────────────────────────────────────────
@@ -274,6 +462,35 @@ export const adminApi = {
   getPaymentProviders: () =>
     get<AdminPaymentProvider[]>('/admin/providers').catch(() => [] as AdminPaymentProvider[]),
   getCountries: () => get<AdminCountry[]>('/admin/countries'),
+  updateCountry: (countryCode: string, data: Partial<Pick<AdminCountry, 'is_active' | 'signup_enabled' | 'launch_status' | 'food_delivery_enabled' | 'food_delivery_escrow_minutes'>>) =>
+    patch<AdminCountry>(`/admin/countries/${countryCode}`, data),
+  getModuleCatalog: () => get<{ modules: AdminPlatformModule[] }>('/admin/modules/catalog'),
+  getModuleSettings: (params?: { module_code?: string; scope_type?: string; scope_value?: string }) => {
+    const entries = Object.entries(params ?? {}).filter(([, v]) => v != null && v !== '');
+    const q = entries.length ? `?${new URLSearchParams(entries as [string, string][]).toString()}` : '';
+    return get<AdminModuleSetting[]>(`/admin/modules/settings${q}`);
+  },
+  getModuleRuntime: (countryCode: string) =>
+    get<Record<string, AdminModuleRuntimeEntry>>(`/admin/modules/runtime/${countryCode}`),
+  updateModuleSetting: (
+    moduleCode: string,
+    data: { scope_type: string; scope_value: string; enabled: boolean; config?: Record<string, unknown> | null; reason?: string | null }
+  ) => put<AdminModuleSetting>(`/admin/modules/${moduleCode}/settings`, data),
+  getGeoContinents: () => get<AdminGeoContinent[]>('/admin/geo/continents'),
+  getGeoCountriesRuntime: () => get<AdminGeoCountryRuntime[]>('/admin/geo/countries'),
+  getGeoCountryRuntime: (countryCode: string) => get<AdminGeoCountryRuntime>(`/admin/geo/countries/${countryCode}`),
+  getContinentPricingTemplate: (continentCode: string) =>
+    get<AdminPricingTemplate>(`/admin/pricing/templates/continents/${continentCode}`),
+  getCountryPricingTemplate: (countryCode: string) =>
+    get<AdminPricingTemplate>(`/admin/pricing/templates/countries/${countryCode}`),
+  updateContinentPricing: (continentCode: string, pricingProfile: Record<string, unknown> | null) =>
+    put<AdminGeoContinent>(`/admin/geo/continents/${continentCode}/pricing`, { pricing_profile: pricingProfile }),
+  updateCountryPricing: (countryCode: string, pricingProfile: Record<string, unknown> | null) =>
+    put<AdminGeoCountryRuntime>(`/admin/geo/countries/${countryCode}/pricing`, { pricing_profile: pricingProfile }),
+  getSocialProtectionOverview: () =>
+    get<AdminSocialProtectionOverview>('/admin/social-protection/overview'),
+  getAccountingOverview: () =>
+    get<AdminAccountingOverview>('/admin/accounting/overview'),
 
   // KYC
   getKycSubmissions: (status?: string) =>

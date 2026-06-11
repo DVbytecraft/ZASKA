@@ -6,6 +6,7 @@ import {
   Users,
   UserCheck,
   DollarSign,
+  ReceiptText,
   Wallet,
   AlertTriangle,
   BarChart2,
@@ -19,6 +20,7 @@ import {
   ShieldCheck,
   ClipboardList,
   ShieldAlert,
+  HeartHandshake,
 } from 'lucide-react';
 
 interface AdminLayoutProps {
@@ -30,6 +32,7 @@ interface AdminLayoutProps {
 const navigation = [
   { id: 'dashboard',  label: 'Dashboard',      icon: LayoutDashboard },
   { id: 'analytics',  label: 'Analytics',       icon: BarChart2 },
+  { id: 'accounting', label: 'Comptabilité',    icon: ReceiptText },
   { id: 'tasks',      label: 'Tâches',           icon: Briefcase },
   { id: 'users',      label: 'Utilisateurs',     icon: Users },
   { id: 'taskers',    label: 'Taskers',           icon: UserCheck },
@@ -37,7 +40,8 @@ const navigation = [
   { id: 'wallet',     label: 'Portefeuille',      icon: Wallet },
   { id: 'disputes',   label: 'Litiges',           icon: AlertTriangle },
   { id: 'callcenter', label: 'Call Center',       icon: Headphones },
-  { id: 'countries',  label: 'Pays',              icon: Globe },
+  { id: 'countries',  label: 'Pays & Tarifs',     icon: Globe },
+  { id: 'social',     label: 'Fonds sociaux',     icon: HeartHandshake },
   { id: 'kyc',        label: 'KYC',               icon: ShieldCheck },
   { id: 'auditlog',   label: 'Journal d\'audit',  icon: ClipboardList },
   { id: 'fraud',      label: 'Fraude',            icon: ShieldAlert },

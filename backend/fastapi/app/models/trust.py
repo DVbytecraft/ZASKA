@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -132,3 +132,30 @@ class ModerationCase(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class UserReview(Base):
+    """Immutable review event for a completed task."""
+
+    __tablename__ = "user_reviews"
+    __table_args__ = (
+        UniqueConstraint("task_id", "review_type", name="uq_user_review_task_type"),
+        UniqueConstraint("task_id", "reviewer_id", name="uq_user_review_task_reviewer"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    task_id: Mapped[str] = mapped_column(String(36), ForeignKey("tasks.id"), nullable=False, index=True)
+    reviewer_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    reviewee_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
+    review_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    overall_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    punctuality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    communication_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    standards_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    instructions_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    behavior_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payment_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    comment: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

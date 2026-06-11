@@ -20,22 +20,30 @@ class TaskService:
             select(Task).where(Task.idempotency_key == key)
         ).scalars().one_or_none()
 
-    def create_task(self, payload: dict) -> Task:
+    def create_task(self, payload: dict, *, commit: bool = True) -> Task:
         lat = float(payload["latitude"])
         lon = float(payload["longitude"])
         if not (-90.0 <= lat <= 90.0):
             raise ValueError(f"Invalid latitude {lat}")
         if not (-180.0 <= lon <= 180.0):
             raise ValueError(f"Invalid longitude {lon}")
+        service_category = (payload.get("service_category") or "TASK").upper()
+        base_price = Decimal(str(payload["price"]))
+        is_urgent = bool(payload.get("is_urgent", False))
+        final_price = (base_price * Decimal("1.20")).quantize(Decimal("0.000001")) if is_urgent else base_price
+        auto_release_minutes = 20 if service_category == "FOOD_DELIVERY" else 180
         task = Task(
             title=payload.get("title") or payload["description"][:60],
             description=payload["description"],
-            price=Decimal(str(payload["price"])),
+            price=final_price,
             currency=payload["currency"].upper(),
             latitude=lat,
             longitude=lon,
             address=payload.get("address"),
             mode=payload.get("mode") or "fast",
+            service_category=service_category,
+            is_urgent=is_urgent,
+            escrow_auto_release_minutes=auto_release_minutes,
             status=payload.get("status", "OPEN"),
             created_by=payload["created_by"],
             stops=payload.get("stops"),
@@ -46,8 +54,11 @@ class TaskService:
             country=payload.get("country") or None,
         )
         self.db.add(task)
-        self.db.commit()
-        self.db.refresh(task)
+        if commit:
+            self.db.commit()
+            self.db.refresh(task)
+        else:
+            self.db.flush()
         return task
 
     def get_task(self, task_id: str) -> Task | None:
@@ -289,34 +300,21 @@ class TaskService:
         return task
 
     def rate_task(self, task_id: str, score: int, rater_id: str) -> Task:
-        """Creator rates the tasker (1-5). Can only be done once per completed task.
+        """Legacy wrapper kept for compatibility with simple client→tasker rating flows."""
+        from app.services.rating_service import RatingService
 
-        P1-004 FIX: Uses FOR UPDATE on both Task and User.
-        Canonical lock order: Task first, then User — consistent across all callers.
-        """
-        if not (1 <= score <= 5):
-            raise ValueError("La note doit être entre 1 et 5")
-        task = self.db.execute(
-            select(Task).where(Task.id == task_id).with_for_update()
+        RatingService(self.db).submit_client_review(
+            task_id=task_id,
+            client_user_id=rater_id,
+            punctuality_score=score,
+            quality_score=score,
+            communication_score=score,
+            standards_score=score,
+            comment=None,
+        )
+        return self.db.execute(
+            select(Task).where(Task.id == task_id)
         ).scalars().one()
-        if task.status != "COMPLETED":
-            raise ValueError("Impossible de noter une tâche non terminée")
-        if task.created_by != rater_id:
-            raise ValueError("Seul le créateur de la tâche peut noter le prestataire")
-        if task.creator_rated:
-            raise ValueError("Cette tâche a déjà été notée")
-        if not task.assigned_to:
-            raise ValueError("Aucun prestataire à noter")
-        tasker = self.db.execute(
-            select(User).where(User.id == task.assigned_to).with_for_update()
-        ).scalars().one_or_none()
-        if tasker:
-            tasker.rating_sum += score
-            tasker.rating_count += 1
-        task.creator_rated = True
-        self.db.commit()
-        self.db.refresh(task)
-        return task
 
     def mark_pending_validation(
         self, task_id: str, tasker_id: str, pct: int, proof_url: str | None = None

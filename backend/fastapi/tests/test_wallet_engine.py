@@ -21,6 +21,7 @@ from app.db.base import Base
 from app.models.user import User
 from app.models.task import Task
 from app.models.wallet import Escrow, Transaction, Wallet
+from app.services.internal_wallet_seed_service import InternalWalletSeedService
 from app.services.wallet_service import (
     EscrowError,
     InsufficientFundsError,
@@ -53,6 +54,16 @@ def db_session(db_engine):
         if not session.get(type(obj), obj.id):
             session.add(obj)
     session.commit()
+
+    # Social-split fund accounts (zaska_operations/pension/health/smoothing) must
+    # be configured in this session's DB or release_escrow() hard-fails (P1.2).
+    # Reset settings so InternalWalletSeedService re-binds them to users that
+    # actually exist in THIS in-memory database (settings is a process-wide
+    # singleton shared across test modules).
+    from app.core.config import settings as _settings
+    for _name in ("zaska_wallet_user_id", "pension_fund_user_id", "health_fund_user_id", "smoothing_fund_user_id"):
+        setattr(_settings, _name, "")
+    InternalWalletSeedService(session).ensure_all()
 
     yield session
     session.rollback()
@@ -195,10 +206,9 @@ class TestEscrowFlow:
         escrow = svc.create_escrow("task-1", "user-a", "user-b", Decimal("300"), "XOF")
         svc.release_escrow(escrow.id)
         balance_b_after = svc.get_balance("user-b", "XOF")
-        # 15% ZASKA commission — payee receives 85% of escrow amount
-        from app.core.config import settings as _s
-        commission = (Decimal("300") * Decimal(str(_s.zaska_commission_bps)) / Decimal("10000")).quantize(Decimal("0.000001"))
-        assert balance_b_after == balance_b_before + Decimal("300") - commission
+        # social_v2 split — payee (tasker) receives tasker_net (77.5% of escrow amount)
+        split = svc.calculate_social_split(Decimal("300"))
+        assert balance_b_after == balance_b_before + split["tasker_net"]
 
     def test_release_escrow_status_becomes_released(self, svc):
         self._fund_payer(svc)

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, type PaymentMethod, type VirtualCard } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { api, type PaymentMethod, type SocialProtectionOverview, type SplitHistoryEntry, type VirtualCard } from "../api";
+import { useAuthStore } from "../store";
 
 interface Balance { currency: string; balance: string; }
 interface Tx { id: string; type: string; amount: string; status: string; reference: string; provider: string; created_at: string; }
@@ -8,6 +9,15 @@ interface DepositResult { mode: string; checkout_url?: string; tx_id?: string; a
 
 const CURRENCIES = ["USD", "XOF"];
 type WalletTab = "balances" | "transfer" | "withdraw" | "methods" | "cards";
+
+function formatMoney(value: string, currency: string) {
+  const amount = Number.parseFloat(value || "0");
+  return new Intl.NumberFormat("fr-FR", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: currency === "XOF" ? 0 : 2,
+  }).format(Number.isFinite(amount) ? amount : 0);
+}
 
 function StatusBanner({ type, msg, onClose }: { type: "success" | "cancel" | "error"; msg: string; onClose: () => void }) {
   const colors = type === "success" ? "bg-green-50 border-green-200 text-green-800"
@@ -25,6 +35,7 @@ function StatusBanner({ type, msg, onClose }: { type: "success" | "cancel" | "er
 }
 
 export function WalletPage() {
+  const profile = useAuthStore((s) => s.profile);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<WalletTab>("balances");
@@ -69,6 +80,8 @@ export function WalletPage() {
   const [cardType, setCardType] = useState<"visa" | "mastercard">("visa");
   const [cardCurrency, setCardCurrency] = useState("USD");
   const [creatingCard, setCreatingCard] = useState(false);
+  const [socialOverview, setSocialOverview] = useState<SocialProtectionOverview | null>(null);
+  const [splitHistory, setSplitHistory] = useState<SplitHistoryEntry[]>([]);
 
   async function loadBalances() {
     const results = await Promise.all(CURRENCIES.map((c) => api.getWalletBalance(c)));
@@ -85,11 +98,24 @@ export function WalletPage() {
 
   async function loadAll(currency?: string) {
     setLoading(true);
-    await Promise.all([loadBalances(), loadTxs(currency ?? activeCurrency)]);
+    const requests: Promise<unknown>[] = [loadBalances(), loadTxs(currency ?? activeCurrency)];
+    if (profile?.role === "tasker") {
+      requests.push(
+        api.getSocialProtection().then((res) => {
+          if (res.success) setSocialOverview(res.data);
+        }),
+      );
+      requests.push(
+        api.getWalletSplits(undefined, 6, 0).then((res) => {
+          if (res.success) setSplitHistory(res.data);
+        }),
+      );
+    }
+    await Promise.all(requests);
     setLoading(false);
   }
 
-  useEffect(() => { void loadAll(); }, []);
+  useEffect(() => { void loadAll(); }, [profile?.role]);
 
   useEffect(() => {
     const status = searchParams.get("status");
@@ -186,6 +212,11 @@ export function WalletPage() {
     else setBanner({ type: "error", msg: res.error ?? "Erreur." });
   }
 
+  const primarySocialCurrency = useMemo(
+    () => socialOverview?.currencies[0] ?? null,
+    [socialOverview],
+  );
+
   const tabs: { key: WalletTab; label: string }[] = [
     { key: "balances", label: "Soldes" },
     { key: "transfer", label: "Transfert" },
@@ -226,6 +257,45 @@ export function WalletPage() {
             ))}
           </div>
 
+          {profile?.role === "tasker" && socialOverview && primarySocialCurrency && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-emerald-900">Capital social</p>
+                  <p className="text-sm text-emerald-800">
+                    {socialOverview.badge.label} · {socialOverview.total_completed_tasks} tâches validées
+                  </p>
+                </div>
+                <Link
+                  to="/social-protection"
+                  className="inline-flex items-center justify-center rounded-lg bg-emerald-900 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-950"
+                >
+                  Ouvrir ma protection sociale
+                </Link>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-lg bg-white/80 p-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">Retraite</p>
+                  <p className="mt-1 text-sm font-semibold text-gray-900">
+                    {formatMoney(primarySocialCurrency.pension.total_contributed, primarySocialCurrency.currency)}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-white/80 p-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">Santé</p>
+                  <p className="mt-1 text-sm font-semibold text-gray-900">
+                    {primarySocialCurrency.health.status === "ACTIVE" ? "Active" : "Inactive"}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-white/80 p-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">Lissage</p>
+                  <p className="mt-1 text-sm font-semibold text-gray-900">
+                    {formatMoney(primarySocialCurrency.smoothing.available_balance, primarySocialCurrency.currency)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="bg-white border rounded-xl p-4 space-y-3">
             <h3 className="text-sm font-semibold">Recharger le portefeuille</h3>
             <div className="flex gap-2">
@@ -239,6 +309,47 @@ export function WalletPage() {
             </div>
             <p className="text-xs text-gray-400">Paiement sécurisé via Stripe. Carte test : 4242 4242 4242 4242</p>
           </div>
+
+          {profile?.role === "tasker" && (
+            <div>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold">Historique des splits</h3>
+                <Link to="/social-protection" className="text-sm font-medium text-gray-700 underline underline-offset-4">
+                  Voir tout
+                </Link>
+              </div>
+              {splitHistory.length === 0 ? (
+                <div className="rounded-xl border p-5 text-sm text-gray-500">
+                  Le détail des répartitions apparaîtra ici après validation des tâches.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {splitHistory.map((entry) => (
+                    <div key={entry.transaction_id} className="rounded-xl border bg-white p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{entry.task_title || "Tâche Zaska"}</p>
+                          <p className="text-xs text-gray-500">
+                            Brut {formatMoney(entry.gross_amount, entry.currency)}
+                          </p>
+                        </div>
+                        <p className="text-sm font-semibold text-green-700">
+                          {formatMoney(entry.split.tasker_net, entry.currency)}
+                        </p>
+                      </div>
+                      <div className="mt-3 grid gap-2 text-xs text-gray-600 md:grid-cols-5">
+                        <p>Net: {formatMoney(entry.split.tasker_net, entry.currency)}</p>
+                        <p>Zaska: {formatMoney(entry.split.zaska_operations, entry.currency)}</p>
+                        <p>Retraite: {formatMoney(entry.split.pension_fund, entry.currency)}</p>
+                        <p>Santé: {formatMoney(entry.split.health_fund, entry.currency)}</p>
+                        <p>Lissage: {formatMoney(entry.split.smoothing_fund, entry.currency)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div>
             <h3 className="text-sm font-semibold mb-3">Transactions — {activeCurrency}</h3>

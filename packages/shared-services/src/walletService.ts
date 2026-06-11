@@ -1,6 +1,8 @@
 import { apiClient } from "./apiClient";
 import type {
   Escrow,
+  SocialProtectionOverview,
+  SplitHistoryEntry,
   Transaction,
   WalletBalance,
   SavedPaymentMethod,
@@ -86,6 +88,18 @@ export const walletService = {
 
   getTransactions(currency: string) {
     return apiClient.get<Transaction[]>(`/wallet/transactions/${currency}`);
+  },
+
+  getSplitHistory(currency?: string, limit = 20, offset = 0) {
+    const params = new URLSearchParams();
+    if (currency) params.set("currency", currency);
+    params.set("limit", String(limit));
+    params.set("offset", String(offset));
+    return apiClient.get<SplitHistoryEntry[]>(`/wallet/splits?${params.toString()}`);
+  },
+
+  getSocialProtectionOverview() {
+    return apiClient.get<SocialProtectionOverview>("/wallet/social-protection");
   },
 
   getEscrowForTask(taskId: string) {

@@ -105,6 +105,24 @@ export interface UserProfile {
   avatar_url: string | null;
   country_code: string | null;
   is_verified: boolean;
+  tasker_security_verified?: boolean;
+  biometric_enabled?: boolean;
+  criminal_record_status?: string | null;
+  countryLaunchStatus?: string;
+  countryActive?: boolean;
+  foodDeliveryEnabled?: boolean;
+  badges?: Array<{
+    code: string;
+    label: string;
+    description: string;
+    icon: string;
+    awarded_at: string;
+  }>;
+  trustScore?: {
+    totalScore: number;
+    level: string;
+    computedAt: string;
+  };
 }
 
 export interface TaskPayload {
@@ -203,6 +221,60 @@ export interface TaskApplication {
 export interface WalletBalance {
   currency: string;
   balance: string;
+}
+
+export interface SplitHistoryEntry {
+  transaction_id: string;
+  task_id: string | null;
+  task_title: string | null;
+  escrow_id: string | null;
+  currency: string;
+  gross_amount: string;
+  released_at: string;
+  reference: string;
+  split: {
+    tasker_net: string;
+    zaska_operations: string;
+    pension_fund: string;
+    health_fund: string;
+    smoothing_fund: string;
+  };
+}
+
+export interface SocialProtectionCurrencySummary {
+  currency: string;
+  pension: {
+    total_contributed: string;
+    simulated_interest: string;
+    projected_monthly_pension: string;
+    projection_basis: string;
+    progress_percent_to_guarantee: number;
+  };
+  health: {
+    status: "ACTIVE" | "INACTIVE";
+    activation_date: string | null;
+    active_days_this_month: number;
+    total_paid_to_authorities: string;
+  };
+  smoothing: {
+    available_balance: string;
+    total_contributed: string;
+    interest_redirected_to_pension: string;
+    interventions: Array<Record<string, string>>;
+  };
+}
+
+export interface SocialProtectionOverview {
+  balances: WalletBalance[];
+  total_completed_tasks: number;
+  first_task_at: string | null;
+  active_months: number;
+  badge: {
+    code: string;
+    label: string;
+    description: string;
+  };
+  currencies: SocialProtectionCurrencySummary[];
 }
 
 export interface Transaction {

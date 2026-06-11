@@ -104,7 +104,7 @@ services:
     dockerfilePath: ./backend/fastapi/Dockerfile
     dockerContext: .
     plan: free
-    dockerCommand: celery -A app.worker.celery_app.celery worker -B --loglevel=info --concurrency=1
+    dockerCommand: celery -A app.worker.celery_app.celery_app worker -B --loglevel=info --concurrency=1
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -127,6 +127,8 @@ services:
       - key: BREVO_API_KEY
         sync: false
       - key: EMAIL_FROM_ADDRESS
+        sync: false
+      - key: APP_FRONTEND_URL
         sync: false
       - key: FLUTTERWAVE_SECRET_KEY
         sync: false

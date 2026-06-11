@@ -9,11 +9,19 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
+    get_aml_service,
     get_current_user_id,
     get_db,
+    get_food_service,
+    get_shop_service,
+    get_dispute_service,
+    get_referral_service,
+    get_subscription_service,
     get_task_service,
     get_wallet_service,
-    require_verified_user,
+    require_country_live_access,
+    require_module_enabled_for_current_user,
+    require_tasker_security_clearance,
 )
 from app.core.config import settings
 from app.core.observability import logger
@@ -31,9 +39,20 @@ from app.schemas.task import (
     TaskUpdatePayload,
 )
 from app.services.task_service import TaskService
+from app.services.aml_service import AmlService
+from app.services.food_service import FoodService
+from app.services.shop_service import ShopService
+from app.services.dispute_service import DisputeService
+from app.services.rating_service import RatingService
+from app.services.referral_service import ReferralService
+from app.services.subscription_service import SubscriptionService
 from app.services.wallet_service import EscrowError, InsufficientFundsError, WalletService
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
+router = APIRouter(
+    prefix="/tasks",
+    tags=["tasks"],
+    dependencies=[Depends(require_module_enabled_for_current_user("TASKS"))],
+)
 
 
 # ─── In-app notification helper ───────────────────────────────────────────────
@@ -101,6 +120,9 @@ def _serialize_task(task: Task, viewer_id: str | None = None) -> dict:
         "address": None if redact else task.address,
         "status": task.status,
         "mode": getattr(task, "mode", "fast") or "fast",
+        "serviceCategory": getattr(task, "service_category", "TASK") or "TASK",
+        "isUrgent": bool(getattr(task, "is_urgent", False)),
+        "escrowAutoReleaseMinutes": getattr(task, "escrow_auto_release_minutes", 180) or 180,
         "createdBy": task.created_by,
         "assignedTo": None if redact else task.assigned_to,
         "completionPercent": None if redact else task.completion_percent,
@@ -114,7 +136,11 @@ def _serialize_task(task: Task, viewer_id: str | None = None) -> dict:
         "stops": None if redact else task.stops,
         "city": getattr(task, "city", None),
         "country": getattr(task, "country", None),
+        "amlStatus": getattr(task, "aml_status", "clear"),
+        "amlCaseId": None if redact else getattr(task, "aml_case_id", None),
+        "amlHoldReason": None if redact else getattr(task, "aml_hold_reason", None),
         "creatorRated": None if redact else bool(getattr(task, "creator_rated", False)),
+        "taskerRated": None if redact else bool(getattr(task, "tasker_rated", False)),
         "proofPhotoUrl": None if redact else getattr(task, "proof_photo_url", None),
     }
 
@@ -150,13 +176,46 @@ def _get_task_or_404(task_id: str, service: TaskService) -> Task:
     return task
 
 
+def _assert_tasker_ready_for_assignment(db: Session, tasker_id: str) -> None:
+    user = db.get(User, tasker_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Tasker introuvable")
+    if user.role != "tasker":
+        raise HTTPException(status_code=409, detail="L'utilisateur sélectionné n'est pas un tasker.")
+    if not user.is_verified or user.is_suspended or user.is_locked:
+        raise HTTPException(status_code=409, detail="Ce tasker n'est pas disponible pour être assigné.")
+    if user.country_code:
+        from app.core.country_engine import FeatureFlagEngine
+        from app.core.redis_client import redis_sync
+        from app.services.country_rollout_service import CountryRolloutService
+        from app.services.kyc_service import KycService
+
+        try:
+            CountryRolloutService(db).assert_country_live(user.country_code)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        feature_engine = FeatureFlagEngine(redis_sync, db)
+        if feature_engine.get_flag(user.country_code, "strict_tasker_security"):
+            if not user.tasker_security_verified or not user.biometric_enabled:
+                raise HTTPException(status_code=409, detail="Ce tasker n'a pas encore validé tous les protocoles de sécurité.")
+            if user.criminal_record_status not in {"clear", "approved"}:
+                raise HTTPException(status_code=409, detail="Le casier judiciaire de ce tasker n'est pas encore validé.")
+            kyc = KycService(db).get_status(tasker_id)
+            if kyc is None or kyc.status != "approved" or kyc.is_expired:
+                raise HTTPException(status_code=409, detail="Le KYC de ce tasker n'est pas valide.")
+
+
 # ─── CRUD ────────────────────────────────────────────────────────────────────
 
 @router.post("")
 def create_task(
     payload: TaskCreatePayload,
     service: TaskService = Depends(get_task_service),
-    user_id: str = Depends(require_verified_user),
+    aml_svc: AmlService = Depends(get_aml_service),
+    referral_svc: ReferralService = Depends(get_referral_service),
+    subscription_svc: SubscriptionService = Depends(get_subscription_service),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(require_country_live_access),
 ):
     try:
         data = payload.model_dump()
@@ -175,13 +234,37 @@ def create_task(
             data["address"] = first["address"]
         elif not data.get("latitude") or not data.get("longitude"):
             raise HTTPException(status_code=422, detail="latitude et longitude requis si stops absent")
-        task = service.create_task(data)
-        return success_response(_serialize_task(task))
+        task = service.create_task(data, commit=False)
+        subscription_benefit = subscription_svc.apply_task_subscription(user_id, task)
+        db.commit()
+        db.refresh(task)
+        aml_case = None
+        try:
+            aml_case = aml_svc.screen_task_creation(task.id, user_id)
+            db.commit()
+            db.refresh(task)
+        except Exception as exc:
+            db.rollback()
+            logger.error("aml:task_creation_screen_failed user_id={} task_id={} error={}", user_id, task.id, exc)
+        try:
+            referral_svc.process_client_first_order(user_id, task.id)
+        except Exception as exc:
+            logger.error("referral:client_first_order_hook_failed user_id={} task_id={} error={}", user_id, task.id, exc)
+        response = _serialize_task(task)
+        response["amlStatus"] = getattr(task, "aml_status", "clear")
+        if aml_case is not None:
+            response["amlCase"] = aml_case
+        if subscription_benefit is not None:
+            response["subscriptionBenefit"] = subscription_benefit
+        return success_response(response)
     except HTTPException:
+        db.rollback()
         raise
     except ValueError as exc:
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc))
     except IntegrityError:
+        db.rollback()
         # Race condition on idempotency key — return the already-created task
         idem_key = payload.idempotency_key
         if idem_key:
@@ -190,6 +273,7 @@ def create_task(
                 return success_response(_serialize_task(existing))
         raise HTTPException(status_code=409, detail="Tâche déjà créée (clé d'idempotence)")
     except Exception as exc:
+        db.rollback()
         raise HTTPException(status_code=500, detail="Impossible de créer la tâche") from exc
 
 
@@ -415,7 +499,7 @@ def apply_task(
     payload: TaskApplyPayload,
     service: TaskService = Depends(get_task_service),
     db: Session = Depends(get_db),
-    user_id: str = Depends(require_verified_user),
+    user_id: str = Depends(require_tasker_security_clearance),
 ):
     try:
         task = _get_task_or_404(task_id, service)
@@ -505,6 +589,8 @@ def accept_task(
     task_id: str,
     payload: TaskAcceptPayload,
     service: TaskService = Depends(get_task_service),
+    food_svc: FoodService = Depends(get_food_service),
+    shop_svc: ShopService = Depends(get_shop_service),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
@@ -518,13 +604,26 @@ def accept_task(
             if not payload.tasker_id:
                 raise HTTPException(status_code=400, detail="tasker_id requis pour accepter un exécutant")
             tasker_id = payload.tasker_id
+            _assert_tasker_ready_for_assignment(db, tasker_id)
         else:
+            _assert_tasker_ready_for_assignment(db, user_id)
             tasker_id = user_id
 
         try:
             task = service.accept_task(task_id=task_id, tasker_id=tasker_id)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc))
+
+        if getattr(task, "service_category", "") == "FOOD_DELIVERY":
+            try:
+                food_svc.sync_delivery_assignment(task_id=task.id, tasker_id=tasker_id)
+            except Exception:
+                pass
+        if getattr(task, "service_category", "") == "SHOP_DELIVERY":
+            try:
+                shop_svc.sync_delivery_assignment(task_id=task.id, tasker_id=tasker_id)
+            except Exception:
+                pass
 
         # In-app + email notifications (best-effort)
         try:
@@ -931,7 +1030,11 @@ def mark_task_complete(
 def confirm_task_complete(
     task_id: str,
     service: TaskService = Depends(get_task_service),
+    aml_svc: AmlService = Depends(get_aml_service),
     wallet_svc: WalletService = Depends(get_wallet_service),
+    food_svc: FoodService = Depends(get_food_service),
+    shop_svc: ShopService = Depends(get_shop_service),
+    referral_svc: ReferralService = Depends(get_referral_service),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
@@ -955,6 +1058,11 @@ def confirm_task_complete(
             raise HTTPException(status_code=403, detail="Seul le client peut confirmer la réalisation")
         if task.status != "PENDING_VALIDATION":
             raise HTTPException(status_code=409, detail="La tâche n'est pas en attente de validation")
+        try:
+            aml_svc.screen_task_before_release(task_id=task_id, actor_user_id=user_id)
+        except ValueError as exc:
+            db.commit()
+            raise HTTPException(status_code=423, detail=str(exc)) from exc
 
         # Inline status change — NOT via service.update_status (which commits separately).
         # flush() stages the row without releasing the lock; the escrow commit below
@@ -1033,7 +1141,22 @@ def confirm_task_complete(
                     f"Net reçu : {net:.2f} {task.currency}."
                 )
             _notify(db, task.assigned_to, "success", "Paiement libéré 🎉", pay_msg, task_id=task_id)
+        if getattr(task, "service_category", "") == "FOOD_DELIVERY":
+            try:
+                food_svc.finalize_order_from_delivery_task(task_id=task_id, commit=False)
+            except Exception as exc:
+                logger.error("food:finalize_from_task_error task_id={} error={}", task_id, exc)
+        if getattr(task, "service_category", "") == "SHOP_DELIVERY":
+            try:
+                shop_svc.finalize_order_from_delivery_task(task_id=task_id, commit=False)
+            except Exception as exc:
+                logger.error("shop:finalize_from_task_error task_id={} error={}", task_id, exc)
         db.commit()
+        if task.assigned_to:
+            try:
+                referral_svc.process_tasker_progress(task.assigned_to, task_id)
+            except Exception as exc:
+                logger.error("referral:tasker_progress_hook_failed user_id={} task_id={} error={}", task.assigned_to, task_id, exc)
 
         logger.info("task:confirmed task_id={}", task_id)
         updated_task = service.get_task(task_id)
@@ -1059,41 +1182,27 @@ def contest_task(
     task_id: str,
     payload: ContestPayload,
     service: TaskService = Depends(get_task_service),
-    wallet_svc: WalletService = Depends(get_wallet_service),
+    dispute_svc: DisputeService = Depends(get_dispute_service),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Client conteste le travail dans la fenêtre de 6h. Le paiement est gelé."""
+    """Client ou tasker ouvre un litige avant validation finale. Les fonds passent en audit gelé."""
     try:
-        task = _get_task_or_404(task_id, service)
-        if task.created_by != user_id:
-            raise HTTPException(status_code=403, detail="Seul le client peut contester une tâche")
-
-        escrow = wallet_svc.get_escrow_by_task(task_id)
-        if escrow is None:
-            raise HTTPException(status_code=404, detail="Aucun escrow associé à cette tâche")
-
-        try:
-            escrow = wallet_svc.contest_escrow(escrow.id, user_id)
-        except EscrowError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
-
-        # Open a dispute record
-        wallet_svc.open_dispute(
-            user_id=user_id,
+        dispute = dispute_svc.open_task_dispute(
+            task_id=task_id,
+            actor_user_id=user_id,
             reason=payload.reason,
-            dispute_type="dispute",
-            transaction_id=escrow.funding_tx_id,
         )
-
         return success_response({
             "task_id": task_id,
-            "escrow_status": escrow.status,
-            "message": "Contestation enregistrée. Le paiement est gelé en attendant la résolution.",
+            "dispute": dispute,
+            "message": "Litige enregistré. Les fonds sont maintenant gelés en audit.",
         })
-    except HTTPException:
-        raise
     except Exception as exc:
+        if isinstance(exc, ValueError):
+            msg = str(exc)
+            status = 403 if "Seuls le client ou le tasker" in msg else 409
+            raise HTTPException(status_code=status, detail=msg) from exc
         raise HTTPException(status_code=500, detail="Impossible de contester la tâche") from exc
 
 
@@ -1101,7 +1210,9 @@ def contest_task(
 def release_payment(
     task_id: str,
     service: TaskService = Depends(get_task_service),
+    aml_svc: AmlService = Depends(get_aml_service),
     wallet_svc: WalletService = Depends(get_wallet_service),
+    db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
     """Libère le paiement après 6h (si aucune contestation). Peut aussi être appelé
@@ -1115,6 +1226,11 @@ def release_payment(
         escrow = wallet_svc.get_escrow_by_task(task_id)
         if escrow is None:
             raise HTTPException(status_code=404, detail="Aucun escrow pour cette tâche")
+        try:
+            aml_svc.screen_task_before_release(task_id=task_id, actor_user_id=user_id)
+        except ValueError as exc:
+            db.commit()
+            raise HTTPException(status_code=423, detail=str(exc)) from exc
 
         # Client can force-release early
         if task.created_by == user_id:
@@ -1163,21 +1279,90 @@ def match_tasks(
 
 class RateTaskPayload(BaseModel):
     score: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=512)
+
+
+class ClientReviewPayload(BaseModel):
+    punctuality: int = Field(ge=1, le=5)
+    quality: int = Field(ge=1, le=5)
+    communication: int = Field(ge=1, le=5)
+    standards: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=512)
+
+
+class TaskerReviewPayload(BaseModel):
+    instructions: int = Field(ge=1, le=5)
+    behavior: int = Field(ge=1, le=5)
+    payment: int = Field(ge=1, le=5)
+    comment: str | None = Field(default=None, max_length=512)
+
+
+@router.post("/{task_id}/review/tasker")
+def review_tasker(
+    task_id: str,
+    payload: ClientReviewPayload,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        review = RatingService(db).submit_client_review(
+            task_id=task_id,
+            client_user_id=user_id,
+            punctuality_score=payload.punctuality,
+            quality_score=payload.quality,
+            communication_score=payload.communication,
+            standards_score=payload.standards,
+            comment=payload.comment,
+        )
+        return success_response({"rated": True, "review": review})
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer l'avis client sur le tasker") from exc
+
+
+@router.post("/{task_id}/review/client")
+def review_client(
+    task_id: str,
+    payload: TaskerReviewPayload,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        review = RatingService(db).submit_tasker_review(
+            task_id=task_id,
+            tasker_user_id=user_id,
+            instructions_score=payload.instructions,
+            behavior_score=payload.behavior,
+            payment_score=payload.payment,
+            comment=payload.comment,
+        )
+        return success_response({"rated": True, "review": review})
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer l'avis tasker sur le client") from exc
 
 
 @router.post("/{task_id}/rate")
 def rate_task(
     task_id: str,
     payload: RateTaskPayload,
-    service: TaskService = Depends(get_task_service),
+    db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Créateur note le prestataire (1–5) après la fin de la tâche. Une seule fois par tâche."""
+    """Compat legacy: transforme une note simple en revue client→tasker multidimensionnelle."""
     try:
-        service.rate_task(task_id=task_id, score=payload.score, rater_id=user_id)
-        return success_response({"rated": True, "score": payload.score})
-    except HTTPException:
-        raise
+        review = RatingService(db).submit_client_review(
+            task_id=task_id,
+            client_user_id=user_id,
+            punctuality_score=payload.score,
+            quality_score=payload.score,
+            communication_score=payload.score,
+            standards_score=payload.score,
+            comment=payload.comment,
+        )
+        return success_response({"rated": True, "score": payload.score, "review": review})
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:

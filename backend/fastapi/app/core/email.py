@@ -419,3 +419,80 @@ def send_password_reset_email(to_email: str, otp_code: str) -> bool:
         ),
         text_content=f"Code de réinitialisation ZASKA : {otp_code}\nValide {expire} minutes.",
     )
+
+
+def send_welcome_email(to_email: str, full_name: str | None = None) -> bool:
+    from app.core.config import settings as _s
+
+    first_line = f"Bienvenue {full_name}," if full_name else "Bienvenue sur ZASKA,"
+    body = (
+        f'<p style="margin:0 0 16px;font-size:15px;color:#374151;line-height:1.6;">{first_line}</p>'
+        f'<p style="margin:0 0 16px;font-size:15px;color:#374151;line-height:1.6;">'
+        f'Votre compte a été créé avec succès. Vous pouvez maintenant compléter votre profil, '
+        f'finaliser vos vérifications et découvrir les services Zaska disponibles dans votre zone.'
+        f'</p>'
+        f'<div style="background:#F5F3FF;border-left:4px solid #6D28D9;border-radius:8px;padding:16px 20px;margin-bottom:16px;">'
+        f'<p style="margin:0;font-size:14px;color:#111827;">'
+        f'Zaska vous accompagne avec un portefeuille intégré, des protections sociales progressives '
+        f'et un cadre sécurisé pour toutes les transactions.'
+        f'</p></div>'
+        f'<p style="margin:0;font-size:14px;color:#6B7280;">'
+        f'Si votre pays n’est pas encore activé, vous pourrez suivre l’ouverture de votre marché depuis votre compte.'
+        f'</p>'
+    )
+    return send_email(
+        to_email=to_email,
+        subject="Bienvenue sur ZASKA",
+        html_content=_notification_html("🎉", "Bienvenue sur ZASKA", body, "Ouvrir ZASKA", _s.app_frontend_url),
+        text_content="Bienvenue sur ZASKA. Votre compte est prêt et vous pouvez compléter votre profil.",
+    )
+
+
+def send_kyc_expiry_warning_email(
+    to_email: str,
+    days_remaining: int,
+) -> bool:
+    from app.core.config import settings as _s
+
+    body = (
+        f'<p style="margin:0 0 16px;font-size:15px;color:#374151;line-height:1.6;">'
+        f'Votre vérification KYC expire dans <strong>{days_remaining} jours</strong>.</p>'
+        f'<div style="background:#FFF7ED;border-left:4px solid #F59E0B;border-radius:8px;padding:16px 20px;margin-bottom:16px;">'
+        f'<p style="margin:0;font-size:14px;color:#111827;">'
+        f'Pour continuer à accepter des tâches et à utiliser les parcours sensibles, '
+        f'veuillez renouveler votre selfie biométrique et votre casier judiciaire.'
+        f'</p></div>'
+        f'<p style="margin:0;font-size:14px;color:#6B7280;">'
+        f'Le renouvellement est simplifié : vos informations existantes restent préremplies.'
+        f'</p>'
+    )
+    return send_email(
+        to_email=to_email,
+        subject="ZASKA — Votre KYC arrive à expiration",
+        html_content=_notification_html("🪪", "Renouvellement KYC à prévoir", body, "Mettre à jour mon KYC", _s.app_frontend_url),
+        text_content=f"Votre KYC expire dans {days_remaining} jours. Renouvelez-le dans ZASKA.",
+    )
+
+
+def send_kyc_expired_email(to_email: str) -> bool:
+    from app.core.config import settings as _s
+
+    body = (
+        f'<p style="margin:0 0 16px;font-size:15px;color:#374151;line-height:1.6;">'
+        f'Votre vérification KYC a expiré et votre compte a été temporairement suspendu pour les opérations protégées.'
+        f'</p>'
+        f'<div style="background:#FEF2F2;border-left:4px solid #DC2626;border-radius:8px;padding:16px 20px;margin-bottom:16px;">'
+        f'<p style="margin:0;font-size:14px;color:#111827;">'
+        f'Vous conservez l’accès à votre portefeuille et à vos fonds sociaux, '
+        f'mais vous ne pouvez plus accepter de tâches tant que le renouvellement n’est pas validé.'
+        f'</p></div>'
+        f'<p style="margin:0;font-size:14px;color:#6B7280;">'
+        f'Dès validation de votre nouveau KYC, votre accès sera réactivé automatiquement.'
+        f'</p>'
+    )
+    return send_email(
+        to_email=to_email,
+        subject="ZASKA — KYC expiré, action requise",
+        html_content=_notification_html("⛔", "Votre KYC a expiré", body, "Renouveler maintenant", _s.app_frontend_url),
+        text_content="Votre KYC a expiré. Renouvelez-le dans ZASKA pour réactiver votre accès.",
+    )

@@ -6,9 +6,10 @@ import sentry_sdk
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.api import api_router
 from app.api.websocket import (
@@ -30,18 +31,29 @@ from app.core.ws_ticket import consume_ws_ticket
 from app.db.base import Base
 from app.db.session import engine
 from app.models import (  # noqa: F401
+    aml,
+    accounting,
+    access_control,
     audit_log,
+    b2b,
     call_session,
     chat_message,
     dispute,
     feature_flag,
+    food,
+    geography,
     kyc,
     location_config,
+    module_control,
     negotiation_event,
     notification,
     outbox_event,
     payment_method,
     payout,
+    referral,
+    shop,
+    social_protection,
+    subscription,
     support_ticket,
     task,
     task_application,
@@ -50,6 +62,7 @@ from app.models import (  # noqa: F401
     user,
     user_address,
     virtual_card,
+    vtc,
     wallet,
     webhook_idempotency,
 )
@@ -121,9 +134,35 @@ async def lifespan(app: FastAPI):
     # Seed trust catalog — idempotent, skips rows that already exist.
     # Badges and skills tables would be empty on first boot without this.
     from app.db.session import SessionLocal
+    from app.services.access_control_service import AccessControlService
+    from app.services.accounting_ledger_service import AccountingLedgerService
+    from app.services.aml_service import AmlService
+    from app.services.country_rollout_service import CountryRolloutService
+    from app.services.geo_hierarchy_service import GeoHierarchyService
+    from app.services.internal_wallet_seed_service import InternalWalletSeedService
+    from app.services.module_control_service import ModuleControlService
+    from app.services.referral_service import ReferralService
+    from app.services.subscription_service import SubscriptionService
     from app.services.trust_service import TrustService
     _seed_db = SessionLocal()
     try:
+        InternalWalletSeedService(_seed_db).ensure_all()
+        logger.info("ZASKA internal wallet identities seeded")
+        AccessControlService(_seed_db).seed_catalog()
+        logger.info("ZASKA access control catalog seeded")
+        _ = AmlService(_seed_db)
+        AccountingLedgerService(_seed_db).seed_chart_of_accounts()
+        logger.info("ZASKA accounting chart seeded")
+        CountryRolloutService(_seed_db).seed_catalog()
+        logger.info("ZASKA world country catalog seeded")
+        GeoHierarchyService(_seed_db).seed_catalog()
+        logger.info("ZASKA geography catalog seeded")
+        ModuleControlService(_seed_db).seed_catalog()
+        logger.info("ZASKA module catalog seeded")
+        ReferralService(_seed_db).seed_catalog()
+        logger.info("ZASKA referral catalog seeded")
+        SubscriptionService(_seed_db).seed_catalog()
+        logger.info("ZASKA subscription catalog seeded")
         TrustService(_seed_db).seed_catalog()
         logger.info("ZASKA trust catalog seeded")
     except Exception as _seed_err:
@@ -135,6 +174,37 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ─────────────────────────────────────────────────────────
     stop_scheduler()
+
+
+# Public demo endpoints (P4): allocation simulator embedded on the public ZASKA
+# website, served from any origin. They carry no auth/session, so a wildcard
+# Access-Control-Allow-Origin (without credentials) is safe and intentional —
+# this overrides the stricter, allowlist-based CORSMiddleware below for these
+# paths only.
+_PUBLIC_DEMO_PATHS = frozenset(
+    {
+        f"{settings.api_prefix}/v1/simulate-allocation",
+        f"{settings.api_prefix}/v1/allocation-rules",
+        f"{settings.api_prefix}/v1/calculate-benefits",
+    }
+)
+
+
+class PublicDemoCORSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if request.url.path not in _PUBLIC_DEMO_PATHS:
+            return await call_next(request)
+
+        if request.method == "OPTIONS":
+            response = Response(status_code=200)
+        else:
+            response = await call_next(request)
+
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers.pop("Access-Control-Allow-Credentials", None)
+        return response
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -154,6 +224,7 @@ app.add_middleware(
     max_requests=settings.rate_limit_max_requests,
     window_seconds=settings.rate_limit_window_seconds,
 )
+app.add_middleware(PublicDemoCORSMiddleware)
 
 
 @app.middleware("http")
@@ -272,6 +343,27 @@ def health_realtime():
         "ws_chat_connections": ws_chat_connections,
         "call_rooms_active": call_rooms_active,
     })
+
+
+@app.get("/health/ops")
+def health_ops():
+    from app.db.session import SessionLocal
+    from app.services.operations_resilience_service import OperationsResilienceService
+
+    db = SessionLocal()
+    try:
+        snapshot = OperationsResilienceService(db).get_health_snapshot()
+        return success_response(snapshot)
+    finally:
+        db.close()
+
+
+@app.get("/health/backend-readiness")
+def health_backend_readiness():
+    from app.services.production_readiness_service import ProductionReadinessService
+
+    report = ProductionReadinessService().build_report()
+    return success_response(report)
 
 
 @app.get("/health/metrics")

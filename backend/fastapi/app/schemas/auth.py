@@ -26,6 +26,7 @@ class RegisterPayload(BaseModel):
     email: str | None = Field(default=None, min_length=5, max_length=255)
     role: str = Field(default="client", pattern="^(client|tasker)$")
     country: str | None = Field(default=None, max_length=2)
+    referralCode: str | None = Field(default=None, min_length=4, max_length=32)
     cf_turnstile_response: str | None = Field(default=None, max_length=2000)
 
     @field_validator("email")
@@ -44,6 +45,13 @@ class RegisterPayload(BaseModel):
         if len(v) != 2:
             raise ValueError("country must be a 2-letter ISO code (e.g. SN, TG, FR)")
         return v
+
+    @field_validator("referralCode")
+    @classmethod
+    def referral_uppercase(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return v.strip().upper()
 
     @field_validator("password")
     @classmethod

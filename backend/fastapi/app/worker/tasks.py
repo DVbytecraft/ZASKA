@@ -54,3 +54,10 @@ def release_escrow_async(self, escrow_id: str) -> dict:
         raise self.retry(exc=exc, countdown=30) from exc
     finally:
         db.close()
+
+
+# social_protection_cycle, kyc_lifecycle_cycle and operations_resilience_cycle
+# run from the in-process asyncio scheduler (app/core/scheduler.py) — see
+# _run_social_protection_cycle, _run_kyc_lifecycle_cycle and
+# _run_operations_resilience_cycle there. They are intentionally not Celery
+# tasks to avoid running twice per interval.

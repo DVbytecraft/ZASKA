@@ -9,10 +9,12 @@ import { WalletPage } from './pages/WalletPage';
 import { DisputesPage } from './pages/DisputesPage';
 import { CallCenterPage } from './pages/CallCenterPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
+import { AccountingPage } from './pages/AccountingPage';
 import { CountriesPage } from './pages/CountriesPage';
 import { KycReviewPage } from './pages/KycReviewPage';
 import { AuditLogPage } from './pages/AuditLogPage';
 import { FraudFlagsPage } from './pages/FraudFlagsPage';
+import { SocialProtectionPage } from './pages/SocialProtectionPage';
 
 export function AdminApp() {
   const [activePage, setActivePage] = useState('dashboard');
@@ -27,11 +29,13 @@ export function AdminApp() {
       case 'wallet':      return <WalletPage />;
       case 'disputes':    return <DisputesPage />;
       case 'analytics':   return <AnalyticsPage />;
+      case 'accounting':  return <AccountingPage />;
       case 'callcenter':  return <CallCenterPage />;
       case 'countries':   return <CountriesPage />;
       case 'kyc':         return <KycReviewPage />;
       case 'auditlog':    return <AuditLogPage />;
       case 'fraud':       return <FraudFlagsPage />;
+      case 'social':      return <SocialProtectionPage />;
       case 'settings':
         return (
           <div className="p-6">
