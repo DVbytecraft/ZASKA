@@ -11,6 +11,11 @@ engine = create_engine(
     pool_timeout=30,
     pool_recycle=settings.db_pool_recycle,
     # echo_pool=True,  # uncomment for connection pool debugging
+    # PgBouncer transaction-mode pooling can hand a client different backend
+    # connections between statements; psycopg3's server-side prepared
+    # statements would then collide with statements already prepared by
+    # other clients on that backend connection (DuplicatePreparedStatement).
+    connect_args={"prepare_threshold": None},
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

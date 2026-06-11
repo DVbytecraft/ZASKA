@@ -2,11 +2,13 @@ import asyncio
 import json
 import logging
 from collections import defaultdict
+from typing import AsyncIterator
 
+import redis.exceptions
 from fastapi import WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from app.core.redis_client import redis_async
+from app.core.redis_client import redis_async, redis_pubsub_async
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +16,25 @@ logger = logging.getLogger(__name__)
 # At ~1KB per WS state entry, 10k entries ≈ 10MB — well within limits.
 _MAX_CHAT_CONNECTIONS_PER_TASK = 50
 _MAX_CALL_NOTIFICATION_CONNECTIONS = 10_000
+
+
+async def _resilient_listen(pubsub) -> AsyncIterator[dict]:
+    """Iterate pubsub messages, swallowing idle TimeoutErrors.
+
+    redis_pubsub_async uses socket_timeout=5, so listen() raises
+    redis.exceptions.TimeoutError every ~5s when no message arrives — that's
+    just "still idle", not a problem, so we silently continue waiting.
+    redis.exceptions.ConnectionError means the connection actually died;
+    that propagates to the caller's except block, which resubscribes.
+    """
+    listener = pubsub.listen()
+    while True:
+        try:
+            yield await listener.__anext__()
+        except StopAsyncIteration:
+            return
+        except redis.exceptions.TimeoutError:
+            continue
 
 
 # ── Chat WebSocket manager ─────────────────────────────────────────────────────
@@ -72,10 +93,10 @@ class TaskChatWebSocketManager:
     async def _redis_subscriber(self) -> None:
         while True:
             try:
-                pubsub = redis_async.pubsub()
+                pubsub = redis_pubsub_async.pubsub()
                 await pubsub.psubscribe("task-chat:*")
                 logger.info("chat_ws: Redis pubsub subscriber started")
-                async for message in pubsub.listen():
+                async for message in _resilient_listen(pubsub):
                     if message.get("type") not in ("pmessage", "message"):
                         continue
                     channel: str = message.get("channel", "")
@@ -188,10 +209,10 @@ class CallSignalingManager:
         """
         while True:
             try:
-                pubsub = redis_async.pubsub()
+                pubsub = redis_pubsub_async.pubsub()
                 await pubsub.psubscribe("signaling:relay:*")
                 logger.info("call_signaling: cross-instance relay subscriber started")
-                async for message in pubsub.listen():
+                async for message in _resilient_listen(pubsub):
                     if message.get("type") not in ("pmessage", "message"):
                         continue
                     channel: str = message.get("channel", "")
@@ -357,9 +378,9 @@ class UserCallNotificationManager:
     async def _redis_subscriber(self) -> None:
         while True:
             try:
-                pubsub = redis_async.pubsub()
+                pubsub = redis_pubsub_async.pubsub()
                 await pubsub.psubscribe(f"{self._CHAN_PREFIX}*")
-                async for message in pubsub.listen():
+                async for message in _resilient_listen(pubsub):
                     if message.get("type") not in ("pmessage", "message"):
                         continue
                     channel: str = message.get("channel", "")

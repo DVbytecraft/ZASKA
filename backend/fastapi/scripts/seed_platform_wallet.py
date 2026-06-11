@@ -20,6 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def run() -> str:
     """Create or retrieve the platform wallet user. Returns the user_id."""
+    from app.core.observability.logger import redirect_to_stderr
+    redirect_to_stderr()
+
     from app.db.session import SessionLocal
     from app.services.internal_wallet_seed_service import InternalWalletSeedService
 

@@ -19,6 +19,14 @@ _COMMON_KWARGS = dict(
     health_check_interval=30,
 )
 
+# Pub/sub listeners use the same socket_timeout as other connections.
+# listen() raises redis.exceptions.TimeoutError every ~socket_timeout seconds
+# of inactivity — callers treat that as "no message yet" and loop again
+# (see websocket._resilient_listen). A bare socket_timeout=None would let a
+# connection silently dropped by a NAT/load balancer hang forever instead of
+# surfacing as a TimeoutError/ConnectionError that triggers reconnection.
+_PUBSUB_KWARGS = dict(_COMMON_KWARGS)
+
 # Lighter kwargs for Sentinel connections (short timeout for discovery).
 _SENTINEL_NODE_KWARGS = dict(socket_timeout=0.5, socket_connect_timeout=0.5)
 
@@ -65,6 +73,11 @@ if _sentinel_raw:
         max_connections=settings.redis_max_async_connections,
         **_SENTINEL_MASTER_KWARGS,
     )
+    redis_pubsub_async: AsyncRedis = _async_sentinel.master_for(
+        _master_name,
+        max_connections=settings.redis_max_async_connections,
+        **_SENTINEL_MASTER_KWARGS,
+    )
 else:
     # ── Standard mode: single Redis URL ──────────────────────────────────
     redis_sync = Redis.from_url(settings.redis_url, **_COMMON_KWARGS)
@@ -72,4 +85,9 @@ else:
         settings.redis_url,
         max_connections=settings.redis_max_async_connections,
         **_COMMON_KWARGS,
+    )
+    redis_pubsub_async: AsyncRedis = AsyncRedis.from_url(
+        settings.redis_url,
+        max_connections=settings.redis_max_async_connections,
+        **_PUBSUB_KWARGS,
     )

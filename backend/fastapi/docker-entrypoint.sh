@@ -37,13 +37,33 @@ echo "[entrypoint] Seeding social fund wallet users..."
 _SEEDED_SOCIAL_EXPORTS=$(python /app/backend/fastapi/scripts/seed_social_funds.py)
 
 for _ASSIGNMENT in $_SEEDED_SOCIAL_EXPORTS; do
+    case "${_ASSIGNMENT}" in
+        *=*) ;;
+        *) continue ;;  # not a KEY=VALUE token (e.g. stray log noise) — skip
+    esac
+
     _KEY=${_ASSIGNMENT%%=*}
     _VALUE=${_ASSIGNMENT#*=}
+
+    # Only allow shell-identifier-safe keys (POSIX: [A-Za-z_][A-Za-z0-9_]*)
+    # before handing _KEY to eval. Anything else is skipped to avoid
+    # "Bad substitution" / arbitrary-expansion from unexpected tokens.
+    case "${_KEY}" in
+        [A-Za-z_]*)
+            case "${_KEY}" in
+                *[!A-Za-z0-9_]*) continue ;;
+            esac
+            ;;
+        *) continue ;;
+    esac
+
+    [ -z "${_VALUE}" ] && continue
+
     eval "_CURRENT=\${${_KEY}:-}"
-    if [ -z "${_CURRENT}" ] && [ -n "${_VALUE}" ]; then
+    if [ -z "${_CURRENT}" ]; then
         export "${_KEY}=${_VALUE}"
         echo "[entrypoint] ${_KEY} auto-set from seed: ${_VALUE}"
-    elif [ -n "${_CURRENT}" ]; then
+    else
         echo "[entrypoint] ${_KEY} already configured: ${_CURRENT}"
     fi
 done

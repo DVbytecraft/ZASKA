@@ -60,14 +60,25 @@ services:
   # FastAPI connects to pgbouncer:6432 instead of postgres:5432.
   # DB_POOL_SIZE is reduced to 3 because PgBouncer absorbs burst concurrency.
   pgbouncer:
-    image: edoburu/pgbouncer:1.22.0
+    image: edoburu/pgbouncer:1.17.0
     container_name: zaska-pgbouncer
     environment:
       DB_HOST: postgres
       DB_PORT: "5432"
+      LISTEN_PORT: "6432"
       DB_USER: zaska_admin
       DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       DB_NAME: zaska
+      # postgres uses scram-sha-256; pgbouncer needs the plaintext password in
+      # userlist.txt to complete SCRAM auth against the backend server.
+      #
+      # NOTE: AUTH_TYPE=scram-sha-256 was tried (to make pgbouncer run real SCRAM
+      # with our app too, instead of clear-text password compare) but pgbouncer
+      # 1.17 (this image's pinned version) fails client SASL auth against a
+      # plain-text userlist entry ("FATAL: SASL authentication failed" from
+      # psycopg). This is a known upstream limitation in 1.17 — revisit once we
+      # migrate to a maintained pgbouncer image with a newer release (>=1.21).
+      AUTH_TYPE: plain
       POOL_MODE: transaction
       MAX_CLIENT_CONN: "1000"
       DEFAULT_POOL_SIZE: "20"
@@ -88,9 +99,9 @@ services:
       - zaska-network
     healthcheck:
       # pg_isready is NOT available in the edoburu/pgbouncer Alpine image.
-      # Use a TCP-level check instead: /dev/tcp verifies the port is accepting connections.
+      # /dev/tcp is a bash-ism not supported by this image's ash shell; use nc instead.
       # PgBouncer listens on 6432; if it's up, the TCP connect succeeds.
-      test: ["CMD-SHELL", "sh -c 'echo > /dev/tcp/localhost/6432' 2>/dev/null && echo ok"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 6432"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -207,9 +218,9 @@ services:
       ALEMBIC_DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
       DB_POOL_SIZE: "3"
       DB_MAX_OVERFLOW: "2"
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/2}
       PYTHONPATH: /app/backend/fastapi
     volumes:
       - ./backend/fastapi/app:/app/backend/fastapi/app
@@ -246,9 +257,9 @@ services:
       ALEMBIC_DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
       DB_POOL_SIZE: "3"
       DB_MAX_OVERFLOW: "2"
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/2}
       PYTHONPATH: /app/backend/fastapi
     volumes:
       - ./backend/fastapi/app:/app/backend/fastapi/app
@@ -275,9 +286,9 @@ services:
       ALEMBIC_DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
       DB_POOL_SIZE: "2"
       DB_MAX_OVERFLOW: "1"
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/1}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/2}
       PYTHONPATH: /app/backend/fastapi
     volumes:
       - ./backend/fastapi/app:/app/backend/fastapi/app

@@ -66,16 +66,23 @@ class CountryRolloutService:
     def ensure_country(self, country_code: str) -> Country:
         cc = country_code.strip().upper()
         existing = self.get_by_code(cc)
+        reference = get_country_reference(cc) or {}
+        display_en = str(reference.get("name_en") or cc)
+        if existing is None:
+            # Legacy rows from the old name+city seed have iso_code=NULL and a
+            # display name (e.g. "Benin") instead of an ISO code. Match those
+            # before inserting, otherwise we'd violate the unique name constraint.
+            existing = self.db.execute(
+                select(Country).where(Country.iso_code.is_(None), Country.name == display_en)
+            ).scalars().first()
         if existing is not None:
             self._hydrate_missing_fields(existing, cc)
             self.db.commit()
             self.db.refresh(existing)
             return existing
 
-        reference = get_country_reference(cc) or {}
         config = get_config(cc)
         provider_names = list(dict.fromkeys(config.payment_providers))
-        display_en = str(reference.get("name_en") or cc)
         display_fr = str(reference.get("name_fr") or display_en)
         primary_city_name = str(reference.get("primary_city_name") or cc)
         continent_code = str(reference.get("continent_code") or "OTHER")

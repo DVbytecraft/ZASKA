@@ -121,3 +121,15 @@ def set_user_id(user_id: str) -> None:
 
 def get_request_id() -> str:
     return _request_id_var.get()
+
+
+def redirect_to_stderr() -> None:
+    """Re-point all log sinks at stderr.
+
+    CLI scripts (e.g. seed scripts run from docker-entrypoint.sh) print
+    machine-readable output on stdout that the shell captures via $(...).
+    The default logger sinks write to stdout too, which corrupts that
+    capture. Call this before any logging happens in such scripts.
+    """
+    _loguru.remove()
+    _loguru.add(sys.stderr, level="DEBUG" if not settings.is_production else "INFO")
