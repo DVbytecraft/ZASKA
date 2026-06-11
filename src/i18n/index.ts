@@ -18,9 +18,30 @@ export function getLangForCountry(countryCode: string | null | undefined): strin
   return COUNTRY_LANGUAGE[countryCode.toUpperCase()] ?? "fr";
 }
 
-/** Call after login to switch language based on user's country. */
+const LANGUAGE_STORAGE_KEY = "zaska_language";
+
+/** Persists a manual language choice so it survives app reloads. */
+export function setUserLanguage(lang: string): void {
+  try {
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, lang);
+  } catch {
+    // localStorage unavailable (e.g. private mode) — language still changes for this session
+  }
+  void i18n.changeLanguage(lang);
+}
+
+/**
+ * Call after login to switch language based on user's country.
+ * A previously saved manual language choice (via setUserLanguage) takes priority.
+ */
 export function setAppLanguage(countryCode: string | null | undefined): void {
-  const lang = getLangForCountry(countryCode);
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+  } catch {
+    // localStorage unavailable — fall back to country-based language
+  }
+  const lang = stored ?? getLangForCountry(countryCode);
   if (i18n.language !== lang) {
     void i18n.changeLanguage(lang);
   }

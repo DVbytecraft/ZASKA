@@ -53,6 +53,7 @@ const AddressesScreen = lazy(() => import('./screens/AddressesScreen').then(m =>
 const VirtualCardScreen = lazy(() => import('./screens/VirtualCardScreen').then(m => ({ default: m.VirtualCardScreen })));
 const TaskHistoryScreen = lazy(() => import('./screens/TaskHistoryScreen').then(m => ({ default: m.TaskHistoryScreen })));
 const SettingsScreen = lazy(() => import('./screens/SettingsScreen').then(m => ({ default: m.SettingsScreen })));
+const SocialProtectionScreen = lazy(() => import('./screens/SocialProtectionScreen').then(m => ({ default: m.SocialProtectionScreen })));
 const SupportScreen = lazy(() => import('./screens/SupportScreen').then(m => ({ default: m.SupportScreen })));
 const FAQScreen = lazy(() => import('./screens/FAQScreen').then(m => ({ default: m.FAQScreen })));
 const ReportIssueScreen = lazy(() => import('./screens/ReportIssueScreen').then(m => ({ default: m.ReportIssueScreen })));
@@ -83,7 +84,8 @@ type Screen =
   | 'taskHistory' | 'settings' | 'support' | 'faq' | 'reportIssue' | 'loading'
   | 'skeletonLoading' | 'error' | 'noInternet' | 'paymentFailed' | 'taskCancelled'
   | 'noTaskersAvailable' | 'taskExpired' | 'priceNegotiation' | 'admin'
-  | 'adminDashboard' | 'callCenter' | 'kyc' | 'forgotPassword' | 'resetPassword';
+  | 'adminDashboard' | 'callCenter' | 'kyc' | 'forgotPassword' | 'resetPassword'
+  | 'socialProtection';
 
 interface GlobalCall {
   callId: string;
@@ -620,8 +622,12 @@ export default function App() {
             onBack={() => setCurrentScreen('profile')}
             onSupport={() => setCurrentScreen('support')}
             onLogout={() => { void authService.logout(); setCurrentScreen('login'); }}
+            onSocialProtection={() => setCurrentScreen('socialProtection')}
           />
         );
+
+      case 'socialProtection':
+        return <SocialProtectionScreen onBack={() => setCurrentScreen('settings')} />;
 
       case 'support':
         return <SupportScreen onBack={() => setCurrentScreen('profile')} onFAQ={() => setCurrentScreen('faq')} />;

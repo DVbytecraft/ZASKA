@@ -207,5 +207,38 @@
   "fx": {
     "equiv": "≈",
     "convertedFrom": "Converti depuis {{currency}}"
+  },
+  "settings": {
+    "title": "Paramètres",
+    "preferences": "Préférences",
+    "notifications": "Notifications",
+    "enabled": "Activées",
+    "language": "Langue",
+    "privacySecurity": "Confidentialité & Sécurité",
+    "privacyPolicy": "Politique de confidentialité",
+    "terms": "Conditions d'utilisation",
+    "assistance": "Assistance",
+    "helpSupport": "Aide & Support",
+    "myContributions": "Mes cotisations sociales",
+    "logout": "Se déconnecter"
+  },
+  "socialProtection": {
+    "title": "Mes cotisations",
+    "completedTasks": "Tâches complétées",
+    "activeMonths": "Mois d'activité",
+    "pension": "Retraite",
+    "totalContributed": "Total cotisé",
+    "projectedPension": "Pension mensuelle projetée",
+    "progressToGuarantee": "Progression vers la pension garantie",
+    "health": "Santé",
+    "healthActive": "Couverture active",
+    "healthInactive": "Couverture inactive",
+    "activeDays": "Jours actifs ce mois",
+    "totalPaidAuthorities": "Total versé aux autorités",
+    "smoothing": "Fonds de lissage",
+    "availableBalance": "Solde disponible",
+    "interestRedirected": "Intérêts redirigés vers la retraite",
+    "noData": "Aucune donnée disponible pour le moment.",
+    "errorLoad": "Impossible de charger vos cotisations"
   }
 }

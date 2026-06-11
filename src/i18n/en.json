@@ -207,5 +207,38 @@
   "fx": {
     "equiv": "≈",
     "convertedFrom": "Converted from {{currency}}"
+  },
+  "settings": {
+    "title": "Settings",
+    "preferences": "Preferences",
+    "notifications": "Notifications",
+    "enabled": "Enabled",
+    "language": "Language",
+    "privacySecurity": "Privacy & Security",
+    "privacyPolicy": "Privacy policy",
+    "terms": "Terms of service",
+    "assistance": "Support",
+    "helpSupport": "Help & Support",
+    "myContributions": "My social contributions",
+    "logout": "Log out"
+  },
+  "socialProtection": {
+    "title": "My contributions",
+    "completedTasks": "Completed tasks",
+    "activeMonths": "Active months",
+    "pension": "Retirement",
+    "totalContributed": "Total contributed",
+    "projectedPension": "Projected monthly pension",
+    "progressToGuarantee": "Progress toward guaranteed pension",
+    "health": "Health",
+    "healthActive": "Coverage active",
+    "healthInactive": "Coverage inactive",
+    "activeDays": "Active days this month",
+    "totalPaidAuthorities": "Total paid to authorities",
+    "smoothing": "Smoothing fund",
+    "availableBalance": "Available balance",
+    "interestRedirected": "Interest redirected to pension",
+    "noData": "No data available yet.",
+    "errorLoad": "Unable to load your contributions"
   }
 }

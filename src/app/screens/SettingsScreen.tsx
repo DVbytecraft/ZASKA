@@ -1,32 +1,52 @@
-import { ArrowLeft, Bell, Shield, Globe, HelpCircle, LogOut, ChevronRight } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { ArrowLeft, Bell, Shield, Globe, HelpCircle, LogOut, ChevronRight, PiggyBank } from 'lucide-react';
 import { Card } from '../components/Card';
+import { setUserLanguage } from '../../i18n';
 
 interface SettingsScreenProps {
   onBack: () => void;
   onSupport: () => void;
   onLogout: () => void;
+  onSocialProtection?: () => void;
 }
 
-export function SettingsScreen({ onBack, onSupport, onLogout }: SettingsScreenProps) {
+const LANGUAGES = [
+  { code: 'fr', label: 'Français' },
+  { code: 'en', label: 'English' },
+];
+
+export function SettingsScreen({ onBack, onSupport, onLogout, onSocialProtection }: SettingsScreenProps) {
+  const { t, i18n } = useTranslation();
+
+  const currentLanguage = LANGUAGES.find((l) => l.code === i18n.language) ?? LANGUAGES[0];
+
+  const toggleLanguage = () => {
+    const next = LANGUAGES.find((l) => l.code !== currentLanguage.code) ?? LANGUAGES[0];
+    setUserLanguage(next.code);
+  };
+
   const settingsSections = [
     {
-      title: 'Préférences',
+      title: t('settings.preferences'),
       items: [
-        { icon: Bell, label: 'Notifications', value: 'Activées', color: 'text-purple-600', bg: 'bg-purple-50' },
-        { icon: Globe, label: 'Langue', value: 'Français', color: 'text-blue-600', bg: 'bg-blue-50' },
+        { icon: Bell, label: t('settings.notifications'), value: t('settings.enabled'), color: 'text-purple-600', bg: 'bg-purple-50' },
+        { icon: Globe, label: t('settings.language'), value: currentLanguage.label, color: 'text-blue-600', bg: 'bg-blue-50', onClick: toggleLanguage },
       ]
     },
     {
-      title: 'Confidentialité & Sécurité',
+      title: t('settings.privacySecurity'),
       items: [
-        { icon: Shield, label: 'Politique de confidentialité', color: 'text-green-600', bg: 'bg-green-50' },
-        { icon: Shield, label: 'Conditions d\'utilisation', color: 'text-green-600', bg: 'bg-green-50' },
+        { icon: Shield, label: t('settings.privacyPolicy'), color: 'text-green-600', bg: 'bg-green-50' },
+        { icon: Shield, label: t('settings.terms'), color: 'text-green-600', bg: 'bg-green-50' },
+        ...(onSocialProtection
+          ? [{ icon: PiggyBank, label: t('settings.myContributions'), color: 'text-purple-600', bg: 'bg-purple-50', onClick: onSocialProtection }]
+          : []),
       ]
     },
     {
-      title: 'Assistance',
+      title: t('settings.assistance'),
       items: [
-        { icon: HelpCircle, label: 'Aide & Support', color: 'text-orange-600', bg: 'bg-orange-50', onClick: onSupport },
+        { icon: HelpCircle, label: t('settings.helpSupport'), color: 'text-orange-600', bg: 'bg-orange-50', onClick: onSupport },
       ]
     }
   ];
@@ -38,7 +58,7 @@ export function SettingsScreen({ onBack, onSupport, onLogout }: SettingsScreenPr
           <button onClick={onBack} className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors">
             <ArrowLeft size={24} className="text-gray-700" />
           </button>
-          <h2 className="text-2xl font-bold text-gray-900">Paramètres</h2>
+          <h2 className="text-2xl font-bold text-gray-900">{t('settings.title')}</h2>
         </div>
       </div>
 
@@ -72,7 +92,7 @@ export function SettingsScreen({ onBack, onSupport, onLogout }: SettingsScreenPr
           className="w-full mt-8 p-4 bg-white rounded-xl border border-red-200 hover:bg-red-50 transition-colors flex items-center justify-center gap-3"
         >
           <LogOut size={20} className="text-red-600" />
-          <span className="font-semibold text-red-600">Se déconnecter</span>
+          <span className="font-semibold text-red-600">{t('settings.logout')}</span>
         </button>
       </div>
     </div>
