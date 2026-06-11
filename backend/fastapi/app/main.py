@@ -244,6 +244,11 @@ async def security_headers_middleware(request, call_next):
     return response
 
 
+@app.get("/", include_in_schema=False)
+def root():
+    return success_response({"status": "ok", "service": settings.app_name, "environment": settings.env})
+
+
 @app.get("/health")
 def health():
     return success_response({"status": "ok"})
