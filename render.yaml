@@ -5,8 +5,10 @@
 # Before deploying:
 #   1. Create a FREE Redis at https://upstash.com (no credit card required)
 #   2. Copy your Upstash Redis URL (starts with rediss://)
-#   3. After Blueprint deploys, paste it in the dashboard for REDIS_URL,
-#      CELERY_BROKER_URL, and CELERY_RESULT_BACKEND
+#   3. After Blueprint deploys, paste it in the dashboard for REDIS_URL.
+#      Background jobs (escrow auto-release, OTP cleanup, payment recovery,
+#      webhook draining, etc.) run from the native asyncio scheduler inside
+#      the zaska-backend process — no separate worker service is needed.
 
 databases:
   - name: zaska-postgres
@@ -42,10 +44,6 @@ services:
       # ── Set these manually in Render dashboard after deploy ────────────────
       - key: REDIS_URL
         sync: false          # paste your Upstash URL: rediss://default:xxx@host:port
-      - key: CELERY_BROKER_URL
-        sync: false          # same Upstash URL
-      - key: CELERY_RESULT_BACKEND
-        sync: false          # same Upstash URL
       - key: BREVO_API_KEY
         sync: false
       - key: EMAIL_FROM_ADDRESS
@@ -96,45 +94,3 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
-
-  # ── Celery Worker + Beat (background tasks: escrow auto-release, OTP cleanup, etc.) ──
-  - type: worker
-    name: zaska-celery
-    runtime: docker
-    dockerfilePath: ./backend/fastapi/Dockerfile
-    dockerContext: .
-    plan: free
-    dockerCommand: celery -A app.worker.celery_app.celery_app worker -B --loglevel=info --concurrency=1
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: zaska-postgres
-          property: connectionString
-      - key: PYTHONPATH
-        value: /app/backend/fastapi
-      - key: ENV
-        value: staging
-      - key: PAYMENT_MODE
-        value: sandbox
-      - key: JWT_SECRET
-        sync: false          # MUST be the same value as zaska-backend JWT_SECRET
-      - key: REDIS_URL
-        sync: false
-      - key: CELERY_BROKER_URL
-        sync: false
-      - key: CELERY_RESULT_BACKEND
-        sync: false
-      - key: BREVO_API_KEY
-        sync: false
-      - key: EMAIL_FROM_ADDRESS
-        sync: false
-      - key: APP_FRONTEND_URL
-        sync: false
-      - key: FLUTTERWAVE_SECRET_KEY
-        sync: false
-      - key: STRIPE_SECRET_KEY
-        sync: false
-      - key: FEDAPAY_API_KEY
-        sync: false
-      - key: PAYSTACK_SECRET_KEY
-        sync: false

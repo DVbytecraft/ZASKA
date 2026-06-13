@@ -53,6 +53,8 @@ _JOB_MAX_SILENCE: dict[str, float] = {
     "moderation_auto_escalate": 7200, # hourly job — alert after 2h silence
     "operations_resilience_cycle": 900,
     "sandbox_data_cleanup": 90000,  # daily job — alert after 25h silence
+    "drain_webhook_queue": 120,
+    "payment_recovery": 900,
 }
 
 
@@ -227,6 +229,44 @@ def _process_outbox() -> None:
             )
     except Exception as exc:
         logger.error("outbox_processor: failed — %s", exc)
+    finally:
+        db.close()
+
+
+def _drain_webhook_queue() -> None:
+    """Drain pending payment webhook events queued in Redis.
+
+    Lock TTL = 25s (interval 30s - 5s).  Replaces the former Celery
+    "drain-webhook-queue-every-30s" beat schedule.
+    """
+    if not _acquire_job_lock("drain_webhook_queue", 25):
+        return
+    from app.workers.payment_webhook_worker import process_webhook
+    drained = 0
+    for _ in range(10):
+        result = process_webhook()
+        if not result.get("processed") and result.get("reason") == "empty":
+            break
+        drained += 1
+    if drained:
+        logger.info("drain_webhook_queue: drained=%s", drained)
+
+
+def _run_payment_recovery() -> None:
+    """Recover stuck escrow payments and reconcile providers.
+
+    Lock TTL = 290s (interval 300s - 10s).  Replaces the former Celery
+    "payment-recovery-every-5m" beat schedule.
+    """
+    if not _acquire_job_lock("payment_recovery", 290):
+        return
+    from app.services.payment.recovery_engine import RecoveryEngine
+    db = SessionLocal()
+    try:
+        result = RecoveryEngine(db).recover_stuck_payments("DEFAULT")
+        logger.info("payment_recovery: stuck_count=%s", result["stuck_count"])
+    except Exception as exc:
+        logger.error("payment_recovery: failed — %s", exc)
     finally:
         db.close()
 
@@ -483,6 +523,8 @@ def start_scheduler() -> None:
         (3600,  "moderation_auto_escalate", _moderation_auto_escalate),
         (300,   "operations_resilience_cycle", _run_operations_resilience_cycle),
         (86400, "sandbox_data_cleanup",     _cleanup_sandbox_data),
+        (30,    "drain_webhook_queue",      _drain_webhook_queue),
+        (300,   "payment_recovery",         _run_payment_recovery),
     ]
     for interval, name, fn in jobs:
         task = asyncio.create_task(_run_every(interval, name, fn))

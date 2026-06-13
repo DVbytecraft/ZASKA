@@ -62,8 +62,6 @@ class ProductionReadinessService:
         checks.append(self._check("jwt_secret_length", len(settings.jwt_secret.strip()) >= 32, "JWT_SECRET doit avoir au moins 32 caractères"))
         checks.append(self._check("api_prefix_set", bool(settings.api_prefix.strip()), "API prefix configuré"))
         checks.append(self._check("redis_url_set", bool(settings.redis_url.strip()), "Redis URL configuré"))
-        checks.append(self._check("celery_broker_set", bool(settings.celery_broker_url.strip()), "Celery broker configuré"))
-        checks.append(self._check("celery_backend_set", bool(settings.celery_result_backend.strip()), "Celery result backend configuré"))
 
         if env_norm == "production":
             checks.append(self._check("payment_mode_production", settings.payment_mode == "production", "ENV=production doit utiliser PAYMENT_MODE=production"))
@@ -145,8 +143,6 @@ class ProductionReadinessService:
             "app.services.shop_service",
             "app.services.food_service",
             "app.services.operations_resilience_service",
-            "app.worker.tasks",
-            "app.worker.celery_app",
             "app.core.scheduler",
         ]
         checks = []

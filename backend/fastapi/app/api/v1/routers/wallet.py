@@ -45,7 +45,6 @@ from app.services.wallet_service import (
     WalletNotFoundError,
     WalletService,
 )
-from app.worker.tasks import release_escrow_async
 
 try:
     import stripe as _stripe  # stripe==11.4.0 dans requirements.txt
@@ -305,8 +304,9 @@ def release_escrow(
         if escrow.payer_id != user_id:
             raise HTTPException(status_code=403, detail="Non autorise : vous n'etes pas le payeur de cet escrow")
         PaymentSafetyLayer(svc.db).assert_payout_safe(user_id=user_id)
-        task = release_escrow_async.delay(escrow_id)
-        return success_response({"escrow_id": escrow_id, "status": "queued", "job_id": task.id})
+        released = svc.release_escrow_safe(escrow_id)
+        svc.finalize_transaction(released.id)
+        return success_response({"escrow_id": escrow_id, "status": released.status})
     except PaymentSafetyError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except EscrowError as exc:

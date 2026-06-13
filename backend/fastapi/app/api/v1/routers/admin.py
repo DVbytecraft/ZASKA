@@ -1929,8 +1929,8 @@ def queue_payout_retry(
     db.commit()
 
     from app.workers.payout_worker import retry_payout
-    task = retry_payout.delay(payout_id)
-    return success_response({"payout_id": payout_id, "job_id": task.id, "queued": True})
+    result = retry_payout(payout_id)
+    return success_response({"payout_id": payout_id, "result": result})
 
 
 # ── KYC management ────────────────────────────────────────────────────────────
@@ -2806,8 +2806,8 @@ def retry_transaction(
     payout.status = "failed"
     db.commit()
     from app.workers.payout_worker import retry_payout
-    job = retry_payout.delay(payout.id)
-    return success_response({"tx_id": tx_id, "payout_id": payout.id, "job_id": job.id})
+    result = retry_payout(payout.id)
+    return success_response({"tx_id": tx_id, "payout_id": payout.id, "result": result})
 
 
 # ── Admin escrows ─────────────────────────────────────────────────────────────

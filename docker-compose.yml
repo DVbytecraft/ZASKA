@@ -219,12 +219,11 @@ services:
       DB_POOL_SIZE: "3"
       DB_MAX_OVERFLOW: "2"
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/1}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/2}
       PYTHONPATH: /app/backend/fastapi
     volumes:
       - ./backend/fastapi/app:/app/backend/fastapi/app
       - ./backend/fastapi/alembic:/app/backend/fastapi/alembic
+      - zaska-backups:/app/backups
     depends_on:
       pgbouncer:
         condition: service_healthy
@@ -240,66 +239,6 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
-
-  celery_worker:
-    build:
-      context: .
-      dockerfile: backend/fastapi/Dockerfile
-    container_name: zaska-celery-worker
-    command: ["celery", "-A", "app.worker.celery_app.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
-    env_file:
-      - backend/fastapi/.env
-    environment:
-      # Route through PgBouncer for consistency with API pods.
-      # Celery tasks create a new SQLAlchemy session per task and close it at end —
-      # this is compatible with PgBouncer's transaction mode.
-      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@pgbouncer:6432/zaska
-      ALEMBIC_DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
-      DB_POOL_SIZE: "3"
-      DB_MAX_OVERFLOW: "2"
-      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/1}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/2}
-      PYTHONPATH: /app/backend/fastapi
-    volumes:
-      - ./backend/fastapi/app:/app/backend/fastapi/app
-      - zaska-backups:/app/backups
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - zaska-network
-    restart: unless-stopped
-
-  celery_beat:
-    build:
-      context: .
-      dockerfile: backend/fastapi/Dockerfile
-    container_name: zaska-celery-beat
-    command: ["celery", "-A", "app.worker.celery_app.celery_app", "beat", "--loglevel=info", "--scheduler=celery.beat:PersistentScheduler", "--schedule=/tmp/celerybeat-schedule"]
-    env_file:
-      - backend/fastapi/.env
-    environment:
-      DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@pgbouncer:6432/zaska
-      ALEMBIC_DATABASE_URL: postgresql+psycopg://zaska_admin:${POSTGRES_PASSWORD:-secure_env_var}@postgres:5432/zaska
-      DB_POOL_SIZE: "2"
-      DB_MAX_OVERFLOW: "1"
-      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@redis:6379/0}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://:${REDIS_PASSWORD}@redis:6379/1}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://:${REDIS_PASSWORD}@redis:6379/2}
-      PYTHONPATH: /app/backend/fastapi
-    volumes:
-      - ./backend/fastapi/app:/app/backend/fastapi/app
-    depends_on:
-      pgbouncer:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - zaska-network
-    restart: unless-stopped
 
   frontend:
     build:

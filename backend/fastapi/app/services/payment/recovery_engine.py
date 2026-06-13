@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from app.models.wallet import Escrow
 from app.services.payment.reconciliation_engine import ReconciliationEngine
 from app.services.payment.webhook_queue import WebhookQueue
-from app.worker.celery_app import celery_app
 from app.workers.payment_webhook_worker import process_webhook
 
 
@@ -27,18 +26,7 @@ class RecoveryEngine:
             payload = WebhookQueue.pop()
             if not payload:
                 break
-            process_webhook.delay(payload)
+            process_webhook(payload)
 
         report = ReconciliationEngine(self.db).reconcile_all(country_code)
         return {"stuck_count": len(stuck), "reconciliation": report}
-
-
-@celery_app.task(name="app.services.payment.recovery_engine.run_recovery")
-def run_recovery(country_code: str = "DEFAULT"):
-    from app.db.session import SessionLocal
-
-    db = SessionLocal()
-    try:
-        return RecoveryEngine(db).recover_stuck_payments(country_code)
-    finally:
-        db.close()

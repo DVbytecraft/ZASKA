@@ -39,7 +39,6 @@ from app.services.payment.stripe_provider import StripeProvider
 from app.services.payment_service import PaymentService
 from app.services.payment.webhook_queue import QueuedWebhookEvent, WebhookQueue
 from app.services.wallet_service import WalletService
-from app.worker.celery_app import celery_app as _celery_app
 
 
 _SENSITIVE_KEYS = frozenset({
@@ -316,7 +315,8 @@ async def _dispatch_provider_webhook(
             processed, _ = _credit_wallet_from_topup_event(event, wallet_svc, provider_name, db=db)
             return {"received": True, "duplicate": not processed}
 
-        # Escrow-based payment → enqueue for async Celery processing
+        # Escrow-based payment → enqueue for async processing by the native
+        # scheduler's drain_webhook_queue job (runs every 30s).
         idem_key = f"{provider_name}:{event.provider_tx_id}"
         if event.provider_tx_id and WebhookQueue.is_processed(idem_key, db=db):
             return {"received": True, "duplicate": True}
@@ -330,13 +330,6 @@ async def _dispatch_provider_webhook(
                 request_id=request.headers.get("x-request-id", ""),
             )
         )
-        try:
-            _celery_app.send_task("app.workers.payment_webhook_worker.process_webhook")
-        except Exception as _celery_err:
-            logger.warning(
-                "webhook:celery_unavailable provider={} — queued for drain: {}",
-                provider_name, _celery_err,
-            )
 
     except InvalidWebhookSignature as exc:
         logger.warning("webhook:{}_invalid_signature error={}", provider_name, exc)

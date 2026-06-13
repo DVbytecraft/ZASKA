@@ -10,7 +10,6 @@ from app.services.payment.flutterwave_provider import FlutterwaveProvider
 from app.services.payment.stripe_provider import StripeProvider
 from app.services.payment.webhook_queue import WebhookQueue
 from app.services.wallet_service import WalletService
-from app.worker.celery_app import celery_app
 
 
 PROVIDERS = {
@@ -20,8 +19,7 @@ PROVIDERS = {
 }
 
 
-@celery_app.task(name="app.workers.payment_webhook_worker.process_webhook", bind=True, max_retries=5)
-def process_webhook(self, payload: dict | None = None):
+def process_webhook(payload: dict | None = None):
     item = payload or WebhookQueue.pop()
     if not item:
         return {"processed": False, "reason": "empty"}

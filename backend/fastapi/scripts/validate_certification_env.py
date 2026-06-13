@@ -20,8 +20,6 @@ REQUIRED_BASE_KEYS = (
     "DATABASE_URL",
     "ALEMBIC_DATABASE_URL",
     "REDIS_URL",
-    "CELERY_BROKER_URL",
-    "CELERY_RESULT_BACKEND",
     "JWT_SECRET",
     "OTP_SECRET",
     "PAYMENT_MODE",
@@ -95,7 +93,7 @@ def _validate(env: dict[str, str]) -> dict[str, object]:
         if not env.get("STRIPE_SECRET_KEY", "").strip():
             issues.append({"key": "STRIPE_SECRET_KEY", "severity": "warning", "reason": "recommended_for_sandbox"})
 
-    for key in ("REDIS_URL", "CELERY_BROKER_URL", "CELERY_RESULT_BACKEND"):
+    for key in ("REDIS_URL",):
         value = env.get(key, "").strip()
         if value.startswith("redis://") and "@redis:" in value and ":replace-redis-password@" not in value:
             continue

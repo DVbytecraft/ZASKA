@@ -1,14 +1,14 @@
 """
-Payout monitoring and retry Celery tasks.
+Payout retry — manual retry of a specific failed payout.
 
-check_pending_payouts — polls provider for stale processing/pending payouts
-retry_payout          — exponential-backoff retry for a specific failed payout
+release_held_escrows and check_pending_payouts now run exclusively from the
+native asyncio scheduler (app/core/scheduler.py), each guarded by a Redis
+distributed lock to prevent multi-instance duplication.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -19,10 +19,6 @@ from app.models.payout import Payout
 from app.payment.audit_logger import FinancialAuditLogger
 from app.payment.limits import TransactionLimits
 from app.services.payment.mobile_money_topup import execute_mobile_money_payout
-from app.services.wallet_service import WalletService
-from app.worker.celery_app import celery_app
-
-from app.models.wallet import Escrow
 
 logger = logging.getLogger(__name__)
 
@@ -31,114 +27,10 @@ def _make_limits() -> TransactionLimits:
     return TransactionLimits(fx_rate_usd_to_xof=Decimal(str(settings.fx_usd_to_xof)))
 
 
-@celery_app.task(name="app.workers.payout_worker.release_held_escrows", bind=True)
-def release_held_escrows(self):
-    """
-    Scheduled task — runs every 5 minutes.
-    Finds escrows in 'hold' state where payout_available_at has passed
-    and no contest has been filed. Automatically releases payment to the tasker.
-    This is the 24h automatic release after task completion.
-    """
-    # Distributed lock — coordinate with the asyncio scheduler running in each FastAPI
-    # process.  TTL matches the scheduler interval (300s) minus a 10s grace window.
-    from app.core.redis_client import redis_sync as _redis
-    lock_key = "scheduler:release_held_escrows:lock"
-    acquired = _redis.set(lock_key, "celery", ex=290, nx=True)
-    if not acquired:
-        logger.info("release_held_escrows: lock held — skipping this Celery run")
-        return {"skipped": True, "reason": "distributed_lock"}
-
-    db = SessionLocal()
-    released = 0
-    errors = 0
-    try:
-        now = datetime.utcnow()
-        wallet_svc = WalletService(db)
-
-        # Find all hold escrows whose window has passed
-        expired_holds = db.execute(
-            select(Escrow)
-            .where(
-                Escrow.status == "hold",
-                Escrow.payout_available_at <= now,
-            )
-        ).scalars().all()
-
-        for escrow in expired_holds:
-            try:
-                wallet_svc.release_escrow(escrow.id)
-                FinancialAuditLogger.log(
-                    action="escrow_auto_released",
-                    user_id=escrow.payee_id or "",
-                    payment_id=escrow.id,
-                    amount=escrow.amount,
-                    currency=escrow.currency,
-                    provider="internal",
-                    status="released",
-                )
-                logger.info(
-                    "escrow_auto_release: escrow=%s task=%s amount=%s %s",
-                    escrow.id, escrow.task_id, escrow.amount, escrow.currency,
-                )
-                released += 1
-            except Exception as exc:
-                logger.error(
-                    "escrow_auto_release: failed escrow=%s error=%s",
-                    escrow.id, exc,
-                )
-                errors += 1
-
-        logger.info(
-            "release_held_escrows: checked=%s released=%s errors=%s",
-            len(expired_holds), released, errors,
-        )
-        return {"checked": len(expired_holds), "released": released, "errors": errors}
-    except Exception as exc:
-        logger.error("release_held_escrows: task failed — %s", exc)
-        raise self.retry(exc=exc, countdown=300) from exc
-    finally:
-        db.close()
-
-
-@celery_app.task(name="app.workers.payout_worker.check_pending_payouts", bind=True)
-def check_pending_payouts(self):
-    """
-    Scheduled task — runs every minute.
-    Finds payouts stuck in 'processing' or 'pending' for longer than
-    PAYOUT_MONITOR_STALE_MINUTES, polls the provider, and syncs status.
-    """
-    db = SessionLocal()
-    try:
-        from app.services.payment.reconciliation_engine import ReconciliationEngine
-        engine = ReconciliationEngine(db)
-        report: dict = {
-            "country_code": "ALL",
-            "run_at": datetime.utcnow().isoformat(),
-            "mismatches": [],
-            "repaired": 0,
-            "payout_updates": [],
-        }
-        engine._reconcile_payouts(report)
-        updated = len(report["payout_updates"])
-        logger.info("payout_monitor: checked stale payouts, updated=%s", updated)
-        return {"updated_count": updated, "updates": report["payout_updates"]}
-    except Exception as exc:
-        logger.error("payout_monitor: failed — %s", exc)
-        raise self.retry(exc=exc, countdown=60) from exc
-    finally:
-        db.close()
-
-
-@celery_app.task(
-    name="app.workers.payout_worker.retry_payout",
-    bind=True,
-    max_retries=3,
-)
-def retry_payout(self, payout_id: str):
+def retry_payout(payout_id: str) -> dict:
     """
     Retry a failed payout.
     Enforces payout_max_retries from config.
-    Uses exponential backoff: 60s, 300s, 900s.
     """
     db = SessionLocal()
     try:
@@ -222,23 +114,14 @@ def retry_payout(self, payout_id: str):
         return {"status": result["status"], "retry_count": payout.retry_count}
 
     except Exception as exc:
-        # Exponential backoff: 60s → 300s → 900s
-        backoff_schedule = [60, 300, 900]
-        attempt = self.request.retries
-        countdown = backoff_schedule[min(attempt, len(backoff_schedule) - 1)]
-
-        logger.warning(
-            "retry_payout: attempt %s failed for payout %s — retrying in %ss: %s",
-            attempt + 1, payout_id, countdown, exc,
-        )
+        logger.error("retry_payout: attempt failed for payout %s — %s", payout_id, exc)
         try:
-            # Mark payout as failed between retries
             payout = db.execute(
                 select(Payout).where(Payout.id == payout_id)
             ).scalars().one_or_none()
             if payout:
                 payout.status = "failed"
-                payout.failure_reason = f"retry_{attempt + 1}: {exc}"
+                payout.failure_reason = f"retry_{payout.retry_count}: {exc}"
                 db.commit()
 
                 limits = _make_limits()
@@ -249,6 +132,6 @@ def retry_payout(self, payout_id: str):
         except Exception:
             pass
 
-        raise self.retry(exc=exc, countdown=countdown) from exc
+        return {"error": str(exc)}
     finally:
         db.close()
