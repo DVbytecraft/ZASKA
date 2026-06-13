@@ -47,6 +47,7 @@ def test_credit_called_before_mark_processed(mock_wallet_svc):
     mock_wallet_svc.credit_wallet.side_effect = lambda **kw: call_order.append("credit")
     with (
         patch.object(WebhookQueue, "is_processed", return_value=False),
+        patch.object(WebhookQueue, "claim", return_value=True),
         patch.object(WebhookQueue, "mark_processed", side_effect=lambda *a, **kw: call_order.append("mark")),
         patch("app.payment.limits.TransactionLimits.record_deposit_timestamp"),
         patch("app.payment.audit_logger.FinancialAuditLogger.log"),
@@ -82,6 +83,7 @@ def test_missing_metadata_skips_credit_without_error(mock_wallet_svc):
     )
     with (
         patch.object(WebhookQueue, "is_processed", return_value=False),
+        patch.object(WebhookQueue, "claim", return_value=True),
         patch.object(WebhookQueue, "mark_processed"),
     ):
         from app.api.v1.routers.payments import _credit_wallet_from_topup_event

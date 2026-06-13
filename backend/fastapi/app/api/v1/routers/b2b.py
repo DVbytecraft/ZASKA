@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+B2B_CURRENCIES = Literal["XOF", "XAF", "GHS", "NGN", "KES", "EUR", "USD"]
+B2B_WORK_ORDER_STATUSES = Literal["draft", "assigned", "in_progress", "completed", "cancelled"]
 
 from app.api.deps import get_b2b_service, get_current_user_id, get_db
 from app.core.responses import success_response
@@ -31,12 +35,12 @@ class B2BWorkOrderPayload(BaseModel):
     beneficiary_name: str | None = None
     beneficiary_phone: str | None = None
     scheduled_at: datetime | None = None
-    price: Decimal
-    currency: str
+    price: Decimal = Field(gt=0)
+    currency: B2B_CURRENCIES
     notes: str | None = None
     assigned_tasker_id: str | None = None
     linked_task_id: str | None = None
-    status: str = "draft"
+    status: B2B_WORK_ORDER_STATUSES = "draft"
 
 
 @router.get("/me")

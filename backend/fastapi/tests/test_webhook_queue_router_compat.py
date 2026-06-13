@@ -63,6 +63,9 @@ async def test_webhook_endpoint_enqueues_only(monkeypatch):
 
     monkeypatch.setattr(payments, "StripeProvider", FakeStripe)
     monkeypatch.setattr(payments.WebhookQueue, "enqueue", fake_enqueue)
+    monkeypatch.setattr(payments.WebhookQueue, "is_processed", lambda *a, **kw: False)
+    monkeypatch.setattr(payments.redis_sync, "incr", lambda *a, **kw: 1)
+    monkeypatch.setattr(payments.redis_sync, "expire", lambda *a, **kw: True)
 
     req = DummyRequest(b'{"id":"evt"}', {"x-request-id": "req-1"})
     out = await payments.webhook_stripe(req, db=None)

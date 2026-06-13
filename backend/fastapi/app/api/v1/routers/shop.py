@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.api.deps import (
     get_current_user_id,
@@ -24,7 +24,7 @@ router = APIRouter(
 
 class ShopOrderLinePayload(BaseModel):
     catalog_item_id: str
-    quantity: int
+    quantity: int = Field(ge=1)
 
 
 class ShopOrderPayload(BaseModel):

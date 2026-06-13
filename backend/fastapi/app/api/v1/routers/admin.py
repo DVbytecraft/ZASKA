@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
@@ -3444,7 +3444,7 @@ class AdminMerchantItemPayload(BaseModel):
 
 class AdminShopOrderLinePayload(BaseModel):
     catalog_item_id: str
-    quantity: int
+    quantity: int = Field(ge=1)
 
 
 class AdminShopOrderPayload(BaseModel):
