@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, type PaymentMethod, type SocialProtectionOverview, type SplitHistoryEntry, type VirtualCard } from "../api";
 import { useAuthStore } from "../store";
 
-interface Balance { currency: string; balance: string; }
 interface Tx { id: string; type: string; amount: string; status: string; reference: string; provider: string; created_at: string; }
 interface DepositResult { mode: string; checkout_url?: string; tx_id?: string; amount: string; currency: string; status?: string; }
 
@@ -83,20 +82,20 @@ export function WalletPage() {
   const [socialOverview, setSocialOverview] = useState<SocialProtectionOverview | null>(null);
   const [splitHistory, setSplitHistory] = useState<SplitHistoryEntry[]>([]);
 
-  async function loadBalances() {
+  const loadBalances = useCallback(async () => {
     const results = await Promise.all(CURRENCIES.map((c) => api.getWalletBalance(c)));
     const bMap: Record<string, string> = {};
     results.forEach((r, i) => { if (r.success) bMap[CURRENCIES[i]] = r.data.balance; });
     setBalances(bMap);
-  }
+  }, []);
 
-  async function loadTxs(currency: string) {
+  const loadTxs = useCallback(async (currency: string) => {
     const res = await api.getWalletTransactions(currency);
     if (res.success) { setTxs(res.data); setError(null); }
     else { setError(res.error ?? "Erreur transactions"); setTxs([]); }
-  }
+  }, []);
 
-  async function loadAll(currency?: string) {
+  const loadAll = useCallback(async (currency?: string) => {
     setLoading(true);
     const requests: Promise<unknown>[] = [loadBalances(), loadTxs(currency ?? activeCurrency)];
     if (profile?.role === "tasker") {
@@ -113,9 +112,9 @@ export function WalletPage() {
     }
     await Promise.all(requests);
     setLoading(false);
-  }
+  }, [activeCurrency, loadBalances, loadTxs, profile?.role]);
 
-  useEffect(() => { void loadAll(); }, [profile?.role]);
+  useEffect(() => { void loadAll(); }, [loadAll]);
 
   useEffect(() => {
     const status = searchParams.get("status");
@@ -127,7 +126,7 @@ export function WalletPage() {
     } else if (status === "cancel") {
       setBanner({ type: "cancel", msg: "Paiement annulé. Aucun débit n'a été effectué." });
     }
-  }, [searchParams]);
+  }, [loadAll, navigate, searchParams]);
 
   useEffect(() => {
     if (activeTab === "methods" && methods.length === 0) {
@@ -138,7 +137,7 @@ export function WalletPage() {
       setLoadingCards(true);
       api.listCards().then((r) => { if (r.success) setCards(r.data); setLoadingCards(false); });
     }
-  }, [activeTab]);
+  }, [activeTab, cards.length, methods.length]);
 
   async function switchCurrency(currency: string) {
     setActiveCurrency(currency);

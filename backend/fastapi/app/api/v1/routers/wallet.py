@@ -28,7 +28,6 @@ from app.core.observability import logger
 from app.core.redis_client import redis_sync
 from app.core.responses import success_response
 from app.models.user import User
-from app.models.payout import Payout
 from app.payment.audit_logger import FinancialAuditLogger
 from app.payment.limits import FraudDetected, LimitExceeded, TransactionLimits
 from app.payment.safety_layer import PaymentSafetyError, PaymentSafetyLayer
@@ -40,6 +39,7 @@ from app.services.payment.mobile_money_topup import (
 from app.services.wallet_service import (
     EscrowError,
     InsufficientFundsError,
+    PayoutCreationFailedException,
     WalletNotFoundError,
     WalletService,
 )
@@ -368,11 +368,10 @@ async def withdraw(
 
     Flow :
       1. Vérification limites journalières + détection cycle rapide
-      2. Création Payout record (pending)
-      3. Débit wallet (ACID, immédiat)
-      4. Appel API payout (FedaPay ou Flutterwave)  → Payout processing
-      5. Si payout OK  → Payout completed
-      6. Si payout KO  → Payout failed + re-crédit wallet (rollback) + 502
+      2. Débit wallet + création Payout record (processing) — UN SEUL commit atomique
+      3. Appel API payout (FedaPay ou Flutterwave)  → Payout processing
+      4. Si payout OK  → Payout completed
+      5. Si payout KO  → Payout failed + re-crédit wallet (rollback) + 502
     """
     _assert_payments_enabled()
     _wallet_rate_limit(user_id)
@@ -411,18 +410,21 @@ async def withdraw(
         )
         raise HTTPException(status_code=403, detail=str(exc))
 
-    # ── DEBIT-FIRST: débit wallet avant création du Payout record ─────────────
-    # Règle fintech absolue : jamais de Payout record sans débit correspondant.
-    # Si le processus crashe entre débit et création du Payout → orphan debit détecté
-    # par reconciliation_service → réparation traçable.
-    # L'inverse (payout avant débit) risque un payout sans fonds → trou financier.
+    # ── Débit wallet + création du Payout dans UNE SEULE transaction atomique ──
+    # Règle fintech absolue : jamais de Payout record sans débit correspondant,
+    # et jamais de débit sans Payout. Les deux écritures partagent le même
+    # commit (create_withdrawal_payout) : un crash avant le commit ne modifie
+    # rien (rollback complet), un crash après le commit laisse les deux lignes
+    # cohérentes. Il n'existe plus de fenêtre intermédiaire orpheline.
     try:
-        debit_tx = svc.debit_wallet(
+        debit_tx, payout_record = svc.create_withdrawal_payout(
             user_id=user_id,
             currency=currency,
             amount=amount,
             reference=reference,
             provider=payload.provider,
+            phone_number=payload.phone_number,
+            country_code=cc,
             metadata={
                 "type": "withdrawal",
                 "provider": payload.provider,
@@ -433,22 +435,10 @@ async def withdraw(
         raise HTTPException(status_code=402, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except PayoutCreationFailedException as exc:
+        logger.error("payout:creation_failed user={} ref={} error={}", user_id, reference, exc)
+        raise HTTPException(status_code=503, detail="Retrait indisponible — veuillez réessayer")
 
-    # ── Payout record créé APRÈS le débit (garantit l'ordre causal) ────────────
-    payout_record = Payout(
-        user_id=user_id,
-        amount=amount,
-        currency=currency,
-        provider=payload.provider,
-        phone_number=payload.phone_number,
-        country_code=cc,
-        reference=reference,
-        status="processing",
-        transaction_id=debit_tx.id,  # liaison immédiate au débit
-    )
-    svc.db.add(payout_record)
-    svc.db.commit()
-    svc.db.refresh(payout_record)
     payout_id = payout_record.id
 
     # ── Step 2 : appel API payout ──────────────────────────────────────────────

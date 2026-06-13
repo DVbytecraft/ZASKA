@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.models.task import Task
 from app.models.task_application import TaskApplication
+from app.models.user_address import UserAddress
+from app.models.kyc import KycSubmission
 from app.models.user import User
 
 
@@ -238,7 +240,7 @@ class TaskService:
         self.db.refresh(task)
         return task
 
-    def accept_negotiation(self, task_id: str) -> Task:
+    def accept_negotiation(self, task_id: str, *, commit: bool = True) -> Task:
         """Client accepts the proposed price — updates task.price to negotiated_price."""
         task = self.db.execute(
             select(Task).where(Task.id == task_id)
@@ -246,18 +248,26 @@ class TaskService:
         if task.negotiated_price:
             task.price = task.negotiated_price
         task.negotiation_status = "accepted"
-        self.db.commit()
-        self.db.refresh(task)
+        if commit:
+            self.db.commit()
+            self.db.refresh(task)
+        else:
+            self.db.flush()
         return task
 
-    def reject_negotiation(self, task_id: str) -> Task:
+    def reject_negotiation(self, task_id: str, *, commit: bool = True) -> Task:
         """Reject the proposed price — resets to 'none' so a new round can start."""
         task = self.db.execute(
             select(Task).where(Task.id == task_id)
         ).scalars().one()
         task.negotiation_status = "none"
-        self.db.commit()
-        self.db.refresh(task)
+        task.negotiated_price = None
+        task.negotiated_by = None
+        if commit:
+            self.db.commit()
+            self.db.refresh(task)
+        else:
+            self.db.flush()
         return task
 
     def cancel_task(self, task_id: str, new_status: str) -> Task:
@@ -429,6 +439,118 @@ class TaskService:
             .where(TaskApplication.task_id == task_id)
             .order_by(TaskApplication.created_at.asc())
         ).all()
+
+    def list_available_taskers_for_task(self, task_id: str, limit: int = 25) -> list[dict]:
+        task = self.db.execute(
+            select(Task).where(Task.id == task_id)
+        ).scalars().one()
+
+        taskers = self.db.execute(
+            select(User).where(
+                User.role == "tasker",
+                User.is_verified.is_(True),
+                User.is_suspended.is_(False),
+                User.is_locked.is_(False),
+            )
+        ).scalars().all()
+        if not taskers:
+            return []
+
+        tasker_ids = [item.id for item in taskers]
+        addresses = self.db.execute(
+            select(UserAddress)
+            .where(UserAddress.user_id.in_(tasker_ids))
+            .order_by(UserAddress.user_id.asc(), UserAddress.is_default.desc(), UserAddress.created_at.desc())
+        ).scalars().all()
+        latest_kyc_rows = self.db.execute(
+            select(KycSubmission)
+            .where(KycSubmission.user_id.in_(tasker_ids))
+            .order_by(KycSubmission.user_id.asc(), KycSubmission.created_at.desc())
+        ).scalars().all()
+
+        addr_map: dict[str, list[UserAddress]] = {}
+        for addr in addresses:
+            addr_map.setdefault(addr.user_id, []).append(addr)
+
+        latest_kyc: dict[str, KycSubmission] = {}
+        for row in latest_kyc_rows:
+            latest_kyc.setdefault(row.user_id, row)
+
+        results: list[dict] = []
+        for user in taskers:
+            kyc = latest_kyc.get(user.id)
+            security_ready = bool(
+                user.tasker_security_verified
+                and user.biometric_enabled
+                and user.criminal_record_status in {"clear", "approved"}
+                and kyc is not None
+                and kyc.status == "approved"
+                and not kyc.is_expired
+                and getattr(kyc, "biometric_status", "pending") in {"approved", "clear"}
+                and getattr(kyc, "criminal_record_status", "pending") in {"approved", "clear"}
+                and getattr(kyc, "criminal_record_risk_level", "pending") in {"approved", "clear", "low"}
+            )
+            if not security_ready:
+                continue
+
+            best_distance: float | None = None
+            match_reason = "country_profile"
+            best_city = getattr(user, "city", None)
+            best_country = getattr(user, "country_code", None)
+
+            for addr in addr_map.get(user.id, []):
+                if addr.latitude is not None and addr.longitude is not None:
+                    distance = self._haversine(task.latitude, task.longitude, addr.latitude, addr.longitude)
+                    if best_distance is None or distance < best_distance:
+                        best_distance = distance
+                        best_city = addr.city
+                        best_country = addr.country
+                        match_reason = "nearby_address"
+                elif task.city and addr.city and addr.city.strip().lower() == task.city.strip().lower():
+                    best_city = addr.city
+                    best_country = addr.country
+                    if best_distance is None:
+                        match_reason = "same_city"
+
+            if best_distance is None and task.city and best_city and best_city.strip().lower() == task.city.strip().lower():
+                match_reason = "same_city"
+
+            rating_avg = round(user.rating_sum / user.rating_count, 2) if user.rating_count > 0 else None
+            results.append(
+                {
+                    "id": user.id,
+                    "firstName": user.first_name,
+                    "lastName": user.last_name,
+                    "fullName": user.full_name,
+                    "avatarUrl": user.avatar_url,
+                    "city": best_city,
+                    "country": best_country,
+                    "countryCode": user.country_code,
+                    "availability": getattr(user, "availability", None),
+                    "hourlyRate": getattr(user, "hourly_rate", None),
+                    "responseTime": getattr(user, "response_time", None),
+                    "ratingAverage": rating_avg,
+                    "ratingCount": user.rating_count,
+                    "distanceKm": round(best_distance, 1) if best_distance is not None else None,
+                    "matchReason": match_reason,
+                    "taskerSecurityVerified": user.tasker_security_verified,
+                    "biometricEnabled": user.biometric_enabled,
+                    "criminalRecordStatus": user.criminal_record_status,
+                    "kycStatus": getattr(kyc, "status", None),
+                    "kycExpiresAt": kyc.expires_at.isoformat() if kyc and kyc.expires_at else None,
+                }
+            )
+
+        results.sort(
+            key=lambda item: (
+                item["distanceKm"] is None,
+                item["distanceKm"] if item["distanceKm"] is not None else 999999,
+                item["ratingAverage"] is None,
+                -(item["ratingAverage"] or 0),
+                -(item["ratingCount"] or 0),
+            )
+        )
+        return results[:limit]
 
     def accept_task(self, task_id: str, tasker_id: str) -> Task:
         """Fast Mode: tasker self-assigns. Choose Mode: client assigns a specific tasker."""

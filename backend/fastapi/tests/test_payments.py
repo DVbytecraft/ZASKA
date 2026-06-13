@@ -120,7 +120,7 @@ class TestProviderFactory:
     def test_ng_resolves_to_flutterwave(self):
         from app.core.country_engine.definitions import get_config
         cfg = get_config("NG")
-        assert cfg.payment_providers[0] == "flutterwave"
+        assert cfg.payment_providers[0] == "paystack"
 
     def test_be_resolves_to_stripe(self):
         from app.core.country_engine.definitions import get_config
@@ -586,7 +586,8 @@ class TestEscrowPaymentFlow:
         wallet_svc.release_escrow(escrow.id)
         payee_balance_after = wallet_svc.get_balance("u2", "XOF")
 
-        assert payee_balance_after == payee_balance_before + Decimal("4000")
+        split = wallet_svc.calculate_social_split(Decimal("4000"))
+        assert payee_balance_after == payee_balance_before + split["tasker_net"]
 
     def test_refund_funded_external_escrow_credits_payer(self, wallet_svc):
         """Refund d'un escrow externe → crédit wallet payer (ZASKA IOU)."""

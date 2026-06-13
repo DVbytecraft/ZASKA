@@ -2,11 +2,13 @@ import os
 import uuid
 
 import httpx
+import pytest
 
 from otp_helper import get_register_otp
 
 
 BASE_URL = os.getenv("TEST_API_URL", "http://localhost:6969/api")
+pytestmark = pytest.mark.live_api
 
 
 def _unique_email() -> str:

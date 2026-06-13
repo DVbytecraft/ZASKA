@@ -75,6 +75,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
     instead of blocking the uvicorn event loop thread.
     """
 
+    _redis_available: bool = False
+
     def __init__(self, app: ASGIApp) -> None:
         super().__init__(app)
         # redis_async is module-level AsyncRedis — imported lazily to allow app

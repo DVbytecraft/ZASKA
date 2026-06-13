@@ -52,6 +52,7 @@ class RatingService:
             **scores,
         )
         self.db.add(review)
+        self.db.flush()
         task.creator_rated = True
         self._refresh_review_aggregates(reviewee, CLIENT_TO_TASKER)
         self._enforce_tasker_threshold(reviewee)
@@ -87,6 +88,7 @@ class RatingService:
             **scores,
         )
         self.db.add(review)
+        self.db.flush()
         task.tasker_rated = True
         self._refresh_review_aggregates(reviewee, TASKER_TO_CLIENT)
         self._enforce_client_threshold(reviewee)

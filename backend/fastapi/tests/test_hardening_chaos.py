@@ -23,15 +23,18 @@ from __future__ import annotations
 import asyncio
 import uuid
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.task import Task
+from app.models.user import User
 from app.models.wallet import Escrow, Transaction, Wallet
 from app.services.task_service import TaskService
 from app.services.wallet_service import EscrowError, InsufficientFundsError, WalletService
+from tests.helpers.fake_redis import FakeRedis
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -48,7 +51,29 @@ def _make_user_id() -> str:
     return str(uuid.uuid4())
 
 
+def _seed_user(db: Session, user_id: str, role: str) -> User:
+    existing = db.get(User, user_id)
+    if existing is not None:
+        return existing
+    user = User(
+        id=user_id,
+        email=f"{user_id[:8]}@zaska.test",
+        role=role,
+        is_verified=True,
+    )
+    db.add(user)
+    db.flush()
+    return user
+
+
+def _ensure_user(db: Session, user_id: str, role: str = "client") -> User:
+    return _seed_user(db, user_id, role)
+
+
 def _fund_wallet(db: Session, user_id: str, currency: str, amount: Decimal) -> Wallet:
+    if db.get(User, user_id) is None:
+        _seed_user(db, user_id, "client")
+        db.flush()
     svc = WalletService(db)
     wallet = svc.create_wallet(user_id, currency)
     svc.credit_wallet(user_id, currency, amount, reference=f"test_fund:{uuid.uuid4().hex}")
@@ -56,6 +81,7 @@ def _fund_wallet(db: Session, user_id: str, currency: str, amount: Decimal) -> W
 
 
 def _make_open_task(db: Session, creator_id: str, price: Decimal = Decimal("100")) -> Task:
+    _ensure_user(db, creator_id, "client")
     svc = TaskService(db)
     return svc.create_task({
         "title": "Test task",
@@ -76,6 +102,8 @@ def test_double_accept_race_serial(db: Session):
     tasker1_id = _make_user_id()
     tasker2_id = _make_user_id()
 
+    _ensure_user(db, tasker1_id, "tasker")
+    _ensure_user(db, tasker2_id, "tasker")
     task = _make_open_task(db, creator_id)
     svc = TaskService(db)
 
@@ -105,6 +133,7 @@ def test_double_accept_concurrent():
     def try_accept(tasker_id: str) -> None:
         db = SessionLocal()
         try:
+            _ensure_user(db, tasker_id, "tasker")
             svc = TaskService(db)
             svc.accept_task(task_id, tasker_id)
             results.append(True)
@@ -135,6 +164,7 @@ def test_double_accept_concurrent():
 def test_credit_wallet_idempotency(db: Session):
     """Same reference credited twice — wallet balance increases only once."""
     user_id = _make_user_id()
+    _ensure_user(db, user_id, "client")
     svc = WalletService(db)
     svc.create_wallet(user_id, "USD")
 
@@ -235,10 +265,13 @@ def test_release_escrow_accepts_hold_status(db: Session):
     tasker_id = _make_user_id()
 
     _fund_wallet(db, creator_id, "USD", Decimal("100"))
+    _ensure_user(db, tasker_id, "tasker")
     svc = WalletService(db)
+    svc.create_wallet(tasker_id, "USD")
+    task = _make_open_task(db, creator_id)
 
     escrow = svc.create_escrow(
-        task_id=str(uuid.uuid4()),
+        task_id=task.id,
         payer_id=creator_id,
         payee_id=tasker_id,
         amount=Decimal("100"),
@@ -305,14 +338,17 @@ def test_balance_conservation_after_escrow_release(db: Session):
     tasker_id = _make_user_id()
 
     _fund_wallet(db, creator_id, "USD", Decimal("200"))
+    _ensure_user(db, tasker_id, "tasker")
     svc = WalletService(db)
+    svc.create_wallet(tasker_id, "USD")
+    task = _make_open_task(db, creator_id)
 
     # Before: creator=200, tasker=0
     before = svc.get_balance(creator_id, "USD") + svc.get_balance(tasker_id, "USD")
     assert before == Decimal("200")
 
     escrow = svc.create_escrow(
-        task_id=str(uuid.uuid4()),
+        task_id=task.id,
         payer_id=creator_id,
         payee_id=tasker_id,
         amount=Decimal("100"),
@@ -341,6 +377,7 @@ def test_reconciliation_detects_wallet_drift(db: Session):
     from app.services.reconciliation_service import ReconciliationService
 
     user_id = _make_user_id()
+    _ensure_user(db, user_id, "client")
     svc = WalletService(db)
     wallet = svc.create_wallet(user_id, "USD")
     svc.credit_wallet(user_id, "USD", Decimal("100"), reference=f"test:{uuid.uuid4().hex}")
@@ -366,10 +403,13 @@ def test_concurrent_confirm_task_complete():
 
     setup_db = SessionLocal()
     _fund_wallet(setup_db, creator_id, "USD", Decimal("100"))
+    _ensure_user(setup_db, tasker_id, "tasker")
+    WalletService(setup_db).create_wallet(tasker_id, "USD")
+    task = _make_open_task(setup_db, creator_id)
 
     svc = WalletService(setup_db)
     escrow = svc.create_escrow(
-        task_id=str(uuid.uuid4()),
+        task_id=task.id,
         payer_id=creator_id,
         payee_id=tasker_id,
         amount=Decimal("100"),
@@ -447,10 +487,12 @@ def test_concurrent_tasker_abandon():
 
     setup_db = SessionLocal()
     _fund_wallet(setup_db, creator_id, "USD", Decimal("100"))
+    _ensure_user(setup_db, tasker_id, "tasker")
+    task = _make_open_task(setup_db, creator_id)
 
     svc = WalletService(setup_db)
     escrow = svc.create_escrow(
-        task_id=str(uuid.uuid4()),
+        task_id=task.id,
         payer_id=creator_id,
         payee_id=tasker_id,
         amount=Decimal("100"),
@@ -525,13 +567,18 @@ def test_concurrent_rate_task_no_lost_update():
     tasker_id = _make_user_id()
 
     setup_db = SessionLocal()
+    _seed_user(setup_db, creator_a, "client")
+    _seed_user(setup_db, creator_b, "client")
+    _seed_user(setup_db, tasker_id, "tasker")
     task_a = _make_open_task(setup_db, creator_a)
     task_b = _make_open_task(setup_db, creator_b)
+    task_a_id = task_a.id
+    task_b_id = task_b.id
 
     from app.models.task import Task
     from sqlalchemy import update
     setup_db.execute(
-        update(Task).where(Task.id.in_([task_a.id, task_b.id])).values(
+        update(Task).where(Task.id.in_([task_a_id, task_b_id])).values(
             status="COMPLETED",
             assigned_to=tasker_id,
         )
@@ -552,8 +599,8 @@ def test_concurrent_rate_task_no_lost_update():
             db.close()
 
     import threading
-    t1 = threading.Thread(target=rate, args=(task_a.id, creator_a, 5))
-    t2 = threading.Thread(target=rate, args=(task_b.id, creator_b, 3))
+    t1 = threading.Thread(target=rate, args=(task_a_id, creator_a, 5))
+    t2 = threading.Thread(target=rate, args=(task_b_id, creator_b, 3))
     t1.start()
     t2.start()
     t1.join()
@@ -576,9 +623,10 @@ def test_create_escrow_idempotency(db: Session):
     creator_id = _make_user_id()
     tasker_id = _make_user_id()
     _fund_wallet(db, creator_id, "USD", Decimal("200"))
+    _ensure_user(db, tasker_id, "tasker")
 
     svc = WalletService(db)
-    task_id = str(uuid.uuid4())
+    task_id = _make_open_task(db, creator_id).id
 
     e1 = svc.create_escrow(task_id=task_id, payer_id=creator_id, payee_id=tasker_id,
                            amount=Decimal("100"), currency="USD")
@@ -596,6 +644,7 @@ def test_mark_pending_validation_atomic(db: Session):
     """mark_pending_validation must set both pct and status in a single commit."""
     creator_id = _make_user_id()
     tasker_id = _make_user_id()
+    _ensure_user(db, tasker_id, "tasker")
     task = _make_open_task(db, creator_id)
 
     from app.services.task_service import TaskService
@@ -617,6 +666,8 @@ def test_mark_pending_validation_rejects_wrong_tasker(db: Session):
     creator_id = _make_user_id()
     tasker_id = _make_user_id()
     impostor_id = _make_user_id()
+    _ensure_user(db, tasker_id, "tasker")
+    _ensure_user(db, impostor_id, "tasker")
     task = _make_open_task(db, creator_id)
 
     from app.services.task_service import TaskService
@@ -634,15 +685,16 @@ def test_ws_ticket_single_use():
     from app.core.ws_ticket import create_ws_ticket, consume_ws_ticket
 
     user_id = _make_user_id()
-    ticket = create_ws_ticket(user_id, task_id="task-123")
+    with patch("app.core.ws_ticket.redis_sync", FakeRedis()):
+        ticket = create_ws_ticket(user_id, task_id="task-123")
 
-    # First consume: valid
-    result1 = consume_ws_ticket(ticket, expected_task_id="task-123")
-    assert result1 == user_id, "First consume must return the user_id"
+        # First consume: valid
+        result1 = consume_ws_ticket(ticket, expected_task_id="task-123")
+        assert result1 == user_id, "First consume must return the user_id"
 
-    # Second consume (replay): must be rejected
-    result2 = consume_ws_ticket(ticket, expected_task_id="task-123")
-    assert result2 is None, "Replay attempt must return None — ticket already consumed"
+        # Second consume (replay): must be rejected
+        result2 = consume_ws_ticket(ticket, expected_task_id="task-123")
+        assert result2 is None, "Replay attempt must return None — ticket already consumed"
 
 
 def test_ws_ticket_concurrent_consume():
@@ -650,26 +702,28 @@ def test_ws_ticket_concurrent_consume():
     from app.core.ws_ticket import create_ws_ticket, consume_ws_ticket
 
     user_id = _make_user_id()
-    ticket = create_ws_ticket(user_id, task_id="task-concurrent")
+    fake_redis = FakeRedis()
+    with patch("app.core.ws_ticket.redis_sync", fake_redis):
+        ticket = create_ws_ticket(user_id, task_id="task-concurrent")
 
-    results: list[str | None] = []
-    lock = __import__("threading").Lock()
+        results: list[str | None] = []
+        lock = __import__("threading").Lock()
 
-    def try_consume():
-        r = consume_ws_ticket(ticket, expected_task_id="task-concurrent")
-        with lock:
-            results.append(r)
+        def try_consume():
+            r = consume_ws_ticket(ticket, expected_task_id="task-concurrent")
+            with lock:
+                results.append(r)
 
-    import threading
-    threads = [threading.Thread(target=try_consume) for _ in range(50)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+        import threading
+        threads = [threading.Thread(target=try_consume) for _ in range(50)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
-    successes = [r for r in results if r is not None]
-    assert len(successes) == 1, f"Expected exactly 1 successful consume, got {len(successes)}"
-    assert successes[0] == user_id
+        successes = [r for r in results if r is not None]
+        assert len(successes) == 1, f"Expected exactly 1 successful consume, got {len(successes)}"
+        assert successes[0] == user_id
 
 
 # ── Test 15: Scheduler distributed lock prevents concurrent execution ──────────
@@ -681,38 +735,36 @@ def test_scheduler_distributed_lock_prevents_overlap():
     or within the same process during tests.  The lock TTL is intentionally short
     (2s) so the test doesn't have to wait the full job interval.
     """
-    from app.core.redis_client import redis_sync
     from app.core.scheduler import _acquire_job_lock
 
     job_name = f"test_job_{uuid.uuid4().hex[:8]}"
     lock_key = f"scheduler:{job_name}:lock"
+    fake_redis = FakeRedis()
 
-    # Clean up any leftover key from a previous test run
-    redis_sync.delete(lock_key)
+    with patch("app.core.redis_client.redis_sync", fake_redis):
+        fake_redis.delete(lock_key)
 
-    results = []
-    lock = __import__("threading").Lock()
+        results = []
+        lock = __import__("threading").Lock()
 
-    def try_acquire():
-        acquired = _acquire_job_lock(job_name, ttl_seconds=2)
-        with lock:
-            results.append(acquired)
+        def try_acquire():
+            acquired = _acquire_job_lock(job_name, ttl_seconds=2)
+            with lock:
+                results.append(acquired)
 
-    import threading
-    threads = [threading.Thread(target=try_acquire) for _ in range(20)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+        import threading
+        threads = [threading.Thread(target=try_acquire) for _ in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
-    winners = [r for r in results if r is True]
-    losers = [r for r in results if r is False]
+        winners = [r for r in results if r is True]
+        losers = [r for r in results if r is False]
 
-    assert len(winners) == 1, f"Expected exactly 1 lock winner, got {len(winners)}"
-    assert len(losers) == 19, f"Expected 19 losers, got {len(losers)}"
-
-    # Cleanup
-    redis_sync.delete(lock_key)
+        assert len(winners) == 1, f"Expected exactly 1 lock winner, got {len(winners)}"
+        assert len(losers) == 19, f"Expected 19 losers, got {len(losers)}"
+        fake_redis.delete(lock_key)
 
 
 # ── Test 16: Wallet money conservation under concurrent load ──────────────────
@@ -729,6 +781,8 @@ def test_wallet_conservation_under_concurrent_load():
     """
     user_id = _make_user_id()
     setup_db = SessionLocal()
+    _ensure_user(setup_db, user_id, "client")
+    setup_db.flush()
     svc = WalletService(setup_db)
     svc.create_wallet(user_id, "USD")
     setup_db.close()
@@ -941,25 +995,27 @@ def test_token_version_revocation_atomic():
     A key without TTL would cause permanent token lockout for the user.
     """
     from app.core.security import revoke_all_user_tokens, get_token_version
-    from app.core.redis_client import redis_sync
 
     user_id = _make_user_id()
     key = f"token_version:{user_id}"
-    redis_sync.delete(key)
+    fake_redis = FakeRedis()
 
-    initial_version = get_token_version(user_id)
-    assert initial_version == 0
+    with patch("app.core.redis_client.redis_sync", fake_redis):
+        fake_redis.delete(key)
 
-    revoke_all_user_tokens(user_id)
+        initial_version = get_token_version(user_id)
+        assert initial_version == 0
 
-    new_version = get_token_version(user_id)
-    assert new_version == 1, f"Version must be incremented, got {new_version}"
+        revoke_all_user_tokens(user_id)
 
-    ttl = redis_sync.ttl(key)
-    assert ttl > 0, f"Key must have a TTL after revocation (AUDIT-02), got ttl={ttl}"
-    assert ttl <= 86400 * 30, f"TTL must be ≤ 30 days, got {ttl}"
+        new_version = get_token_version(user_id)
+        assert new_version == 1, f"Version must be incremented, got {new_version}"
 
-    redis_sync.delete(key)
+        ttl = fake_redis.ttl(key)
+        assert ttl > 0, f"Key must have a TTL after revocation (AUDIT-02), got ttl={ttl}"
+        assert ttl <= 86400 * 30, f"TTL must be ≤ 30 days, got {ttl}"
+
+        fake_redis.delete(key)
 
 
 # ── Test 21: Outbox push failure triggers retry (AUDIT-03) ───────────────────
@@ -970,24 +1026,27 @@ def test_outbox_push_failure_marks_for_retry(db: Session):
     Validates AUDIT-03 fix: _deliver_notification no longer swallows exceptions.
     The outbox processor must move the event to 'pending' with a backoff delay.
     """
-    import json
     from unittest.mock import patch
     from app.services.outbox_service import OutboxService
     from app.models.outbox_event import OutboxEvent
+
+    notification_user_id = _make_user_id()
+    _seed_user(db, notification_user_id, "client").fcm_token = "fcm_test_token"
+    db.commit()
 
     svc = OutboxService(db)
     event = svc.enqueue(
         event_type="notification.push",
         aggregate_id=_make_user_id(),
         aggregate_type="user",
-        payload={"user_id": _make_user_id(), "title": "Test", "body": "Hello"},
+        payload={"user_id": notification_user_id, "title": "Test", "body": "Hello"},
         idempotency_key=f"push_test:{uuid.uuid4().hex}",
         max_retries=3,
     )
     db.commit()
 
-    with patch("app.services.outbox_service.PushService") as mock_push_cls:
-        mock_push_cls.send.side_effect = RuntimeError("FCM unavailable")
+    with patch("app.services.outbox_service.get_push_service") as mock_get_push_service:
+        mock_get_push_service.return_value.send.side_effect = RuntimeError("FCM unavailable")
         result = OutboxService.process_pending(db)
 
     assert result["failed"] >= 1 or result["dead_letter"] >= 1, (

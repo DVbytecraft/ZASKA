@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, getWsBaseUrl } from "../api";
+import { api, getWsBaseUrl, type ChatMessage } from "../api";
+
+type ChatEvent = ChatMessage | { message: string; senderId?: string };
 
 export function ChatPage() {
   const { taskId = "" } = useParams();
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<ChatEvent[]>([]);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);

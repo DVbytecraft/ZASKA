@@ -130,7 +130,10 @@ class AmlService:
 
         triggered_rules: list[dict[str, object]] = []
 
-        age_seconds = (datetime.now(timezone.utc) - task.created_at).total_seconds() if task.created_at else None
+        task_created_at = task.created_at
+        if task_created_at is not None and task_created_at.tzinfo is None:
+            task_created_at = task_created_at.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - task_created_at).total_seconds() if task_created_at else None
         if age_seconds is not None and age_seconds < settings.aml_rapid_validation_minutes * 60:
             triggered_rules.append(
                 {

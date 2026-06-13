@@ -7,12 +7,13 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import case, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import case, func, select, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.payments.transaction_state_machine import TransactionState, TransactionStateMachine
 from app.core.observability import logger
+from app.models.payout import Payout
 from app.models.social_protection import SocialProtectionEvent
 from app.models.wallet import Escrow, Transaction, Wallet
 from app.payment.audit_logger import FinancialAuditLogger
@@ -23,6 +24,11 @@ def _uuid() -> str:
 
 
 class InsufficientFundsError(Exception):
+    pass
+
+
+class PayoutCreationFailedException(Exception):
+    """Raised when the atomic debit+Payout transaction fails to commit."""
     pass
 
 
@@ -86,7 +92,7 @@ class WalletService:
         norm = (status or "").lower()
         if norm == "pending":
             return TransactionState.PENDING
-        if norm in {"funded", "released"}:
+        if norm in {"funded", "hold", "released"}:
             return TransactionState.SUCCESS
         if norm == "cancelled":
             return TransactionState.FAILED
@@ -331,8 +337,14 @@ class WalletService:
             metadata_json=json.dumps(metadata) if metadata else None,
             is_sandbox=wallet.is_sandbox,
         )
-        wallet.balance += amount
         self.db.add(tx)
+        self.db.execute(
+            update(Wallet)
+            .where(Wallet.id == wallet.id)
+            .values(balance=Wallet.balance + amount)
+        )
+        self.db.flush()
+        self.db.refresh(wallet)
         self._mirror_to_ledger(tx, wallet)
         self.db.commit()
         self.db.refresh(tx)
@@ -369,8 +381,136 @@ class WalletService:
             )
             return existing_tx
 
-        if wallet.balance < amount:
-            raise InsufficientFundsError(f"Solde insuffisant : {wallet.balance} {currency} < {amount} {currency}")
+        tx = Transaction(
+            id=_uuid(),
+            wallet_id=wallet.id,
+            type="debit",
+            amount=amount,
+            status="completed",
+            reference=reference,
+            provider=provider,
+            metadata_json=json.dumps(metadata) if metadata else None,
+            is_sandbox=wallet.is_sandbox,
+        )
+        self.db.add(tx)
+        result = self.db.execute(
+            update(Wallet)
+            .where(
+                Wallet.id == wallet.id,
+                Wallet.balance >= amount,
+            )
+            .values(balance=Wallet.balance - amount)
+        )
+        if result.rowcount != 1:
+            self.db.rollback()
+            latest_wallet = self.get_wallet(user_id, currency, is_sandbox=is_sandbox)
+            raise InsufficientFundsError(
+                f"Solde insuffisant : {latest_wallet.balance} {currency} < {amount} {currency}"
+            )
+        self.db.flush()
+        self.db.refresh(wallet)
+        self._mirror_to_ledger(tx, wallet)
+        self.db.commit()
+        self.db.refresh(tx)
+        return tx
+
+    def create_withdrawal_payout(
+        self,
+        user_id: str,
+        currency: str,
+        amount: Decimal,
+        reference: str,
+        provider: str,
+        phone_number: str,
+        country_code: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        is_sandbox: bool = False,
+    ) -> tuple[Transaction, Payout]:
+        """
+        Débite le wallet et crée le Payout (status="processing") dans une
+        SEULE transaction DB — corrige la faille où un crash entre les deux
+        commits laissait un débit orphelin sans Payout (perte de fonds
+        silencieuse).
+
+        Le verrou FOR UPDATE est acquis en tout premier sur le wallet et
+        conservé jusqu'au commit final, ce qui élimine toute race condition
+        entre le check de solde et l'écriture du débit.
+        """
+        if amount <= Decimal("0"):
+            raise ValueError("Le montant doit etre positif")
+
+        # Verrou unique pour toute la transaction — acquis avant toute lecture
+        # ou écriture afin d'éviter une race condition sur le solde.
+        wallet = self.get_wallet(user_id, currency, for_update=True, is_sandbox=is_sandbox)
+
+        # Idempotency guard: si ce reference a déjà été traité (débit existant),
+        # on retourne le débit + payout existants au lieu de dupliquer.
+        existing_tx = self.db.execute(
+            select(Transaction).where(
+                Transaction.wallet_id == wallet.id,
+                Transaction.reference == reference,
+                Transaction.type == "debit",
+            )
+        ).scalars().one_or_none()
+        if existing_tx is not None:
+            existing_payout = self.db.execute(
+                select(Payout).where(Payout.reference == reference)
+            ).scalars().one_or_none()
+            if existing_payout is not None:
+                logger.warning(
+                    "create_withdrawal_payout: duplicate reference=%s wallet=%s — returning existing payout %s",
+                    reference, wallet.id, existing_payout.id,
+                )
+                return existing_tx, existing_payout
+
+            # Débit orphelin issu d'une exécution pré-correctif : on répare en
+            # rattachant le Payout manquant au débit existant, dans cette même
+            # transaction.
+            payout = Payout(
+                id=_uuid(),
+                user_id=user_id,
+                amount=amount,
+                currency=currency,
+                provider=provider,
+                phone_number=phone_number,
+                country_code=country_code,
+                reference=reference,
+                status="processing",
+                transaction_id=existing_tx.id,
+            )
+            self.db.add(payout)
+            try:
+                self.db.commit()
+            except (IntegrityError, SQLAlchemyError) as exc:
+                self.db.rollback()
+                raise PayoutCreationFailedException(
+                    f"Échec réparation payout orphelin reference={reference}: {exc}"
+                ) from exc
+            self.db.refresh(payout)
+            logger.warning(
+                "create_withdrawal_payout: repaired orphan debit reference=%s tx=%s with new payout=%s",
+                reference, existing_tx.id, payout.id,
+            )
+            return existing_tx, payout
+
+        # Débit conditionnel atomique : UPDATE ... WHERE balance >= amount avec
+        # vérification du rowcount, garantit l'absence de solde négatif sans
+        # lecture-puis-écriture séparée.
+        result = self.db.execute(
+            update(Wallet)
+            .where(
+                Wallet.id == wallet.id,
+                Wallet.balance >= amount,
+            )
+            .values(balance=Wallet.balance - amount)
+        )
+        if result.rowcount != 1:
+            self.db.rollback()
+            latest_wallet = self.get_wallet(user_id, currency, is_sandbox=is_sandbox)
+            raise InsufficientFundsError(
+                f"Solde insuffisant : {latest_wallet.balance} {currency} < {amount} {currency}"
+            )
 
         tx = Transaction(
             id=_uuid(),
@@ -383,12 +523,36 @@ class WalletService:
             metadata_json=json.dumps(metadata) if metadata else None,
             is_sandbox=wallet.is_sandbox,
         )
-        wallet.balance -= amount
         self.db.add(tx)
+        self.db.flush()  # assigne tx.id sans committer
+        self.db.refresh(wallet)
         self._mirror_to_ledger(tx, wallet)
-        self.db.commit()
+
+        payout = Payout(
+            id=_uuid(),
+            user_id=user_id,
+            amount=amount,
+            currency=currency,
+            provider=provider,
+            phone_number=phone_number,
+            country_code=country_code,
+            reference=reference,
+            status="processing",
+            transaction_id=tx.id,
+        )
+        self.db.add(payout)
+
+        try:
+            self.db.commit()  # commit unique — débit wallet + Transaction + Payout + ledger
+        except (IntegrityError, SQLAlchemyError) as exc:
+            self.db.rollback()
+            raise PayoutCreationFailedException(
+                f"Échec création payout reference={reference}: {exc}"
+            ) from exc
+
         self.db.refresh(tx)
-        return tx
+        self.db.refresh(payout)
+        return tx, payout
 
     # ─── Escrow lifecycle ────────────────────────────────────────────────────
 
@@ -472,35 +636,41 @@ class WalletService:
             raise EscrowError(f"Escrow {escrow_id} n'a pas de payee defini")
 
         self._audit_transition(escrow, TransactionState.PROCESSING, "release_processing", "internal")
-
-        tx, split = self._credit_social_split(escrow, escrow.amount, "escrow_release")
-        escrow.status = "released"
-        escrow.settlement_tx_id = tx.id
         try:
-            from app.services.event_ledger import EventLedger
-            EventLedger.log_financial(
-                db=self.db,
-                event_type="escrow.released",
-                aggregate_id=escrow_id,
-                aggregate_type="escrow",
-                actor_id=escrow.payee_id or "",
-                amount=escrow.amount,
-                currency=escrow.currency,
-                reference=f"escrow_release:{escrow_id}",
-                extra={
-                    "task_id": escrow.task_id,
-                    "split_bps": SOCIAL_SPLIT_BPS,
-                    "split": {key: str(value) for key, value in split.items()},
-                },
-            )
-        except Exception as _ledger_exc:
-            logger.error(
-                "AUDIT_TRAIL_FAILURE: EventLedger.log_financial failed for escrow=%s — %s",
-                escrow_id, _ledger_exc,
-            )
-        self.db.commit()
-        self.db.refresh(escrow)
-        return escrow
+            tx, split = self._credit_social_split(escrow, escrow.amount, "escrow_release")
+            escrow.status = "released"
+            escrow.settlement_tx_id = tx.id
+            try:
+                from app.services.event_ledger import EventLedger
+                EventLedger.log_financial(
+                    db=self.db,
+                    event_type="escrow.released",
+                    aggregate_id=escrow_id,
+                    aggregate_type="escrow",
+                    actor_id=escrow.payee_id or "",
+                    amount=escrow.amount,
+                    currency=escrow.currency,
+                    reference=f"escrow_release:{escrow_id}",
+                    extra={
+                        "task_id": escrow.task_id,
+                        "split_bps": SOCIAL_SPLIT_BPS,
+                        "split": {key: str(value) for key, value in split.items()},
+                    },
+                )
+            except Exception as _ledger_exc:
+                logger.error(
+                    "AUDIT_TRAIL_FAILURE: EventLedger.log_financial failed for escrow=%s — %s",
+                    escrow_id, _ledger_exc,
+                )
+            self.db.commit()
+            self.db.refresh(escrow)
+            return escrow
+        except IntegrityError as exc:
+            self.db.rollback()
+            fresh = self._get_escrow(escrow_id)
+            if fresh.status == "released":
+                raise EscrowError(f"Escrow {escrow_id} deja libere") from exc
+            raise
 
     def refund_escrow(self, escrow_id: str, *, allow_frozen: bool = False) -> Escrow:
         escrow = self._get_escrow(escrow_id, for_update=True)
@@ -531,14 +701,21 @@ class WalletService:
         )
         wallet.balance += escrow.amount
         self.db.add(tx)
-        self.db.flush()  # obtain tx.id before commit
-        self._mirror_to_ledger(tx, wallet)
+        try:
+            self.db.flush()  # obtain tx.id before commit
+            self._mirror_to_ledger(tx, wallet)
 
-        escrow.status = "refunded"
-        escrow.settlement_tx_id = tx.id
-        self.db.commit()  # single atomic commit
-        self.db.refresh(escrow)
-        return escrow
+            escrow.status = "refunded"
+            escrow.settlement_tx_id = tx.id
+            self.db.commit()  # single atomic commit
+            self.db.refresh(escrow)
+            return escrow
+        except IntegrityError as exc:
+            self.db.rollback()
+            fresh = self._get_escrow(escrow_id)
+            if fresh.status == "refunded":
+                raise EscrowError(f"Escrow {escrow_id} deja rembourse") from exc
+            raise
 
     def create_pending_escrow(self, task_id: str, payer_id: str, payee_id: str | None, amount: Decimal, currency: str, *, is_sandbox: bool = False) -> Escrow:
         if amount <= Decimal("0"):
@@ -575,7 +752,9 @@ class WalletService:
         """Mark escrow as funded from an EXTERNAL payment (Stripe/FedaPay/Flutterwave).
 
         Does NOT touch the payer's wallet balance — the money arrived externally.
-        Only the escrow status and provider reference are updated.
+        We still persist a ledger trace transaction (`type="inbound"`) linked via
+        `funding_tx_id` so reconciliation, dispute review and provider-idempotency
+        have a concrete immutable record to point to.
         """
         escrow = self._get_escrow(escrow_id, for_update=True)
         if escrow.status == "funded":
@@ -586,9 +765,45 @@ class WalletService:
 
         self._audit_transition(escrow, TransactionState.PROCESSING, "payment_processing", provider)
 
+        payer_wallet = self._get_or_create_wallet(
+            escrow.payer_id,
+            escrow.currency,
+            for_update=True,
+            is_sandbox=escrow.is_sandbox,
+        )
+        payment_reference = f"pay:{provider}:{provider_tx_id}"
+        funding_tx = self.db.execute(
+            select(Transaction).where(
+                Transaction.wallet_id == payer_wallet.id,
+                Transaction.reference == payment_reference,
+            )
+        ).scalars().one_or_none()
+        if funding_tx is None:
+            funding_tx = Transaction(
+                id=_uuid(),
+                wallet_id=payer_wallet.id,
+                type="inbound",
+                amount=escrow.amount,
+                status="completed",
+                reference=payment_reference,
+                provider=provider,
+                metadata_json=json.dumps(
+                    {
+                        "type": "external_escrow_funding",
+                        "escrow_id": escrow.id,
+                        "task_id": escrow.task_id,
+                        "provider_tx_id": provider_tx_id,
+                    }
+                ),
+                is_sandbox=escrow.is_sandbox,
+            )
+            self.db.add(funding_tx)
+            self.db.flush()
+
         escrow.status = "funded"
         escrow.provider = provider
         escrow.provider_tx_id = provider_tx_id
+        escrow.funding_tx_id = funding_tx.id
         self.db.commit()
         self.db.refresh(escrow)
         FinancialAuditLogger.log(
@@ -1287,7 +1502,8 @@ class WalletService:
             except IntegrityError:
                 # Another request won the INSERT race; discard our failed object and
                 # re-read the winner.  Outer transaction is intact (savepoint rolled back).
-                self.db.expunge(new_wallet)
+                if new_wallet in self.db:
+                    self.db.expunge(new_wallet)
                 wallet = self.db.execute(
                     select(Wallet).where(
                         Wallet.user_id == user_id,
@@ -1406,11 +1622,6 @@ class WalletService:
         from_wallet = first_wallet if first_id == from_user_id else second_wallet
         to_wallet = second_wallet if second_id == to_user_id else first_wallet
 
-        if from_wallet.balance < amount:
-            raise InsufficientFundsError(
-                f"Solde insuffisant : {from_wallet.balance} {currency} < {amount} {currency}"
-            )
-
         debit_tx = Transaction(
             id=_uuid(),
             wallet_id=from_wallet.id,
@@ -1432,10 +1643,30 @@ class WalletService:
             metadata_json=json.dumps({"type": "transfer_in", "from_user_id": from_user_id, "note": note}),
         )
 
-        from_wallet.balance -= amount
-        to_wallet.balance += amount
         self.db.add(debit_tx)
         self.db.add(credit_tx)
+        from_result = self.db.execute(
+            update(Wallet)
+            .where(
+                Wallet.id == from_wallet.id,
+                Wallet.balance >= amount,
+            )
+            .values(balance=Wallet.balance - amount)
+        )
+        if from_result.rowcount != 1:
+            self.db.rollback()
+            latest_from_wallet = self.get_wallet(from_user_id, currency)
+            raise InsufficientFundsError(
+                f"Solde insuffisant : {latest_from_wallet.balance} {currency} < {amount} {currency}"
+            )
+        self.db.execute(
+            update(Wallet)
+            .where(Wallet.id == to_wallet.id)
+            .values(balance=Wallet.balance + amount)
+        )
+        self.db.flush()
+        self.db.refresh(from_wallet)
+        self.db.refresh(to_wallet)
         self._mirror_to_ledger(debit_tx, from_wallet)
         self._mirror_to_ledger(credit_tx, to_wallet)
         self.db.commit()

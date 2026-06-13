@@ -1,29 +1,18 @@
+"""Idempotent world-country seeding for Zaska rollout.
+
+This script intentionally delegates to CountryRolloutService so it does not
+reintroduce legacy countries with partial metadata or wrong rollout flags.
+"""
+
 from app.db.session import SessionLocal
-from app.models.location_config import Country, Currency, EmergencyNumber, PaymentMethodConfig
-
-
-COUNTRIES = [
-    ("Togo", "Lome"),
-    ("Benin", "Cotonou"),
-    ("Ghana", "Accra"),
-    ("Estonia", "Tallinn"),
-    ("Portugal", "Lisbon"),
-    ("France", "Paris"),
-]
+from app.models.location_config import Currency
+from app.services.country_rollout_service import CountryRolloutService
 
 
 def run_seed():
     db = SessionLocal()
     try:
-        for country_name, city in COUNTRIES:
-            country = db.query(Country).filter(Country.name == country_name).one_or_none()
-            if country is None:
-                country = Country(name=country_name, city=city)
-                db.add(country)
-                db.flush()
-                db.add(PaymentMethodConfig(country_id=country.id, method_name="CARD"))
-                db.add(PaymentMethodConfig(country_id=country.id, method_name="MOBILE_MONEY"))
-                db.add(EmergencyNumber(country_id=country.id, service_name="POLICE", phone_number="112"))
+        CountryRolloutService(db).seed_catalog()
         if db.query(Currency).filter(Currency.code == "EUR").one_or_none() is None:
             db.add(Currency(code="EUR", name="Euro"))
         if db.query(Currency).filter(Currency.code == "XOF").one_or_none() is None:

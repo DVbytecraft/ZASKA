@@ -30,7 +30,7 @@ export function ProfilePage() {
       if (kyc.success) setKycStatus(kyc.data);
       setKycLoading(false);
     })();
-  }, []);
+  }, [loadProfile]);
 
   const kycTone =
     kycStatus?.status === "approved" && !kycStatus?.isExpired

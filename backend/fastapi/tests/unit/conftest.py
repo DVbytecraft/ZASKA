@@ -1,10 +1,12 @@
 """Pytest fixtures for ZASKA backend tests (unit / fast — no live server needed)."""
+import os
 import pytest
 from decimal import Decimal
 from unittest.mock import MagicMock, patch, AsyncMock
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
 from app.db.session import get_db
@@ -17,33 +19,38 @@ def wait_for_live_api():
     """Override: unit tests run without a live API server."""
     return
 
-# SQLite in-memory for fast tests
-TEST_DATABASE_URL = "sqlite:///./test_zaska.db"
+# SQLite by default for fast local runs; set TEST_DATABASE_URL to point at a
+# real PostgreSQL instance (e.g. in CI) to exercise FOR UPDATE / row-locking
+# semantics that SQLite does not enforce.
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "sqlite:///:memory:")
 
-engine_test = create_engine(
-    TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-)
+if TEST_DATABASE_URL.startswith("sqlite"):
+    _connect_args: dict = {"check_same_thread": False}
+    _engine_kwargs: dict = {"poolclass": StaticPool}
+else:
+    _connect_args = {}
+    _engine_kwargs = {}
+
+engine_test = create_engine(TEST_DATABASE_URL, connect_args=_connect_args, **_engine_kwargs)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine_test)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def create_test_tables():
-    Base.metadata.drop_all(bind=engine_test)
-    Base.metadata.create_all(bind=engine_test)
-    yield
-    Base.metadata.drop_all(bind=engine_test)
 
 
 @pytest.fixture()
 def db():
-    connection = engine_test.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
-    yield session
-    session.close()
-    transaction.rollback()
-    connection.close()
+    """
+    Fresh schema for every test, on a single dedicated connection (StaticPool
+    keeps the in-memory SQLite DB alive for the fixture's lifetime). Service
+    code under test commits/rolls back exactly as it would against a real
+    database — no shared-transaction/savepoint bookkeeping to fight with.
+    Tearing down drops all tables so the next test starts from a clean slate.
+    """
+    Base.metadata.create_all(bind=engine_test)
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(bind=engine_test)
 
 
 @pytest.fixture()

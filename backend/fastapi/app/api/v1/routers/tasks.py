@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +28,7 @@ from app.core.config import settings
 from app.core.observability import logger
 from app.core.responses import success_response
 from app.models.task import Task
+from app.models.task_timeline_event import TaskTimelineEvent
 from app.models.user import User
 from app.schemas.task import (
     CancelTaskPayload,
@@ -80,6 +82,35 @@ def _record_neg_event(
             event_type=event_type, price=price, currency=currency,
         )
         db.add(ev)
+        db.flush()
+    except Exception:
+        pass
+
+
+def _record_task_timeline_event(
+    db: Session,
+    task_id: str,
+    event_type: str,
+    *,
+    actor_user_id: str | None = None,
+    from_status: str | None = None,
+    to_status: str | None = None,
+    note: str | None = None,
+    payload: dict | None = None,
+) -> None:
+    """Persist a task lifecycle event. Never raises."""
+    try:
+        db.add(
+            TaskTimelineEvent(
+                task_id=task_id,
+                actor_user_id=actor_user_id,
+                event_type=event_type,
+                from_status=from_status,
+                to_status=to_status,
+                note=note,
+                payload_json=json.dumps(payload, ensure_ascii=False, default=str) if payload is not None else None,
+            )
+        )
         db.flush()
     except Exception:
         pass
@@ -250,6 +281,25 @@ def create_task(
             referral_svc.process_client_first_order(user_id, task.id)
         except Exception as exc:
             logger.error("referral:client_first_order_hook_failed user_id={} task_id={} error={}", user_id, task.id, exc)
+        _record_task_timeline_event(
+            db,
+            task.id,
+            "created",
+            actor_user_id=user_id,
+            to_status=task.status,
+            note="Tâche publiée",
+            payload={
+                "price": str(task.price),
+                "currency": task.currency,
+                "mode": task.mode,
+                "service_category": task.service_category,
+                "is_urgent": bool(task.is_urgent),
+                "city": task.city,
+                "country": task.country,
+            },
+        )
+        db.commit()
+        db.refresh(task)
         response = _serialize_task(task)
         response["amlStatus"] = getattr(task, "aml_status", "clear")
         if aml_case is not None:
@@ -309,6 +359,67 @@ def list_tasks(
         return success_response(result)
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de charger les tâches") from exc
+
+
+@router.get("/{task_id}/timeline")
+def get_task_timeline(
+    task_id: str,
+    service: TaskService = Depends(get_task_service),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        task = _get_task_or_404(task_id, service)
+        if task.created_by != user_id and task.assigned_to != user_id:
+            raise HTTPException(status_code=403, detail="Accès non autorisé à la chronologie de cette tâche")
+
+        events = db.execute(
+            select(TaskTimelineEvent)
+            .where(TaskTimelineEvent.task_id == task_id)
+            .order_by(TaskTimelineEvent.created_at.asc())
+        ).scalars().all()
+
+        actor_cache: dict[str, str] = {}
+
+        def actor_name(actor_id: str | None) -> str | None:
+            if not actor_id:
+                return None
+            if actor_id not in actor_cache:
+                actor = db.get(User, actor_id)
+                actor_cache[actor_id] = (
+                    " ".join(filter(None, [actor.first_name, actor.last_name]))
+                    or (actor.email if actor else actor_id[:8])
+                ) if actor else actor_id[:8]
+            return actor_cache[actor_id]
+
+        def payload_value(raw: str | None) -> dict | None:
+            if not raw:
+                return None
+            try:
+                value = json.loads(raw)
+            except Exception:
+                return None
+            return value if isinstance(value, dict) else None
+
+        return success_response([
+            {
+                "id": event.id,
+                "taskId": event.task_id,
+                "eventType": event.event_type,
+                "actorUserId": event.actor_user_id,
+                "actorName": actor_name(event.actor_user_id),
+                "fromStatus": event.from_status,
+                "toStatus": event.to_status,
+                "note": event.note,
+                "payload": payload_value(event.payload_json),
+                "createdAt": event.created_at.isoformat(),
+            }
+            for event in events
+        ])
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible de charger la chronologie de la tâche") from exc
 
 
 @router.get("/my-applications")
@@ -408,7 +519,18 @@ def pause_task(
             raise HTTPException(status_code=403, detail="Non autorisé")
         if task.status != "OPEN":
             raise HTTPException(status_code=409, detail="Seules les tâches OPEN peuvent être mises en pause")
+        previous_status = task.status
         task = service.update_status(task_id, "PAUSED")
+        _record_task_timeline_event(
+            service.db,
+            task_id,
+            "paused",
+            actor_user_id=user_id,
+            from_status=previous_status,
+            to_status=task.status,
+            note="Tâche mise en pause par le client",
+        )
+        service.db.commit()
         return success_response(_serialize_task(task))
     except HTTPException:
         raise
@@ -429,7 +551,18 @@ def reactivate_task(
             raise HTTPException(status_code=403, detail="Non autorisé")
         if task.status != "PAUSED":
             raise HTTPException(status_code=409, detail="Seules les tâches PAUSED peuvent être réactivées")
+        previous_status = task.status
         task = service.update_status(task_id, "OPEN")
+        _record_task_timeline_event(
+            service.db,
+            task_id,
+            "reactivated",
+            actor_user_id=user_id,
+            from_status=previous_status,
+            to_status=task.status,
+            note="Tâche réactivée",
+        )
+        service.db.commit()
         return success_response(_serialize_task(task))
     except HTTPException:
         raise
@@ -459,6 +592,7 @@ def cancel_task(
 
         tasker_id = task.assigned_to
         new_status = "OPEN" if payload.republish else "CANCELLED"
+        previous_status = task.status
 
         # Refund escrow if funded (only relevant when ASSIGNED).
         # P1-005 FIX: use FOR UPDATE so a concurrent cancel/abandon cannot both
@@ -480,6 +614,16 @@ def cancel_task(
                    if payload.republish else
                    "Le client a annulé définitivement cette tâche. Votre paiement a été remboursé.")
             _notify(db, tasker_id, "warning", "Tâche annulée", msg, task_id=task_id)
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "republished" if payload.republish else "cancelled",
+            actor_user_id=user_id,
+            from_status=previous_status,
+            to_status=updated.status,
+            note=payload.reason or ("Tâche republiée par le client" if payload.republish else "Tâche annulée définitivement"),
+            payload={"republish": payload.republish},
+        )
         db.commit()
 
         out_msg = ("Tâche republiée. Le paiement a été remboursé." if payload.republish
@@ -543,6 +687,20 @@ def apply_task(
 
         _notify(db, task.created_by, "info", "Nouvelle candidature",
                 f"Un prestataire a postulé à votre tâche : {task.title}", task_id=task_id)
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "application_submitted",
+            actor_user_id=user_id,
+            from_status=task.status,
+            to_status=task.status,
+            note="Candidature tasker reçue",
+            payload={
+                "application_id": application.id,
+                "proposed_price": str(application.proposed_price) if application.proposed_price is not None else None,
+                "currency": application.currency,
+            },
+        )
         db.commit()
 
         return success_response({
@@ -580,6 +738,26 @@ def list_applications(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Impossible de charger les candidatures") from exc
+
+
+@router.get("/{task_id}/available-taskers")
+def list_available_taskers(
+    task_id: str,
+    limit: int = 25,
+    service: TaskService = Depends(get_task_service),
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        task = _get_task_or_404(task_id, service)
+        if task.created_by != user_id:
+            raise HTTPException(status_code=403, detail="Seul le créateur de la tâche peut voir les taskers disponibles")
+        if limit < 1 or limit > 100:
+            raise HTTPException(status_code=422, detail="limit doit être compris entre 1 et 100")
+        return success_response(service.list_available_taskers_for_task(task_id=task_id, limit=limit))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Impossible de charger les taskers disponibles") from exc
 
 
 # ─── Accept ──────────────────────────────────────────────────────────────────
@@ -657,6 +835,19 @@ def accept_task(
         except Exception:
             pass
 
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "assigned",
+            actor_user_id=user_id,
+            from_status="OPEN",
+            to_status=task.status,
+            note="Tasker assigné à la tâche",
+            payload={
+                "tasker_id": tasker_id,
+                "assignment_mode": "client_select" if creator_is_acting else "self_accept",
+            },
+        )
         db.commit()
         return success_response(_serialize_task(task))
     except HTTPException:
@@ -690,7 +881,18 @@ def update_status(
         task = _get_task_or_404(task_id, service)
         if task.created_by != user_id and task.assigned_to != user_id:
             raise HTTPException(status_code=403, detail="Non autorisé à modifier le statut de cette tâche")
+        previous_status = task.status
         task = service.update_status(task_id=task_id, status=payload.status)
+        _record_task_timeline_event(
+            service.db,
+            task_id,
+            "status_updated",
+            actor_user_id=user_id,
+            from_status=previous_status,
+            to_status=task.status,
+            note=f"Statut modifié manuellement vers {task.status}",
+        )
+        service.db.commit()
         return success_response(_serialize_task(task, viewer_id=user_id))
     except HTTPException:
         raise
@@ -745,6 +947,16 @@ def negotiate_price(
         _notify(db, task.created_by, "warning", "Modification de prix demandée",
                 f"Un prestataire propose un nouveau prix pour : {task.title}", task_id=task_id)
         _record_neg_event(db, task_id, user_id, "proposed", payload.proposed_price, task.currency)
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "negotiation_proposed",
+            actor_user_id=user_id,
+            from_status=task.status,
+            to_status=task.status,
+            note="Nouvelle proposition tarifaire",
+            payload={"proposed_price": str(payload.proposed_price), "currency": task.currency},
+        )
         db.commit()
 
         return success_response({
@@ -778,48 +990,62 @@ def respond_to_negotiation(
         if task.negotiation_status != "pending":
             raise HTTPException(status_code=409, detail="Aucune négociation en attente")
 
+        negotiator_id = task.negotiated_by
+        proposed_price = task.negotiated_price or task.price
+        current_status = task.status
+
         if payload.accept:
-            task = service.accept_negotiation(task_id)
-            # Adjust escrow amount to match the newly accepted price.
-            # P0-003 FIX: credit_wallet() and debit_wallet() commit internally.
-            # After each internal commit, escrow.amount must be committed in its OWN
-            # explicit db.commit() — db.flush() is insufficient since the session
-            # transaction was already committed by the wallet operation.
-            try:
-                escrow = wallet_svc.get_escrow_by_task_for_update(task_id)
-                if escrow and task.price and escrow.status in ("funded", "hold"):
-                    diff = task.price - escrow.amount
-                    if diff < Decimal("0"):
-                        # Negotiated price is lower — refund surplus to client
-                        wallet_svc.credit_wallet(
-                            user_id=escrow.payer_id, currency=escrow.currency,
-                            amount=-diff, reference=f"neg_refund:{escrow.id}",
-                            metadata={"type": "negotiation_refund", "task_id": task_id},
+            escrow = wallet_svc.get_escrow_by_task_for_update(task_id)
+            if escrow and proposed_price and escrow.status in ("funded", "hold"):
+                diff = proposed_price - escrow.amount
+                if diff > Decimal("0"):
+                    available_balance = wallet_svc.get_balance(escrow.payer_id, escrow.currency)
+                    if available_balance < diff:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Le client n'a pas assez de fonds pour accepter cette hausse de prix.",
                         )
-                        # credit_wallet committed — begin fresh transaction for escrow update
-                        escrow.amount = task.price
-                        db.commit()  # explicit commit — not flush — to persist escrow.amount
-                    elif diff > Decimal("0"):
-                        # Negotiated price is higher — debit client if they have funds
-                        try:
-                            wallet_svc.debit_wallet(
-                                user_id=escrow.payer_id, currency=escrow.currency,
-                                amount=diff, reference=f"neg_topup:{escrow.id}",
-                                metadata={"type": "negotiation_topup", "task_id": task_id},
-                            )
-                            # debit_wallet committed — begin fresh transaction for escrow update
-                            escrow.amount = task.price
-                            db.commit()  # explicit commit — not flush
-                        except InsufficientFundsError:
-                            # Client can't afford the increase — escrow stays at original amount
-                            pass
-            except Exception:
-                pass  # escrow adjustment is best-effort
+                    try:
+                        wallet_svc.debit_wallet(
+                            user_id=escrow.payer_id,
+                            currency=escrow.currency,
+                            amount=diff,
+                            reference=f"neg_topup:{escrow.id}",
+                            metadata={"type": "negotiation_topup", "task_id": task_id},
+                        )
+                    except InsufficientFundsError as exc:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Le client n'a pas assez de fonds pour accepter cette hausse de prix.",
+                        ) from exc
+                elif diff < Decimal("0"):
+                    wallet_svc.credit_wallet(
+                        user_id=escrow.payer_id,
+                        currency=escrow.currency,
+                        amount=-diff,
+                        reference=f"neg_refund:{escrow.id}",
+                        metadata={"type": "negotiation_refund", "task_id": task_id},
+                    )
+
+                task = db.execute(
+                    select(Task).where(Task.id == task_id).with_for_update()
+                ).scalars().one()
+                if task.negotiation_status != "pending":
+                    raise HTTPException(status_code=409, detail="La négociation n'est plus en attente.")
+                task.price = proposed_price
+                task.negotiation_status = "accepted"
+                escrow = wallet_svc.get_escrow_by_task_for_update(task_id)
+                if escrow and escrow.status in ("funded", "hold"):
+                    escrow.amount = proposed_price
+                db.commit()
+                db.refresh(task)
+            else:
+                task = service.accept_negotiation(task_id)
         else:
             task = service.reject_negotiation(task_id)
 
         # Notify negotiator via email if we have their email
-        negotiator = db.get(User, task.negotiated_by) if task.negotiated_by else None
+        negotiator = db.get(User, negotiator_id) if negotiator_id else None
         if negotiator and negotiator.email:
             try:
                 from app.core.email import send_price_accepted_email, send_price_rejected_email
@@ -827,7 +1053,7 @@ def respond_to_negotiation(
                     send_price_accepted_email(
                         to_email=negotiator.email,
                         task_title=task.title,
-                        accepted_price=float(task.negotiated_price or task.price),
+                        accepted_price=float(proposed_price),
                         currency=task.currency,
                     )
                 else:
@@ -841,16 +1067,26 @@ def respond_to_negotiation(
                 pass
 
         # In-app notification to the executor who proposed the price
-        if task.negotiated_by:
+        if negotiator_id:
             if payload.accept:
-                _notify(db, task.negotiated_by, "success", "Modification de prix acceptée ✓",
+                _notify(db, negotiator_id, "success", "Modification de prix acceptée ✓",
                         f"Le client a accepté votre prix pour : {task.title}", task_id=task_id)
             else:
-                _notify(db, task.negotiated_by, "warning", "Modification de prix refusée",
+                _notify(db, negotiator_id, "warning", "Modification de prix refusée",
                         f"Le client a refusé votre demande de prix pour : {task.title}", task_id=task_id)
         ev_type = "accepted" if payload.accept else "rejected"
-        ev_price = task.negotiated_price if payload.accept else None
+        ev_price = proposed_price if payload.accept else None
         _record_neg_event(db, task_id, user_id, ev_type, ev_price, task.currency)
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "negotiation_accepted" if payload.accept else "negotiation_rejected",
+            actor_user_id=user_id,
+            from_status=current_status,
+            to_status=task.status,
+            note="Négociation acceptée" if payload.accept else "Négociation refusée",
+            payload={"price": str(proposed_price), "currency": task.currency},
+        )
         db.commit()
 
         msg = "Prix accepté. La messagerie est maintenant ouverte." if payload.accept else "Prix refusé. L'exécutant sera notifié."
@@ -881,8 +1117,18 @@ def abandon_negotiation(
         if task.negotiation_status not in ("pending", "none") or task.status not in ("OPEN", "ASSIGNED"):
             raise HTTPException(status_code=409, detail="Aucune négociation active à abandonner")
 
+        previous_status = task.status
         task = service.abandon_and_republish(task_id)
         _record_neg_event(db, task_id, user_id, "abandoned", None, task.currency)
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "negotiation_abandoned",
+            actor_user_id=user_id,
+            from_status=previous_status,
+            to_status=task.status,
+            note="Négociation abandonnée, tâche republiée",
+        )
         db.commit()
         return success_response({
             **_serialize_task(task),
@@ -1007,6 +1253,16 @@ def mark_task_complete(
         else:
             notif_body = f"Votre prestataire a déclaré la tâche terminée : {task.title}. Vous avez 6h pour confirmer."
         _notify(db, task.created_by, "success", "Prestation déclarée terminée", notif_body, task_id=task_id)
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "completion_declared",
+            actor_user_id=user_id,
+            from_status="ASSIGNED",
+            to_status=task.status,
+            note="Prestation déclarée terminée par le tasker",
+            payload={"completion_percent": pct, "proof_photo_url": payload.proof_photo_url},
+        )
         db.commit()
 
         logger.info("task:pending_validation task_id={} pct={}", task_id, pct)
@@ -1151,6 +1407,19 @@ def confirm_task_complete(
                 shop_svc.finalize_order_from_delivery_task(task_id=task_id, commit=False)
             except Exception as exc:
                 logger.error("shop:finalize_from_task_error task_id={} error={}", task_id, exc)
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "confirmed",
+            actor_user_id=user_id,
+            from_status="PENDING_VALIDATION",
+            to_status=task.status,
+            note="Tâche confirmée par le client",
+            payload={
+                "completion_percent": task.completion_percent,
+                "escrow_released": escrow_released,
+            },
+        )
         db.commit()
         if task.assigned_to:
             try:
@@ -1193,6 +1462,15 @@ def contest_task(
             actor_user_id=user_id,
             reason=payload.reason,
         )
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "contested",
+            actor_user_id=user_id,
+            note="Litige ouvert",
+            payload={"reason": payload.reason},
+        )
+        db.commit()
         return success_response({
             "task_id": task_id,
             "dispute": dispute,
@@ -1401,6 +1679,7 @@ def tasker_abandon(
             raise HTTPException(status_code=409, detail="Le désistement n'est possible que sur une tâche ASSIGNED ou PAUSED")
 
         pct = payload.completion_percent
+        previous_status = task.status
         # P1-002 FIX: FOR UPDATE on escrow prevents concurrent abandons from both
         # reading status="funded" and both calling refund_escrow.
         escrow = wallet_svc.get_escrow_by_task_for_update(task_id)
@@ -1470,6 +1749,16 @@ def tasker_abandon(
             except Exception:
                 pass
 
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "tasker_abandoned",
+            actor_user_id=user_id,
+            from_status=previous_status,
+            to_status=task.status,
+            note="Le tasker s'est désisté et la tâche a été rouverte",
+            payload={"completion_percent_declared": pct},
+        )
         db.commit()
         return success_response({
             **_serialize_task(task),
@@ -1510,6 +1799,16 @@ def counter_propose(
             proposed_price=payload.proposed_price,
         )
         _record_neg_event(db, task_id, user_id, "counter", payload.proposed_price, task.currency)
+        _record_task_timeline_event(
+            db,
+            task_id,
+            "negotiation_countered",
+            actor_user_id=user_id,
+            from_status=task.status,
+            to_status=task.status,
+            note="Contre-proposition tarifaire envoyée",
+            payload={"proposed_price": str(payload.proposed_price), "currency": task.currency},
+        )
 
         other_id = task.assigned_to if task.created_by == user_id else task.created_by
         if other_id:

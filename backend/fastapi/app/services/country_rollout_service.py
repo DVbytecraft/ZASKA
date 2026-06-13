@@ -125,6 +125,32 @@ class CountryRolloutService:
         self.db.refresh(country)
         return country
 
+    def _is_priority_launch_country(self, country_code: str) -> bool:
+        return country_code.strip().upper() in _PRIORITY_ACTIVE_COUNTRIES
+
+    def _should_repair_priority_rollout(self, country: Country, country_code: str) -> bool:
+        cc = country_code.strip().upper()
+        if cc not in _PRIORITY_ACTIVE_COUNTRIES:
+            return False
+
+        launch_status = (country.launch_status or "").strip().upper()
+        rollout_defaults_untouched = (
+            country.is_active is False
+            and country.signup_enabled is True
+            and launch_status in {"", "PLANNED"}
+        )
+        rollout_metadata_incomplete = any(
+            value in (None, "")
+            for value in (
+                country.display_name_en,
+                country.display_name_fr,
+                country.currency_code,
+                country.payment_providers_json,
+            )
+        )
+        legacy_seed_shape = country.iso_code is None or country.name.strip().upper() != cc
+        return rollout_defaults_untouched and (rollout_metadata_incomplete or legacy_seed_shape)
+
     def list_countries(self) -> list[Country]:
         self.seed_catalog()
         return self.db.execute(
@@ -223,3 +249,9 @@ class CountryRolloutService:
         if country.aml_reporting_threshold is None:
             country.aml_reporting_threshold = Decimal("2000")
         country.aml_authority_name = country.aml_authority_name or _AML_AUTHORITIES.get(country_code)
+        if self._should_repair_priority_rollout(country, country_code):
+            country.is_active = True
+            country.signup_enabled = True
+            country.launch_status = "ACTIVE"
+        elif country.launch_status is None or not str(country.launch_status).strip():
+            country.launch_status = "ACTIVE" if self._is_priority_launch_country(country_code) else "PLANNED"

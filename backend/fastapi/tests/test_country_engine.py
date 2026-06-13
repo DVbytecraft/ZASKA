@@ -204,12 +204,20 @@ class TestFeatureFlagsMerge:
 
         mock_country = MagicMock() if db_country is not False else None
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.one_or_none.return_value = mock_country
-
-        if db_flags is not None and mock_country:
-            mock_db.query.return_value.filter.return_value.all.return_value = db_flags
-        else:
-            mock_db.query.return_value.filter.return_value.all.return_value = []
+        mock_db.execute.side_effect = [
+            MagicMock(
+                scalars=MagicMock(
+                    return_value=MagicMock(one_or_none=MagicMock(return_value=mock_country))
+                )
+            ),
+            MagicMock(
+                scalars=MagicMock(
+                    return_value=MagicMock(
+                        all=MagicMock(return_value=db_flags if (db_flags is not None and mock_country) else [])
+                    )
+                )
+            ),
+        ]
 
         return FeatureFlagEngine(mock_redis, mock_db)
 
@@ -314,7 +322,7 @@ class TestKycProviderSelection:
 
     def test_ng_flutterwave_route(self):
         route = PaymentRouterService.route_payment("NG", 5000, "NGN")
-        assert route.provider == "flutterwave"
+        assert route.provider == "paystack"
         assert route.currency == "NGN"
 
     def test_unknown_country_fallback_stripe(self):

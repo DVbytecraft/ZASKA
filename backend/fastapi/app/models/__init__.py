@@ -58,6 +58,7 @@ from app.models.shop import (
 )
 from app.models.subscription import SubscriptionPlan, SubscriptionUsage, UserSubscription
 from app.models.task import Task
+from app.models.task_timeline_event import TaskTimelineEvent
 from app.models.trust import (
     Badge,
     ModerationCase,
@@ -110,6 +111,7 @@ __all__ = [
     "UserRoleAssignment",
     "AdminScope",
     "Task",
+    "TaskTimelineEvent",
     "PaymentMethod",
     "ReferralProgram",
     "ReferralEvent",

@@ -30,7 +30,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db.session import SessionLocal
 from app.models.outbox_event import OutboxEvent
+from app.models.user import User
+from app.services.push_service import get_push_service
 
 logger = logging.getLogger(__name__)
 
@@ -237,9 +240,29 @@ def _deliver_notification(user_id: str, payload: dict) -> None:
            Transient FCM errors (network blip, rate-limit) are retried with exponential
            backoff; persistent failures go to dead_letter for manual inspection.
     """
-    from app.services.push_service import PushService
     uid = payload.get("user_id", user_id)
     title = payload.get("title", "ZASKA")
     body = payload.get("body", "")
-    if uid:
-        PushService.send(user_id=uid, title=title, body=body)  # exception → retry in outbox
+    if not uid:
+        logger.info("outbox: notification skipped — missing user_id")
+        return
+
+    db = SessionLocal()
+    try:
+        user = db.get(User, str(uid))
+        if user is None:
+            logger.info("outbox: notification skipped — unknown user_id=%s", uid)
+            return
+        if not user.fcm_token:
+            logger.info("outbox: notification skipped — no fcm_token for user_id=%s", uid)
+            return
+        delivered = get_push_service().send(
+            fcm_token=user.fcm_token,
+            title=title,
+            body=body,
+            data=payload.get("data") if isinstance(payload.get("data"), dict) else None,
+        )
+        if not delivered:
+            raise RuntimeError(f"Push delivery failed for user_id={uid}")
+    finally:
+        db.close()

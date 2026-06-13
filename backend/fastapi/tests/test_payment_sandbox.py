@@ -8,6 +8,7 @@ from app.db.base import Base
 from app.models.task import Task
 from app.models.user import User
 from app.models.wallet import Transaction
+from app.services.internal_wallet_seed_service import InternalWalletSeedService
 from app.services.payment.webhook_queue import QueuedWebhookEvent, WebhookQueue
 from app.services.wallet_service import WalletService
 
@@ -34,6 +35,10 @@ def db_session():
         )
     )
     db.commit()
+    from app.core.config import settings as _settings
+    for _name in ("zaska_wallet_user_id", "pension_fund_user_id", "health_fund_user_id", "smoothing_fund_user_id"):
+        setattr(_settings, _name, "")
+    InternalWalletSeedService(db).ensure_all()
     try:
         yield db
     finally:
@@ -89,7 +94,7 @@ def test_release_escrow_credits_worker(db_session):
     svc.fund_escrow_from_payment(esc.id, "stripe", "pi_release")
     svc.release_escrow_safe(esc.id)
     bal = svc.get_balance("u2", "EUR")
-    assert bal == Decimal("70")
+    assert bal == svc.calculate_social_split(Decimal("70"))["tasker_net"]
 
 
 def test_double_webhook_funding_stays_idempotent(db_session):

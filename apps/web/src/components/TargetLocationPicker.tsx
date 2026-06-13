@@ -69,7 +69,7 @@ export function TargetLocationPicker({
     return () => {
       active = false;
     };
-  }, [defaultCountryCode]);
+  }, [defaultCountryCode, value.countryCode]);
 
   useEffect(() => {
     if (!value.countryCode) {
@@ -90,7 +90,7 @@ export function TargetLocationPicker({
     return () => {
       active = false;
     };
-  }, [value.countryCode]);
+  }, [value.countryCode, value.cityName]);
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(value));

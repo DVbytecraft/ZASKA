@@ -18,6 +18,14 @@ from app.models.user import User
 from app.services.kyc_service import KycService
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
 @pytest.fixture()
 def db_session():
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
@@ -31,7 +39,9 @@ def db_session():
             id="kyc-1",
             user_id="user-1",
             id_document_url="http://x/doc.jpg",
+            id_document_back_url="http://x/doc-back.jpg",
             selfie_url="http://x/selfie.jpg",
+            criminal_record_url="http://x/criminal-record.pdf",
             status="pending",
         )
     )
@@ -48,11 +58,13 @@ def test_approve_sets_approved_at_and_expires_at(db_session):
 
     assert sub.status == "approved"
     assert sub.approved_at is not None
-    assert before <= sub.approved_at <= after
+    approved_at = _as_utc(sub.approved_at)
+    assert approved_at is not None
+    assert before <= approved_at <= after
     assert sub.expires_at is not None
-    expected_expiry = sub.approved_at + timedelta(days=KYC_VALIDITY_DAYS)
+    expected_expiry = approved_at + timedelta(days=KYC_VALIDITY_DAYS)
     # Allow 1-second tolerance
-    assert abs((sub.expires_at - expected_expiry).total_seconds()) < 1
+    assert abs((_as_utc(sub.expires_at) - expected_expiry).total_seconds()) < 1
 
 
 def test_is_expired_false_for_fresh_approval(db_session):

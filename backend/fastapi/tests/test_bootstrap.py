@@ -19,6 +19,7 @@ import pytest
 
 
 API_URL = os.getenv("TEST_API_URL", "http://127.0.0.1:6969/api").rstrip("/")
+pytestmark = pytest.mark.live_api
 
 
 # ═══════════════════════════════════════════════════════════════════════════

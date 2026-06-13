@@ -1,5 +1,5 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, type Task, type NegotiationEvent } from "../api";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -33,7 +33,7 @@ function ActionBtn({
   onClick: () => void;
   variant?: "primary" | "secondary" | "danger" | "success";
   loading?: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const base = "px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40 transition-colors";
   const variants = {
@@ -87,7 +87,7 @@ export function TaskDetailPage() {
   const isTasker = task?.assignedTo === userId;
   const isParticipant = isCreator || isTasker;
 
-  async function load() {
+  const load = useCallback(async () => {
     const [taskRes, histRes] = await Promise.all([
       api.getTask(taskId),
       api.getNegotiationHistory(taskId),
@@ -101,9 +101,9 @@ export function TaskDetailPage() {
     if (appsRes.success) {
       setHasApplied(appsRes.data.some((a) => a.taskId === taskId));
     }
-  }
+  }, [taskId]);
 
-  useEffect(() => { void load(); }, [taskId]);
+  useEffect(() => { void load(); }, [load]);
 
   async function handleApply() {
     setApplying(true);

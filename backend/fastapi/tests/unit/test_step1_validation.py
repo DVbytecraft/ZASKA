@@ -103,10 +103,11 @@ class TestSeedCatalog:
         TrustService(db).seed_catalog()
 
         badges = db.execute(select(Badge)).scalars().all()
-        assert len(badges) == 8, f"Expected 8 badges, got {len(badges)}"
+        assert len(badges) == 11, f"Expected 11 badges, got {len(badges)}"
         codes = {b.code for b in badges}
         expected_codes = {
             "VERIFIED_PHONE", "VERIFIED_EMAIL", "VERIFIED_KYC", "PHOTO_VERIFIED",
+            "CERTIFIED_ZASKA", "PROTECTED_ZASKA", "TASKER_SENIOR",
             "FIRST_TASK", "TOP_RATED", "EARLY_ADOPTER", "TRUSTED_MEMBER",
         }
         assert codes == expected_codes
@@ -132,7 +133,7 @@ class TestSeedCatalog:
 
         badges = db.execute(select(Badge)).scalars().all()
         skills = db.execute(select(Skill)).scalars().all()
-        assert len(badges) == 8
+        assert len(badges) == 11
         assert len(skills) == 20
 
     def test_seed_skills_have_categories(self, db):

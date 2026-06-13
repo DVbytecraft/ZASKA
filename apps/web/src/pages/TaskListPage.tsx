@@ -44,7 +44,7 @@ export function TaskListPage() {
         setTasks(list);
       }
     })();
-  }, [tab]);
+  }, [tab, userId]);
 
   const filtered = search.trim()
     ? tasks.filter((t) => t.title.toLowerCase().includes(search.toLowerCase()) || (t.city ?? "").toLowerCase().includes(search.toLowerCase()))

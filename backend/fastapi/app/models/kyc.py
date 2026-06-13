@@ -45,11 +45,20 @@ class KycSubmission(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    @staticmethod
+    def _as_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+
     @property
     def is_expired(self) -> bool:
-        if self.expires_at is None:
+        expires_at = self._as_utc(self.expires_at)
+        if expires_at is None:
             return False
-        return datetime.now(timezone.utc) > self.expires_at
+        return datetime.now(timezone.utc) > expires_at
 
     @property
     def metadata_payload(self) -> dict | None:

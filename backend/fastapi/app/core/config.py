@@ -1,11 +1,15 @@
+from pathlib import Path
 from typing import Literal
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+_BASE_DIR = Path(__file__).resolve().parents[2]
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file="backend/fastapi/.env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(_BASE_DIR / ".env"), extra="ignore")
 
     env: str = "development"
     app_name: str = "ZASKA API"

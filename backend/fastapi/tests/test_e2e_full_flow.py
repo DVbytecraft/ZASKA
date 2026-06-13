@@ -22,6 +22,7 @@ from otp_helper import get_register_otp
 
 BASE_URL = os.getenv("TEST_API_URL", "http://127.0.0.1:6969/api")
 WS_ORIGIN = os.getenv("TEST_WS_URL", "ws://127.0.0.1:6969")
+pytestmark = pytest.mark.live_api
 
 
 def _unique_email() -> str:

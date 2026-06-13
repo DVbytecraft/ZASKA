@@ -51,7 +51,10 @@ class Transaction(Base):
     """Grand-livre immuable — aucune ligne ne doit jamais être supprimée."""
 
     __tablename__ = "transactions"
-    __table_args__ = (Index("ix_tx_wallet_created", "wallet_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_tx_wallet_created", "wallet_id", "created_at"),
+        UniqueConstraint("wallet_id", "reference", name="uq_transactions_wallet_reference"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     wallet_id: Mapped[str] = mapped_column(String(36), ForeignKey("wallets.id"), nullable=False, index=True)
