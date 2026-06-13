@@ -130,7 +130,7 @@ class AddSkillPayload(BaseModel):
 
 
 @router.post("/skills/me")
-async def add_my_skill(
+def add_my_skill(
     payload: AddSkillPayload,
     user_id: str = Depends(require_verified_user),
     db: Session = Depends(get_db),
@@ -164,7 +164,7 @@ class ReportContentPayload(BaseModel):
 
 
 @router.post("/report")
-async def report_content(
+def report_content(
     payload: ReportContentPayload,
     background_tasks: BackgroundTasks,
     user_id: str = Depends(require_verified_user),
