@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.payments.transaction_state_machine import TransactionState, TransactionStateMachine
@@ -1902,4 +1903,72 @@ class WalletService:
             raise ValueError("Méthode de paiement introuvable")
         self.db.delete(method)
         self.db.commit()
+
+
+class AsyncWalletService:
+    """Phase 3 — async twin of WalletService, scoped to the read-heavy wallet
+    endpoints (balance/summary/transactions) migrated to AsyncSession.
+
+    Only the methods needed by those routes are implemented here. Write-heavy
+    financial flows (withdraw, deposit, escrow) stay on the sync WalletService
+    until their dependencies (audit logger, ledger mirroring, transaction
+    limits) have async equivalents — see Phase 3 plan.
+    """
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+
+    async def get_wallet(self, user_id: str, currency: str, *, is_sandbox: bool = False) -> Wallet:
+        stmt = select(Wallet).where(
+            Wallet.user_id == user_id,
+            Wallet.currency == currency,
+            Wallet.is_sandbox == is_sandbox,
+        )
+        result = await self.db.execute(stmt)
+        wallet = result.scalars().one_or_none()
+        if wallet is None:
+            raise WalletNotFoundError(f"Wallet {currency} introuvable pour user {user_id}")
+        return wallet
+
+    async def get_balance(self, user_id: str, currency: str, *, is_sandbox: bool = False) -> Decimal:
+        wallet = await self.get_wallet(user_id, currency, is_sandbox=is_sandbox)
+        return wallet.balance
+
+    async def create_wallet(self, user_id: str, currency: str, *, is_sandbox: bool = False) -> Wallet:
+        stmt = select(Wallet).where(
+            Wallet.user_id == user_id,
+            Wallet.currency == currency,
+            Wallet.is_sandbox == is_sandbox,
+        )
+        existing = (await self.db.execute(stmt)).scalars().one_or_none()
+        if existing:
+            return existing
+
+        wallet = Wallet(id=_uuid(), user_id=user_id, currency=currency, balance=Decimal("0"), is_sandbox=is_sandbox)
+        self.db.add(wallet)
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            # Concurrent creation: another request won the INSERT race, return the winner.
+            await self.db.rollback()
+            return (await self.db.execute(stmt)).scalars().one()
+        await self.db.refresh(wallet)
+        return wallet
+
+    async def list_wallets(self, user_id: str) -> list[Wallet]:
+        result = await self.db.execute(
+            select(Wallet).where(Wallet.user_id == user_id).order_by(Wallet.currency)
+        )
+        return list(result.scalars().all())
+
+    async def list_transactions(self, user_id: str, currency: str, limit: int = 50, offset: int = 0) -> list[Transaction]:
+        wallet = await self.get_wallet(user_id, currency)
+        result = await self.db.execute(
+            select(Transaction)
+            .where(Transaction.wallet_id == wallet.id)
+            .order_by(Transaction.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(result.scalars().all())
 

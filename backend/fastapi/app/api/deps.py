@@ -1,13 +1,14 @@
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import MetaData, Table, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.country_engine import CountryEngineService, FeatureFlagEngine, PaymentRouterService
 from app.core.redis_client import redis_sync
 from app.core.security import decode_token, get_token_version
-from app.db.session import get_db
+from app.db.session import get_async_db, get_db
 from app.models.user import User
 from app.services.access_control_service import AccessControlService
 from app.services.aml_service import AmlService
@@ -30,7 +31,7 @@ from app.services.shop_service import ShopService
 from app.services.subscription_service import SubscriptionService
 from app.services.task_service import TaskService
 from app.services.vtc_service import VtcService
-from app.services.wallet_service import WalletService
+from app.services.wallet_service import AsyncWalletService, WalletService
 
 _KYC_REJECTED_MSG = (
     "Votre dossier KYC a été refusé. "
@@ -486,6 +487,10 @@ def get_kyc_service(db: Session = Depends(get_db)) -> KycService:
 
 def get_wallet_service(db: Session = Depends(get_db)) -> WalletService:
     return WalletService(db)
+
+
+def get_async_wallet_service(db: AsyncSession = Depends(get_async_db)) -> AsyncWalletService:
+    return AsyncWalletService(db)
 
 
 def get_subscription_service(db: Session = Depends(get_db)) -> SubscriptionService:

@@ -3,6 +3,8 @@ import pytest
 from decimal import Decimal
 from unittest.mock import patch, MagicMock
 
+from app.db.session import SessionLocal as _GlobalSessionLocal
+
 
 class TestWalletCreate:
     def test_create_wallet(self, client, auth_headers):
@@ -186,3 +188,60 @@ class TestCreditEndpointSecurity:
                 headers=auth_headers,
             )
         assert resp.status_code == 403
+
+
+class TestAsyncWalletRoutes:
+    """Phase 3: /wallet/balance, /wallet/summary, /wallet/transactions on AsyncSession."""
+
+    def test_balance_auto_creates_wallet(self, async_client, async_auth_headers):
+        resp = async_client.get("/api/wallet/balance/XOF", headers=async_auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["currency"] == "XOF"
+        assert data["balance"] == "0"
+
+    def test_summary_auto_creates_xof_wallet(self, async_client, async_auth_headers):
+        resp = async_client.get("/api/wallet/summary", headers=async_auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data) == 1
+        assert data[0]["currency"] == "XOF"
+        assert data[0]["balance"] == "0.000000"
+
+    def test_balance_after_credit(self, async_client, async_test_user, async_auth_headers):
+        from app.services.wallet_service import WalletService
+
+        sync_db = _GlobalSessionLocal()
+        try:
+            svc = WalletService(sync_db)
+            svc.create_wallet(async_test_user.id, "USD")
+            svc.credit_wallet(async_test_user.id, "USD", Decimal("75"), "fund-async-001", "internal")
+        finally:
+            sync_db.close()
+
+        resp = async_client.get("/api/wallet/balance/USD", headers=async_auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["data"]["balance"] == "75.000000"
+
+    def test_list_transactions_after_credit(self, async_client, async_test_user, async_auth_headers):
+        from app.services.wallet_service import WalletService
+
+        sync_db = _GlobalSessionLocal()
+        try:
+            svc = WalletService(sync_db)
+            svc.create_wallet(async_test_user.id, "EUR")
+            svc.credit_wallet(async_test_user.id, "EUR", Decimal("20"), "fund-async-002", "internal")
+        finally:
+            sync_db.close()
+
+        resp = async_client.get("/api/wallet/transactions/EUR", headers=async_auth_headers)
+        assert resp.status_code == 200
+        txs = resp.json()["data"]
+        assert len(txs) == 1
+        assert txs[0]["amount"] == "20.000000"
+        assert txs[0]["reference"] == "fund-async-002"
+
+    def test_list_transactions_auto_creates_wallet(self, async_client, async_auth_headers):
+        resp = async_client.get("/api/wallet/transactions/XAF", headers=async_auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["data"] == []
