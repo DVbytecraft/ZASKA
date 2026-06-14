@@ -358,6 +358,7 @@ def list_tasks(
             result.append(d)
         return success_response(result)
     except Exception as exc:
+        logger.error("task:list_error user_id={} mine={} error={}", user_id, mine, exc)
         raise HTTPException(status_code=500, detail="Impossible de charger les tâches") from exc
 
 
