@@ -210,12 +210,14 @@ class PublicDemoCORSMiddleware(BaseHTTPMiddleware):
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
+_CORS_ALLOWED_ORIGINS = [origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()]
+
 app.add_middleware(IdempotencyMiddleware)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(DeviceFingerprintMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()],
+    allow_origins=_CORS_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Country-Code", "X-Request-ID", "X-Idempotency-Key", "X-Device-ID"],
@@ -433,25 +435,44 @@ async def health_metrics():
     return PlainTextResponse("\n".join(lines), media_type="text/plain; version=0.0.4")
 
 
+def _with_cors_headers(request, response: JSONResponse) -> JSONResponse:
+    """Echo CORS headers onto error responses.
+
+    Starlette's ServerErrorMiddleware (which dispatches the generic
+    `Exception` handler below) sits OUTSIDE CORSMiddleware, so 500 responses
+    never pass through it and arrive at the browser with no
+    Access-Control-Allow-Origin header — the browser then reports a
+    misleading "CORS error" that hides the real 500. Re-applying the same
+    allowlist check here ensures error responses are still readable
+    cross-origin.
+    """
+    origin = request.headers.get("origin")
+    if origin and origin in _CORS_ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+    return response
+
+
 @app.exception_handler(StarletteHTTPException)
-async def starlette_http_exception_handler(_, exc: StarletteHTTPException):
-    return JSONResponse(status_code=exc.status_code, content=error_response(str(exc.detail)))
+async def starlette_http_exception_handler(request, exc: StarletteHTTPException):
+    return _with_cors_headers(request, JSONResponse(status_code=exc.status_code, content=error_response(str(exc.detail))))
 
 
 @app.exception_handler(HTTPException)
-async def http_exception_handler(_, exc: HTTPException):
-    return JSONResponse(status_code=exc.status_code, content=error_response(str(exc.detail)))
+async def http_exception_handler(request, exc: HTTPException):
+    return _with_cors_headers(request, JSONResponse(status_code=exc.status_code, content=error_response(str(exc.detail))))
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(_, exc: RequestValidationError):
-    return JSONResponse(status_code=422, content=error_response("Invalid request payload", exc.errors()))
+async def validation_exception_handler(request, exc: RequestValidationError):
+    return _with_cors_headers(request, JSONResponse(status_code=422, content=error_response("Invalid request payload", exc.errors())))
 
 
 @app.exception_handler(Exception)
-async def generic_exception_handler(_, exc: Exception):
+async def generic_exception_handler(request, exc: Exception):
     logger.exception("Unhandled exception: {}", exc)
-    return JSONResponse(status_code=500, content=error_response("Internal server error"))
+    return _with_cors_headers(request, JSONResponse(status_code=500, content=error_response("Internal server error")))
 
 
 @app.websocket("/ws/tasks/{task_id}")
