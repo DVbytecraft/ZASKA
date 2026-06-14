@@ -1,5 +1,6 @@
-// Zaska Service Worker — cache-first pour les assets, network-first pour l'API
-const CACHE = 'zaska-v1';
+// Zaska Service Worker — network-first pour le HTML (toujours la derniere version),
+// cache-first pour les assets hashes (immuables), network-first pour l'API
+const CACHE = 'zaska-v2';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
@@ -25,6 +26,22 @@ self.addEventListener('fetch', (e) => {
     return;
   }
 
+  // Navigation / index.html : network-first pour ne jamais servir un shell
+  // obsolete qui referencerait des chunks JS supprimes lors d'un nouveau build.
+  if (e.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/index.html') {
+    e.respondWith(
+      fetch(e.request).then((res) => {
+        if (res.ok) {
+          const clone = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, clone));
+        }
+        return res;
+      }).catch(() => caches.match(e.request).then((cached) => cached || caches.match('/index.html')))
+    );
+    return;
+  }
+
+  // Assets hashes : cache-first (le nom de fichier change si le contenu change)
   e.respondWith(
     caches.match(e.request).then((cached) => {
       if (cached) return cached;
@@ -34,10 +51,7 @@ self.addEventListener('fetch', (e) => {
           caches.open(CACHE).then((c) => c.put(e.request, clone));
         }
         return res;
-      }).catch(() => {
-        if (e.request.mode === 'navigate') return caches.match('/index.html');
-        return new Response('', { status: 503 });
-      });
+      }).catch(() => new Response('', { status: 503 }));
     })
   );
 });
