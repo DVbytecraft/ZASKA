@@ -209,7 +209,10 @@ def refresh(payload: RefreshPayload, service: AuthService = Depends(get_auth_ser
     try:
         if redis_sync.get(f"blacklist:{payload.refresh_token}"):
             raise HTTPException(status_code=401, detail="Refresh token revoked")
-        token_payload = decode_token(payload.refresh_token)
+        try:
+            token_payload = decode_token(payload.refresh_token)
+        except ValueError as exc:
+            raise HTTPException(status_code=401, detail="Invalid or expired refresh token") from exc
         if token_payload.get("type") != "refresh":
             raise HTTPException(status_code=401, detail="Invalid refresh token")
         user_id = token_payload.get("sub")

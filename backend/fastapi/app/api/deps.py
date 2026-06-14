@@ -55,7 +55,10 @@ def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(bear
     import logging as _log
     if credentials is None:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    payload = decode_token(credentials.credentials)
+    try:
+        payload = decode_token(credentials.credentials)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
 
