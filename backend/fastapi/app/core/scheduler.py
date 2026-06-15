@@ -263,7 +263,7 @@ def _run_payment_recovery() -> None:
     from app.services.payment.recovery_engine import RecoveryEngine
     db = SessionLocal()
     try:
-        result = RecoveryEngine(db).recover_stuck_payments("DEFAULT")
+        result = RecoveryEngine(db).recover_stuck_payments("ALL")
         logger.info("payment_recovery: stuck_count=%s", result["stuck_count"])
     except Exception as exc:
         logger.error("payment_recovery: failed — %s", exc)
