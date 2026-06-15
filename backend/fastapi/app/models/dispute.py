@@ -69,10 +69,10 @@ class DisputeRecord(Base):
     resolution_tx_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("transactions.id"), nullable=True
     )
-    task_snapshot_json: Mapped[str | None] = mapped_column("task_snapshot", Text, nullable=True)
-    chat_snapshot_json: Mapped[str | None] = mapped_column("chat_snapshot", Text, nullable=True)
-    geo_snapshot_json: Mapped[str | None] = mapped_column("geo_snapshot", Text, nullable=True)
-    photos_snapshot_json: Mapped[str | None] = mapped_column("photos_snapshot", Text, nullable=True)
+    task_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chat_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    geo_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    photos_snapshot_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     due_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     latest_action_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
