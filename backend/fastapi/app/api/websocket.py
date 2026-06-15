@@ -92,6 +92,7 @@ class TaskChatWebSocketManager:
 
     async def _redis_subscriber(self) -> None:
         while True:
+            pubsub = None
             try:
                 pubsub = redis_pubsub_async.pubsub()
                 await pubsub.psubscribe("task-chat:*")
@@ -108,6 +109,12 @@ class TaskChatWebSocketManager:
             except Exception as exc:
                 logger.error("chat_ws: Redis subscriber crashed — %s. Restarting in 5s.", exc)
                 await asyncio.sleep(5)
+            finally:
+                if pubsub is not None:
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
 
 
 chat_ws_manager = TaskChatWebSocketManager()
@@ -208,6 +215,7 @@ class CallSignalingManager:
         to any WS connections for that call on THIS instance.
         """
         while True:
+            pubsub = None
             try:
                 pubsub = redis_pubsub_async.pubsub()
                 await pubsub.psubscribe("signaling:relay:*")
@@ -242,6 +250,12 @@ class CallSignalingManager:
                     "call_signaling: relay subscriber crashed — %s. Restarting in 5s.", exc
                 )
                 await asyncio.sleep(5)
+            finally:
+                if pubsub is not None:
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
 
     async def connect(self, call_id: str, ws: WebSocket, user_id: str) -> bool:
         """Accept connection. Returns False if the room is already full."""
@@ -377,6 +391,7 @@ class UserCallNotificationManager:
 
     async def _redis_subscriber(self) -> None:
         while True:
+            pubsub = None
             try:
                 pubsub = redis_pubsub_async.pubsub()
                 await pubsub.psubscribe(f"{self._CHAN_PREFIX}*")
@@ -397,6 +412,12 @@ class UserCallNotificationManager:
             except Exception as exc:
                 logger.error("user_call_notify: Redis subscriber crashed — %s. Restarting in 5s.", exc)
                 await asyncio.sleep(5)
+            finally:
+                if pubsub is not None:
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
 
     async def connect(self, user_id: str, ws: WebSocket) -> bool:
         """Register WS connection. Returns False if global connection limit is reached."""
