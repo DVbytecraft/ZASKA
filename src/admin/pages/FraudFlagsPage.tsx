@@ -85,7 +85,7 @@ export function FraudFlagsPage() {
   const totalFlags = (flags?.payout_blocked.length ?? 0) + (flags?.rapid_cycle_candidates.length ?? 0);
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-4 sm:p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Flags fraude</h2>

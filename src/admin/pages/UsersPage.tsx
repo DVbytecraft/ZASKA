@@ -115,7 +115,7 @@ export function UsersPage() {
   const cfg = pendingAction ? ACTION_CONFIG[pendingAction.type] : null;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -129,7 +129,7 @@ export function UsersPage() {
       </div>
 
       {/* KPI strip */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
           { label: 'Total', value: stats.total, color: 'text-gray-900' },
           { label: 'Vérifiés', value: stats.verified, color: 'text-green-600' },

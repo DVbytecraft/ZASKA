@@ -84,7 +84,7 @@ export function PaymentsPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Paiements</h2>
@@ -128,7 +128,7 @@ export function PaymentsPage() {
       </div>
 
       {/* Transaction summary */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
           { label: 'Total transactions', value: stats.total, icon: CheckCircle, color: 'text-gray-900', bg: 'bg-gray-50' },
           { label: 'En attente', value: stats.pending, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },

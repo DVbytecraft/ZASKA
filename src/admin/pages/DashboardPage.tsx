@@ -41,13 +41,13 @@ export function DashboardPage() {
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-6">
       <div>
         <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
         <p className="text-sm text-gray-600">Vue d'ensemble de la plateforme</p>
       </div>
 
-      <div className="grid grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6">
         <KPICard label="Tâches ouvertes" value={String(stats?.open_tasks ?? 0)} icon={Briefcase} trend="up" />
         <KPICard label="En cours" value={String(stats?.assigned_tasks ?? 0)} icon={Clock} trend="up" />
         <KPICard label="Terminées" value={String(stats?.completed_tasks ?? 0)} icon={CheckCircle} trend="up" />

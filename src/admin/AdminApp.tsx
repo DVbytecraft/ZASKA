@@ -15,6 +15,7 @@ import { KycReviewPage } from './pages/KycReviewPage';
 import { AuditLogPage } from './pages/AuditLogPage';
 import { FraudFlagsPage } from './pages/FraudFlagsPage';
 import { SocialProtectionPage } from './pages/SocialProtectionPage';
+import { StaffPage } from './pages/StaffPage';
 
 export function AdminApp() {
   const [activePage, setActivePage] = useState('dashboard');
@@ -36,6 +37,7 @@ export function AdminApp() {
       case 'auditlog':    return <AuditLogPage />;
       case 'fraud':       return <FraudFlagsPage />;
       case 'social':      return <SocialProtectionPage />;
+      case 'staff':       return <StaffPage />;
       case 'settings':
         return (
           <div className="p-6">

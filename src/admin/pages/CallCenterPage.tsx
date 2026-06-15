@@ -142,7 +142,7 @@ function UserProfile({
         </div>
       )}
 
-      <div className="p-6 space-y-5">
+      <div className="p-4 sm:p-6 space-y-5">
         {/* Identity card */}
         {u && (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

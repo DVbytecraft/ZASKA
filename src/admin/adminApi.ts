@@ -381,6 +381,36 @@ export interface AdminAccountingOverview {
   generated_at: string;
 }
 
+export interface AdminRolePermission {
+  code: string;
+  label: string;
+  module_key: string;
+}
+
+export interface AdminRole {
+  code: string;
+  label: string;
+  description: string;
+  is_system: boolean;
+  permissions: AdminRolePermission[];
+}
+
+export interface AdminStaffAccount {
+  user_id: string;
+  email: string | null;
+  phone: string | null;
+  full_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  country_code: string | null;
+  base_role: string;
+  is_verified: boolean;
+  is_suspended: boolean;
+  is_locked: boolean;
+  roles: string[];
+  created_at: string | null;
+}
+
 // ─── API ──────────────────────────────────────────────────────────────────────
 
 export const adminApi = {
@@ -506,6 +536,16 @@ export const adminApi = {
     const q = entries.length ? '?' + new URLSearchParams(entries as [string, string][]).toString() : '';
     return get<AdminAuditLog[]>(`/admin/audit-logs${q}`);
   },
+
+  // Staff & access control
+  getRoleCatalog: () => get<{ roles: AdminRole[] }>('/admin/access-control/catalog'),
+  getStaffAccounts: () => get<AdminStaffAccount[]>('/admin/staff'),
+  createStaffAccount: (data: {
+    email: string; password: string; first_name: string; last_name: string;
+    role_codes: string[]; country_code?: string | null; phone?: string | null;
+  }) => post<{ user_id: string; email: string; role: string; admin_roles: string[] }>('/admin/staff', data),
+  updateStaffRoles: (userId: string, roleCodes: string[]) =>
+    put<{ user_id: string; role: string; admin_roles: string[] }>(`/admin/staff/${userId}/roles`, { role_codes: roleCodes }),
 
   // Fraud flags
   getFraudFlags: () => get<AdminFraudFlags>('/admin/fraud/flags'),

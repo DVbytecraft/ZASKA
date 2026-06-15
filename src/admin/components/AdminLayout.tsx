@@ -21,6 +21,9 @@ import {
   ClipboardList,
   ShieldAlert,
   HeartHandshake,
+  Menu,
+  X,
+  UserCog,
 } from 'lucide-react';
 
 interface AdminLayoutProps {
@@ -45,6 +48,7 @@ const navigation = [
   { id: 'kyc',        label: 'KYC',               icon: ShieldCheck },
   { id: 'auditlog',   label: 'Journal d\'audit',  icon: ClipboardList },
   { id: 'fraud',      label: 'Fraude',            icon: ShieldAlert },
+  { id: 'staff',      label: 'Équipe',            icon: UserCog },
 ];
 
 const bottomNav = [
@@ -79,40 +83,65 @@ function useAdminProfile() {
 
 export function AdminLayout({ children, activePage, onNavigate }: AdminLayoutProps) {
   const { email, initials } = useAdminProfile();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const handleNavigate = (page: string) => {
+    onNavigate(page);
+    setSidebarOpen(false);
+  };
+
   return (
     <div className="h-screen flex bg-[#F5F5FA]" style={{ fontFamily: "'Poppins', sans-serif" }}>
+      {/* Mobile backdrop */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <div
-        className="w-60 flex flex-col shadow-xl flex-shrink-0"
+        className={`fixed inset-y-0 left-0 z-40 w-60 flex flex-col shadow-xl flex-shrink-0 transform transition-transform duration-200 ease-in-out lg:static lg:translate-x-0 ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
         style={{
           background: 'linear-gradient(180deg, #2E1065 0%, #4C1D95 40%, #5B21B6 100%)',
         }}
       >
         {/* Brand */}
         <div className="px-5 py-6 border-b border-white/10">
-          <div className="flex items-center gap-3">
-            <div
-              className="w-9 h-9 rounded-xl flex items-center justify-center shadow-md flex-shrink-0"
-              style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)' }}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div
+                className="w-9 h-9 rounded-xl flex items-center justify-center shadow-md flex-shrink-0"
+                style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)' }}
+              >
+                <span className="text-white font-extrabold text-base leading-none">Z</span>
+              </div>
+              <div>
+                <p className="text-white font-extrabold text-lg leading-tight tracking-tight">ZASKA</p>
+                <p className="text-purple-300 text-xs font-medium leading-tight">Admin Panel</p>
+              </div>
+            </div>
+            <button
+              className="p-1.5 rounded-lg hover:bg-white/10 transition-colors text-purple-300 hover:text-white lg:hidden"
+              onClick={() => setSidebarOpen(false)}
             >
-              <span className="text-white font-extrabold text-base leading-none">Z</span>
-            </div>
-            <div>
-              <p className="text-white font-extrabold text-lg leading-tight tracking-tight">ZASKA</p>
-              <p className="text-purple-300 text-xs font-medium leading-tight">Admin Panel</p>
-            </div>
+              <X size={18} />
+            </button>
           </div>
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-3 py-4 space-y-0.5">
+        <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
           {navigation.map(item => {
             const Icon = item.icon;
             const isActive = activePage === item.id;
             return (
               <button
                 key={item.id}
-                onClick={() => onNavigate(item.id)}
+                onClick={() => handleNavigate(item.id)}
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all group"
                 style={{
                   background: isActive ? 'rgba(255,255,255,0.15)' : 'transparent',
@@ -140,7 +169,7 @@ export function AdminLayout({ children, activePage, onNavigate }: AdminLayoutPro
             return (
               <button
                 key={item.id}
-                onClick={() => onNavigate(item.id)}
+                onClick={() => handleNavigate(item.id)}
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all"
                 style={{
                   background: isActive ? 'rgba(255,255,255,0.15)' : 'transparent',
@@ -177,20 +206,31 @@ export function AdminLayout({ children, activePage, onNavigate }: AdminLayoutPro
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Top Bar */}
-        <div className="h-14 bg-white border-b border-gray-200/80 flex items-center justify-between px-6 shadow-sm flex-shrink-0">
-          <div className="flex-1 max-w-md">
-            <div className="relative">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Rechercher tâches, utilisateurs..."
-                className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:border-transparent transition-all placeholder:text-gray-400"
-                style={{ '--tw-ring-color': '#6D28D9' } as React.CSSProperties}
-              />
+        <div className="h-14 bg-white border-b border-gray-200/80 flex items-center justify-between px-3 sm:px-6 shadow-sm flex-shrink-0">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <button
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-600 flex-shrink-0 lg:hidden"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <Menu size={20} />
+            </button>
+            <div className="flex-1 max-w-md min-w-0 hidden sm:block">
+              <div className="relative">
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Rechercher tâches, utilisateurs..."
+                  className="w-full pl-9 pr-4 py-2 border border-gray-200 rounded-lg text-sm bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:border-transparent transition-all placeholder:text-gray-400"
+                  style={{ '--tw-ring-color': '#6D28D9' } as React.CSSProperties}
+                />
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 ml-4">
+          <div className="flex items-center gap-2 sm:gap-3 ml-2 sm:ml-4 flex-shrink-0">
+            <button className="relative p-2 hover:bg-gray-100 rounded-lg transition-colors sm:hidden">
+              <Search size={18} className="text-gray-600" />
+            </button>
             <button className="relative p-2 hover:bg-gray-100 rounded-lg transition-colors">
               <Bell size={18} className="text-gray-600" />
               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border border-white" />
