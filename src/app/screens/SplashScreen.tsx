@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { ZaskaLogo } from '../components/ZaskaLogo';
 
 interface SplashScreenProps {
   onComplete: () => void;
@@ -18,8 +19,9 @@ export function SplashScreen({ onComplete }: SplashScreenProps) {
       </div>
 
       <div className="relative z-10 text-center">
-        <div className="mb-4">
-          <h1 className="text-6xl font-extrabold text-white tracking-tight">ZASKA</h1>
+        <div className="flex flex-col items-center mb-4">
+          <ZaskaLogo size={96} className="mb-4 drop-shadow-2xl" />
+          <h1 className="text-4xl font-extrabold text-white tracking-tight">ZASKA</h1>
         </div>
         <p className="text-lg text-white/80 font-medium tracking-wide">Make it happen</p>
       </div>

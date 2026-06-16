@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useState } from 'react';
+import { ZaskaLogo } from '../../app/components/ZaskaLogo';
 import { apiClient } from '@zaska/shared-services';
 import {
   LayoutDashboard,
@@ -113,12 +114,7 @@ export function AdminLayout({ children, activePage, onNavigate }: AdminLayoutPro
         <div className="px-5 py-6 border-b border-white/10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div
-                className="w-9 h-9 rounded-xl flex items-center justify-center shadow-md flex-shrink-0"
-                style={{ background: 'rgba(255,255,255,0.15)', border: '1px solid rgba(255,255,255,0.2)' }}
-              >
-                <span className="text-white font-extrabold text-base leading-none">Z</span>
-              </div>
+              <ZaskaLogo size={36} />
               <div>
                 <p className="text-white font-extrabold text-lg leading-tight tracking-tight">ZASKA</p>
                 <p className="text-purple-300 text-xs font-medium leading-tight">Admin Panel</p>

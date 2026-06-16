@@ -3,6 +3,7 @@ import { Eye, EyeOff, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useTurnstile } from '../components/TurnstileWidget';
 import { setAppLanguage } from '../../i18n';
+import { ZaskaLogo } from '../components/ZaskaLogo';
 
 interface LoginScreenProps {
   onBack: () => void;
@@ -51,12 +52,7 @@ export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword, onDem
         </button>
 
         <div className="flex flex-col items-center">
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center mb-3 shadow-lg"
-            style={{ background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,0.25)' }}
-          >
-            <span className="text-white font-extrabold text-2xl tracking-tight">Z</span>
-          </div>
+          <ZaskaLogo size={64} className="mb-3 drop-shadow-lg" />
           <h1 className="text-white font-extrabold text-3xl tracking-tight">ZASKA</h1>
           <p className="text-white/70 text-sm font-medium mt-1">Services à la demande</p>
         </div>

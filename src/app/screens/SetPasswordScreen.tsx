@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Eye, EyeOff, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { ZaskaLogo } from '../components/ZaskaLogo';
 import { useAuth } from '../hooks/useAuth';
 
 interface SetPasswordScreenProps {
@@ -53,12 +54,7 @@ export function SetPasswordScreen({ email, onBack, onComplete }: SetPasswordScre
         </button>
 
         <div className="flex flex-col items-center">
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center mb-3 shadow-lg"
-            style={{ background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(8px)', border: '1px solid rgba(255,255,255,0.25)' }}
-          >
-            <span className="text-white font-extrabold text-2xl tracking-tight">Z</span>
-          </div>
+          <ZaskaLogo size={64} className="mb-3 drop-shadow-lg" />
           <h1 className="text-white font-extrabold text-3xl tracking-tight">ZASKA</h1>
           <p className="text-white/70 text-sm font-medium mt-1">Choisissez votre mot de passe</p>
         </div>
