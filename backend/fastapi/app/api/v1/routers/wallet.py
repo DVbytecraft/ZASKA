@@ -15,7 +15,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, field_validator
 
 from app.api.deps import (
-    get_async_wallet_service,
     get_country_code,
     get_current_user_id,
     get_wallet_service,
@@ -38,7 +37,6 @@ from app.services.payment.mobile_money_topup import (
     execute_mobile_money_payout,
 )
 from app.services.wallet_service import (
-    AsyncWalletService,
     EscrowError,
     InsufficientFundsError,
     PayoutCreationFailedException,
@@ -139,35 +137,35 @@ def create_wallet(
 
 
 @router.get("/balance/{currency}")
-async def get_balance(
+def get_balance(
     currency: str,
     user_id: str = Depends(get_current_user_id),
-    svc: AsyncWalletService = Depends(get_async_wallet_service),
+    svc: WalletService = Depends(get_wallet_service),
 ):
     _wallet_rate_limit(user_id)
     currency_upper = currency.upper()
     try:
-        balance = await svc.get_balance(user_id, currency_upper)
+        balance = svc.get_balance(user_id, currency_upper)
     except WalletNotFoundError:
-        await svc.create_wallet(user_id=user_id, currency=currency_upper)
+        svc.create_wallet(user_id=user_id, currency=currency_upper)
         balance = Decimal("0")
     return success_response({"currency": currency_upper, "balance": str(balance)})
 
 
 @router.get("/transactions/{currency}")
-async def list_transactions(
+def list_transactions(
     currency: str,
     limit: int = 50,
     offset: int = 0,
     user_id: str = Depends(get_current_user_id),
-    svc: AsyncWalletService = Depends(get_async_wallet_service),
+    svc: WalletService = Depends(get_wallet_service),
 ):
     _wallet_rate_limit(user_id)
     currency_upper = currency.upper()
     try:
-        page = await svc.list_transactions(user_id, currency_upper, limit=limit, offset=offset)
+        page = svc.list_transactions(user_id, currency_upper, limit=limit, offset=offset)
     except WalletNotFoundError:
-        await svc.create_wallet(user_id=user_id, currency=currency_upper)
+        svc.create_wallet(user_id=user_id, currency=currency_upper)
         page = []
     return success_response(
         [
@@ -187,16 +185,15 @@ async def list_transactions(
 
 
 @router.get("/summary")
-async def wallet_summary(
+def wallet_summary(
     user_id: str = Depends(get_current_user_id),
-    svc: AsyncWalletService = Depends(get_async_wallet_service),
+    svc: WalletService = Depends(get_wallet_service),
 ):
     """Return all wallets for the current user with balances."""
     _wallet_rate_limit(user_id)
-    wallets = await svc.list_wallets(user_id)
-    # Auto-create XOF wallet on first call if none exist
+    wallets = svc.list_wallets(user_id)
     if not wallets:
-        w = await svc.create_wallet(user_id=user_id, currency="XOF")
+        w = svc.create_wallet(user_id=user_id, currency="XOF")
         wallets = [w]
     return success_response(
         [
