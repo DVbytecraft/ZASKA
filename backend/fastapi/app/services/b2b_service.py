@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import desc, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.security import get_password_hash
@@ -446,7 +447,27 @@ class B2BService:
         if country_code:
             currencies.add(CountryRolloutService(self.db).resolve_local_currency(country_code, fallback="EUR"))
         for currency in currencies:
-            self.db.add(Wallet(user_id=user_id, currency=currency, balance=Decimal("0")))
+            existing = self.db.execute(
+                select(Wallet).where(
+                    Wallet.user_id == user_id,
+                    Wallet.currency == currency,
+                    Wallet.is_sandbox == False,  # noqa: E712
+                )
+            ).scalars().one_or_none()
+            if existing:
+                continue
+            try:
+                self.db.add(Wallet(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    currency=currency,
+                    balance=Decimal("0"),
+                    is_sandbox=False,
+                ))
+                self.db.flush()
+            except IntegrityError:
+                # Concurrent creation won the INSERT race — wallet already exists.
+                self.db.rollback()
 
     def _serialize_org(self, row: BusinessOrganization) -> dict:
         return {

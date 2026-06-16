@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.observability import logger
 from app.core.redis_client import redis_sync
-from app.core.security import create_token, get_password_hash, revoke_all_user_tokens, verify_password
+from app.core.security import create_token, decode_token, get_password_hash, revoke_all_user_tokens, verify_password
 from app.core.ws_ticket import create_ws_ticket
 from app.models.user import User
 from app.models.wallet import Wallet
@@ -292,6 +292,17 @@ class AuthService:
 
     def logout(self, refresh_token: str) -> None:
         redis_sync.setex(f"blacklist:{refresh_token}", settings.refresh_token_expire_minutes * 60, "1")
+        # Bump the token version so any outstanding access tokens are also rejected
+        # immediately by deps.py — without this, the access token stays valid until
+        # its natural 2-hour expiry even after an explicit logout.
+        try:
+            payload = decode_token(refresh_token)
+            user_id: str | None = payload.get("sub")
+            if user_id:
+                revoke_all_user_tokens(user_id)
+        except Exception:
+            # Malformed or already-expired refresh token — blacklist entry is sufficient.
+            pass
 
     def refresh(self, user_id: str, previous_refresh_token: str | None = None) -> dict:
         if previous_refresh_token:

@@ -11,8 +11,8 @@ AI provider: Anthropic Claude Haiku (if ANTHROPIC_API_KEY set), else rule-based 
 
 from __future__ import annotations
 
+import asyncio
 import re
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -175,56 +175,64 @@ class ModerationService:
         return case
 
     @staticmethod
-    def enrich_with_ai(case_id: str, reason: str, content_type: str) -> None:
-        """Run AI severity + analysis and update the case. Uses its own DB session.
+    async def enrich_with_ai(case_id: str, reason: str, content_type: str) -> None:
+        """Run AI severity + analysis and update the case.
 
-        Designed to run as a FastAPI BackgroundTask after report_content_sync().
-        Blocking calls are acceptable here since this runs off the request thread.
+        Designed to run as a FastAPI BackgroundTask (async variant).
+        - Blocking AI calls run in the default thread pool via asyncio.to_thread.
+        - Retry waits use asyncio.sleep so the event loop is never held during
+          backoff (vs. time.sleep which would block a thread for up to 7 s).
+        - DB persistence runs in a dedicated thread with its own session to keep
+          the sync SQLAlchemy session off the event loop.
         All exceptions are caught — a failed enrichment never crashes the worker.
-        Retries up to 3 times with exponential backoff (2s, 5s gaps) on AI failures.
         """
-        from app.db.session import SessionLocal
-
         safe_reason = _sanitize_for_prompt(reason)
 
-        db = SessionLocal()
-        try:
-            severity: str | None = None
-            analysis: str | None = None
-            last_exc: Exception | None = None
+        severity: str | None = None
+        analysis: str | None = None
+        last_exc: Exception | None = None
 
-            for attempt, delay in enumerate(_RETRY_DELAYS):
-                try:
-                    severity = _ai_severity(safe_reason, content_type)
-                    analysis = _ai_analysis(safe_reason, content_type)
-                    last_exc = None
-                    break
-                except Exception as exc:
-                    last_exc = exc
-                    logger.warning(
-                        "moderation:ai_enrich_retry attempt={} id={} error={}",
-                        attempt + 1, case_id, exc,
-                    )
-                    if attempt < len(_RETRY_DELAYS) - 1:
-                        time.sleep(delay)
-
-            if last_exc is not None:
-                logger.error(
-                    "moderation:ai_enrich_exhausted id={} error={}", case_id, last_exc
+        for attempt, delay in enumerate(_RETRY_DELAYS):
+            try:
+                severity = await asyncio.to_thread(_ai_severity, safe_reason, content_type)
+                analysis = await asyncio.to_thread(_ai_analysis, safe_reason, content_type)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "moderation:ai_enrich_retry attempt={} id={} error={}",
+                    attempt + 1, case_id, exc,
                 )
-                return  # leave case with rule-based severity intact
+                if attempt < len(_RETRY_DELAYS) - 1:
+                    await asyncio.sleep(delay)
 
-            case = db.get(ModerationCase, case_id)
-            if case:
-                case.severity = severity
-                case.ai_analysis = analysis
-                case.updated_at = datetime.now(timezone.utc)
-                db.commit()
-                logger.info("moderation:ai_enriched id={} severity={}", case_id, severity)
+        if last_exc is not None:
+            logger.error(
+                "moderation:ai_enrich_exhausted id={} error={}", case_id, last_exc
+            )
+            return  # leave case with rule-based severity intact
+
+        def _persist() -> None:
+            from app.db.session import SessionLocal
+            db = SessionLocal()
+            try:
+                case = db.get(ModerationCase, case_id)
+                if case:
+                    case.severity = severity
+                    case.ai_analysis = analysis
+                    case.updated_at = datetime.now(timezone.utc)
+                    db.commit()
+                    logger.info("moderation:ai_enriched id={} severity={}", case_id, severity)
+            except Exception as exc:
+                logger.error("moderation:ai_enrich_db_failed id={} error={}", case_id, exc)
+            finally:
+                db.close()
+
+        try:
+            await asyncio.to_thread(_persist)
         except Exception as exc:
             logger.error("moderation:ai_enrich_failed id={} error={}", case_id, exc)
-        finally:
-            db.close()
 
     def list_cases(
         self,
