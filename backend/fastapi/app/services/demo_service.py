@@ -3,8 +3,8 @@
 Each POST /demo/session creates a fresh, isolated demo User with:
   - is_demo=True  (bypasses KYC checks, excluded from real-user queries)
   - is_verified=True  (skips OTP gate)
-  - country_code="CI", currency=XOF
-  - 10 000 XOF pre-seeded in wallet
+  - country_code="FR", currency=EUR
+  - 500 EUR pre-seeded in wallet
   - Short-lived JWT (2 h) — no refresh token issued
 
 Cleanup: _cleanup_demo_users() (called by scheduler every 6 h) deletes demo
@@ -48,17 +48,17 @@ def bootstrap_demo_user(db: Session) -> dict:
         is_verified=True,
         is_demo=True,
         role="client",
-        country_code="CI",
+        country_code="FR",
     )
     db.add(user)
     db.flush()
 
     wallet_svc = WalletService(db)
-    wallet_svc.create_wallet(demo_id, "XOF")
+    wallet_svc.create_wallet(demo_id, "EUR")
     wallet_svc.credit_wallet(
         demo_id,
-        "XOF",
-        amount=Decimal("10000"),
+        "EUR",
+        amount=Decimal("500"),
         reference=f"demo_seed_{short_id}",
         provider="internal",
     )
@@ -69,8 +69,8 @@ def bootstrap_demo_user(db: Session) -> dict:
     return {
         "accessToken": access_token,
         "userId": demo_id,
-        "country": "CI",
-        "currency": "XOF",
+        "country": "FR",
+        "currency": "EUR",
         "isDemo": True,
     }
 
