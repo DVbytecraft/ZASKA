@@ -281,20 +281,13 @@ class TestModerationBackgroundTasks:
         db.commit()
         case_id = case.id
 
-        # Use a separate mock session so enrich_with_ai can close it without
-        # affecting the test's db session (enrich_with_ai calls session.close() in finally)
-        mock_session = MagicMock()
-        mock_session.get.return_value = None  # case not found — keeps test simple
-        mock_session_factory = MagicMock(return_value=mock_session)
-
+        # When all AI retries are exhausted, enrich_with_ai returns early without
+        # creating a DB session — so we only need to ensure no exception propagates.
         with patch("app.services.moderation_service._ai_severity", side_effect=Exception("Anthropic 503")), \
-             patch("app.db.session.SessionLocal", mock_session_factory), \
-             patch("time.sleep"):  # avoid 7-second retry delays in unit tests
-            # Must NOT raise — exception is caught inside enrich_with_ai
-            ModerationService.enrich_with_ai(case_id, "test reason", "profile")
+             patch("asyncio.sleep", new_callable=AsyncMock):  # skip retry delays
+            # Must NOT raise — all exceptions are caught inside enrich_with_ai
+            asyncio.run(ModerationService.enrich_with_ai(case_id, "test reason", "profile"))
 
-        # Verify: session was closed in finally even after exception
-        mock_session.close.assert_called_once()
         # Case in the test DB is unaffected
         original = db.get(ModerationCase, case_id)
         assert original is not None
@@ -312,7 +305,7 @@ class TestModerationBackgroundTasks:
             mock_session_factory.return_value = mock_db
 
             # Must NOT raise
-            ModerationService.enrich_with_ai("nonexistent-id", "reason", "profile")
+            asyncio.run(ModerationService.enrich_with_ai("nonexistent-id", "reason", "profile"))
 
         # No exception = pass
 
@@ -340,7 +333,7 @@ class TestModerationBackgroundTasks:
         with patch("app.services.moderation_service._ai_severity", return_value="HIGH"), \
              patch("app.services.moderation_service._ai_analysis", return_value="Physical threat detected"), \
              patch("app.db.session.SessionLocal", mock_session_factory):
-            ModerationService.enrich_with_ai(case.id, case.reason, case.content_type)
+            asyncio.run(ModerationService.enrich_with_ai(case.id, case.reason, case.content_type))
 
         # Verify the session received the right updates
         mock_session.commit.assert_called_once()
@@ -377,8 +370,8 @@ class TestModerationBackgroundTasks:
         with patch("app.services.moderation_service._ai_severity", side_effect=flaky_ai_severity), \
              patch("app.services.moderation_service._ai_analysis", return_value="Analysis"), \
              patch("app.db.session.SessionLocal", return_value=mock_session), \
-             patch("time.sleep"):
-            ModerationService.enrich_with_ai("test-id", "reason text here for test", "profile")
+             patch("asyncio.sleep", new_callable=AsyncMock):
+            asyncio.run(ModerationService.enrich_with_ai("test-id", "reason text here for test", "profile"))
 
         assert call_count == 3, f"Expected 3 attempts (2 failures + 1 success), got {call_count}"
         mock_session.commit.assert_called_once()
@@ -387,16 +380,10 @@ class TestModerationBackgroundTasks:
         """When all retry attempts are exhausted, enrich_with_ai logs and returns without raising."""
         from app.services.moderation_service import ModerationService
 
-        mock_session = MagicMock()
-        mock_session_factory = MagicMock(return_value=mock_session)
-
         with patch("app.services.moderation_service._ai_severity", side_effect=Exception("AI down")), \
-             patch("app.db.session.SessionLocal", mock_session_factory), \
-             patch("time.sleep"):
-            ModerationService.enrich_with_ai("test-id", "reason here for testing", "profile")
-
-        mock_session.close.assert_called_once()
-        mock_session.commit.assert_not_called()  # no DB update on exhausted retries
+             patch("asyncio.sleep", new_callable=AsyncMock):
+            # Must NOT raise — early return after all retries exhausted, no DB session created
+            asyncio.run(ModerationService.enrich_with_ai("test-id", "reason here for testing", "profile"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
