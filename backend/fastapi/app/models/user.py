@@ -42,6 +42,7 @@ class User(Base):
     aml_review_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
     aml_review_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
     aml_last_case_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
     # Enriched profile fields (migration 0039)
     bio: Mapped[str | None] = mapped_column(String(512), nullable=True)
     city: Mapped[str | None] = mapped_column(String(64), nullable=True)

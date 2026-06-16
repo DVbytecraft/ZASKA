@@ -9,9 +9,11 @@ interface LoginScreenProps {
   onLogin: () => void;
   onSignup: () => void;
   onForgotPassword: () => void;
+  onDemoAccess?: () => void;
+  demoLoading?: boolean;
 }
 
-export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword }: LoginScreenProps) {
+export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword, onDemoAccess, demoLoading }: LoginScreenProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -153,6 +155,16 @@ export function LoginScreen({ onBack, onLogin, onSignup, onForgotPassword }: Log
             S'inscrire
           </button>
         </div>
+
+        {onDemoAccess && (
+          <button
+            onClick={onDemoAccess}
+            disabled={demoLoading}
+            className="w-full mt-3 py-3 rounded-xl font-semibold text-sm transition-all border-2 border-[#6D28D9] text-[#6D28D9] hover:bg-purple-50 active:scale-[0.98] disabled:opacity-60"
+          >
+            {demoLoading ? 'Chargement...' : 'Essayer sans compte'}
+          </button>
+        )}
 
         <p className="text-center text-xs text-gray-400 mt-4 leading-relaxed">
           En continuant, vous acceptez nos{' '}

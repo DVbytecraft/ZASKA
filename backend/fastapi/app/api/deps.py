@@ -381,7 +381,11 @@ def require_kyc_not_rejected(
 
     pending / not_submitted → allowed (limited usage).
     rejected → blocked for all write payment operations.
+    Demo users (is_demo=True) bypass this check entirely.
     """
+    user = db.get(User, user_id)
+    if user is not None and user.is_demo:
+        return user_id
     kyc = KycService(db).get_status(user_id)
     if kyc is not None and kyc.status == "rejected":
         raise HTTPException(status_code=403, detail=_KYC_REJECTED_MSG)
@@ -396,7 +400,11 @@ def require_kyc_approved(
 
     pending / not_submitted / rejected → 403 not-approved.
     approved but expired → 403 expired (must resubmit).
+    Demo users (is_demo=True) bypass this check entirely.
     """
+    user = db.get(User, user_id)
+    if user is not None and user.is_demo:
+        return user_id
     kyc = KycService(db).get_status(user_id)
     if kyc is None or kyc.status != "approved":
         raise HTTPException(status_code=403, detail=_KYC_NOT_APPROVED_MSG)

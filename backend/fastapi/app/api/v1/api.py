@@ -9,6 +9,7 @@ from app.api.v1.routers import (
     calls,
     cards,
     chat,
+    demo,
     disputes,
     feature_flags,
     food,
@@ -34,6 +35,7 @@ from app.api.v1.routers import (
 api_router = APIRouter()
 api_router.include_router(system.router)   # /system/* en premier — pas de JWT requis
 api_router.include_router(public_demo.router)  # /v1/* — endpoints publics, CORS *, pas de JWT/cle API
+api_router.include_router(demo.router)     # /demo/* — demo session, pas de JWT requis
 api_router.include_router(aml.router)
 api_router.include_router(auth.router)
 api_router.include_router(b2b.router)

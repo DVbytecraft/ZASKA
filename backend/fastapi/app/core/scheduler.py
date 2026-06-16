@@ -55,6 +55,7 @@ _JOB_MAX_SILENCE: dict[str, float] = {
     "sandbox_data_cleanup": 90000,  # daily job — alert after 25h silence
     "drain_webhook_queue": 120,
     "payment_recovery": 900,
+    "demo_cleanup": 90000,  # every 6h — alert after 25h silence
 }
 
 
@@ -455,6 +456,27 @@ def _backup_postgres() -> None:
             logger.info("backup_postgres: rotated %s", f.name)
 
 
+def _cleanup_demo_users() -> None:
+    """Delete demo users whose JWTs have long expired (> 24h old).
+
+    Lock TTL = 21590s (6h interval - 10s). Only one replica runs this per cycle.
+    """
+    if not _acquire_job_lock("demo_cleanup", 21590):
+        return
+    from app.services.demo_service import cleanup_stale_demo_users
+    db = SessionLocal()
+    try:
+        result = cleanup_stale_demo_users(db)
+        logger.info(
+            "demo_cleanup: scanned=%s deleted=%s suspended=%s",
+            result["scanned"], result["deleted"], result["suspended"],
+        )
+    except Exception as exc:
+        logger.error("demo_cleanup: failed — %s", exc)
+    finally:
+        db.close()
+
+
 def _cleanup_sandbox_data() -> None:
     """Purge sandbox wallets/transactions/escrows older than the retention window.
 
@@ -525,6 +547,7 @@ def start_scheduler() -> None:
         (86400, "sandbox_data_cleanup",     _cleanup_sandbox_data),
         (30,    "drain_webhook_queue",      _drain_webhook_queue),
         (300,   "payment_recovery",         _run_payment_recovery),
+        (21600, "demo_cleanup",             _cleanup_demo_users),
     ]
     for interval, name, fn in jobs:
         task = asyncio.create_task(_run_every(interval, name, fn))

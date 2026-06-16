@@ -4,6 +4,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoadingScreen } from './screens/LoadingScreen';
 import { BottomNav } from './components/BottomNav';
 import { InstallPrompt } from './components/InstallPrompt';
+import { DemoBanner } from './components/DemoBanner';
 import { setAppLanguage } from '../i18n';
 
 // Eagerly loaded: needed immediately (auth guard, call overlays)
@@ -112,6 +113,37 @@ export default function App() {
   const [tasksDefaultTab, setTasksDefaultTab] = useState<'client' | 'missions' | 'messages'>('client');
   // Incremented on every tab switch to force fresh data in list screens
   const [screenKey, setScreenKey] = useState(0);
+
+  // ── Demo session ──────────────────────────────────────────────────────────
+  const [isDemoSession, setIsDemoSession] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
+
+  const exitDemoSession = useCallback(() => {
+    apiClient.clearTokens();
+    setIsDemoSession(false);
+    setCurrentScreen('login');
+  }, []);
+
+  const handleDemoAccess = useCallback(async () => {
+    setDemoLoading(true);
+    try {
+      const res = await apiClient.post<{
+        accessToken: string;
+        userId: string;
+        country: string;
+        currency: string;
+      }>('/demo/session', {});
+      apiClient.setTokens({ accessToken: res.accessToken });
+      apiClient.setCountry(res.country, res.currency);
+      apiClient.setUserId(res.userId);
+      setIsDemoSession(true);
+      setCurrentScreen('home');
+    } catch {
+      // silently leave the user on the login screen
+    } finally {
+      setDemoLoading(false);
+    }
+  }, []);
 
   // ── Global call state ──────────────────────────────────────────────────────
   const [incomingCall, setIncomingCall] = useState<IncomingCallData | null>(null);
@@ -230,18 +262,27 @@ export default function App() {
         const payload = JSON.parse(atob(token.split('.')[1] ?? ''));
         if (typeof payload.exp !== 'number') return;
         if (payload.exp * 1000 - Date.now() < 120_000) {
-          try { await authService.refresh(); }
-          catch { await authService.logout(); setCurrentScreen('login'); }
+          if (isDemoSession) {
+            // Demo tokens don't refresh — expire cleanly
+            exitDemoSession();
+          } else {
+            try { await authService.refresh(); }
+            catch { await authService.logout(); setCurrentScreen('login'); }
+          }
         }
       } catch {
-        await authService.logout();
-        setCurrentScreen('login');
+        if (isDemoSession) {
+          exitDemoSession();
+        } else {
+          await authService.logout();
+          setCurrentScreen('login');
+        }
       }
     };
     void check();
     const timer = setInterval(check, 60_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [isDemoSession, exitDemoSession]);
 
   // ── Global incoming call handlers ─────────────────────────────────────────
   const handleGlobalAnswer = (callId: string, mediaType: 'audio' | 'video') => {
@@ -292,6 +333,8 @@ export default function App() {
             onLogin={() => setCurrentScreen('home')}
             onSignup={() => setCurrentScreen('register')}
             onForgotPassword={() => setCurrentScreen('forgotPassword')}
+            onDemoAccess={handleDemoAccess}
+            demoLoading={demoLoading}
           />
         );
 
@@ -745,6 +788,11 @@ export default function App() {
               onEnd={() => setActiveGlobalCall(null)}
             />
           </div>
+        )}
+
+        {/* ── Demo mode banner (shown when isDemoSession is active) ─────────── */}
+        {isDemoSession && isAuthenticated && (
+          <DemoBanner onExit={exitDemoSession} />
         )}
 
         {/* ── Main screen content ───────────────────────────────────────────── */}
