@@ -13,6 +13,7 @@ type SessionMeta = {
   countryCode: string | null;
   currency: string | null;
   userId: string | null;
+  isDemo: boolean;
 };
 
 const inMemoryTokens: TokenStore = { accessToken: null, refreshToken: null };
@@ -35,6 +36,7 @@ const inMemoryMeta: SessionMeta = {
   countryCode: _lsGet(_LS_COUNTRY),
   currency: _lsGet(_LS_CURRENCY),
   userId: null,
+  isDemo: false,
 };
 
 type _ViteImportMeta = { env?: Record<string, string | undefined> };
@@ -86,18 +88,22 @@ export class ApiClient {
     inMemoryMeta.userId = userId;
   }
 
+  setIsDemo(v: boolean) { inMemoryMeta.isDemo = v; }
+
   clearTokens() {
     inMemoryTokens.accessToken = null;
     inMemoryTokens.refreshToken = null;
     inMemoryMeta.countryCode = null;
     inMemoryMeta.currency = null;
     inMemoryMeta.userId = null;
+    inMemoryMeta.isDemo = false;
     _lsDel(_LS_COUNTRY);
     _lsDel(_LS_CURRENCY);
   }
 
   getAccessToken() { return inMemoryTokens.accessToken; }
   getRefreshToken() { return inMemoryTokens.refreshToken; }
+  getIsDemo() { return inMemoryMeta.isDemo; }
   getCountryCode() { return inMemoryMeta.countryCode; }
   getCurrency() { return inMemoryMeta.currency; }
   getUserId() { return inMemoryMeta.userId; }

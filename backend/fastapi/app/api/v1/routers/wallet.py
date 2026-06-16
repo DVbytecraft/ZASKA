@@ -739,6 +739,30 @@ async def deposit(
     except LimitExceeded as exc:
         raise HTTPException(status_code=429, detail=str(exc))
 
+    # ── Demo user bypass — no real payment provider involved ──────────────────
+    _demo_user = svc.db.get(User, user_id)
+    if _demo_user is not None and _demo_user.is_demo:
+        reference = f"demo_deposit:{uuid.uuid4().hex[:16]}"
+        try:
+            tx = svc.credit_wallet(
+                user_id=user_id,
+                currency=currency_upper,
+                amount=amount,
+                reference=reference,
+                provider="demo",
+                metadata={"type": "deposit", "mode": "demo"},
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return success_response({
+            "mode": "mock",
+            "tx_id": tx.id,
+            "amount": str(tx.amount),
+            "currency": currency_upper,
+            "reference": reference,
+            "status": "completed",
+        })
+
     if mode == "mock":
         env_norm = str(settings.env).strip().lower()
         if env_norm != "development":

@@ -136,6 +136,7 @@ export default function App() {
       apiClient.setTokens({ accessToken: res.accessToken });
       apiClient.setCountry(res.country, res.currency);
       apiClient.setUserId(res.userId);
+      apiClient.setIsDemo(true);
       setIsDemoSession(true);
       setCurrentScreen('home');
     } catch {
