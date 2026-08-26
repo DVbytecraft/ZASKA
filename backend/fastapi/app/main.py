@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
     if settings.sentry_dsn.strip():
         sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1, environment=settings.env)
     _validate_production_hard_lock()
-    if settings.sqlite_auto_create_schema and settings.database_url.startswith("sqlite"):
+    if getattr(settings, "sqlite_auto_create_schema", False) and settings.database_url.startswith("sqlite"):
         Base.metadata.create_all(bind=engine)
         logger.info("ZASKA sqlite schema auto-created")
     # Chat Redis pub/sub subscriber (cross-instance chat delivery)
