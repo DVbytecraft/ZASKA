@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import uuid
 from collections import defaultdict
 from typing import AsyncIterator
 
@@ -11,6 +12,7 @@ from starlette.websockets import WebSocketState
 from app.core.redis_client import redis_async, redis_pubsub_async
 
 logger = logging.getLogger(__name__)
+_CHAT_WS_INSTANCE_ID = str(uuid.uuid4())
 
 # Hard caps prevent a single misbehaving client or DDoS from exhausting memory.
 # At ~1KB per WS state entry, 10k entries ≈ 10MB — well within limits.
@@ -42,9 +44,11 @@ async def _resilient_listen(pubsub) -> AsyncIterator[dict]:
 class TaskChatWebSocketManager:
     def __init__(self) -> None:
         self.connections: dict[str, set[WebSocket]] = defaultdict(set)
+        self.redis_bridge_enabled = True
 
     async def start(self) -> None:
-        asyncio.create_task(self._redis_subscriber())
+        if self.redis_bridge_enabled:
+            asyncio.create_task(self._redis_subscriber())
 
     async def stop(self) -> None:
         return
@@ -65,20 +69,16 @@ class TaskChatWebSocketManager:
             self.connections.pop(task_id, None)
 
     async def publish(self, task_id: str, payload: dict) -> None:
-        """Publish a chat message via Redis for cross-instance fan-out.
-
-        Falls back to local broadcast if Redis is unavailable.
-        """
+        """Deliver locally first, then fan out cross-instance via Redis."""
         raw = json.dumps(payload)
-        redis_ok = False
+        await self._broadcast_local(task_id, raw)
+        if not self.redis_bridge_enabled:
+            return
         try:
-            await redis_async.publish(f"task-chat:{task_id}", raw)
-            redis_ok = True
+            envelope = json.dumps({"_origin": _CHAT_WS_INSTANCE_ID, "_payload": payload})
+            await redis_async.publish(f"task-chat:{task_id}", envelope)
         except Exception as exc:
             logger.warning("chat_ws: Redis publish failed for task %s — %s", task_id, exc)
-
-        if not redis_ok:
-            await self._broadcast_local(task_id, raw)
 
     async def _broadcast_local(self, task_id: str, raw: str) -> None:
         dead: list[WebSocket] = []
@@ -105,7 +105,16 @@ class TaskChatWebSocketManager:
                     if not raw or not channel:
                         continue
                     task_id = channel.split(":", 1)[1] if ":" in channel else channel
-                    await self._broadcast_local(task_id, raw)
+                    payload_raw = raw
+                    try:
+                        decoded = json.loads(raw)
+                        if isinstance(decoded, dict) and decoded.get("_origin") == _CHAT_WS_INSTANCE_ID:
+                            continue
+                        if isinstance(decoded, dict) and "_payload" in decoded:
+                            payload_raw = json.dumps(decoded["_payload"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    await self._broadcast_local(task_id, payload_raw)
             except Exception as exc:
                 logger.error("chat_ws: Redis subscriber crashed — %s. Restarting in 5s.", exc)
                 await asyncio.sleep(5)
@@ -194,6 +203,7 @@ class CallSignalingManager:
     def __init__(self) -> None:
         # call_id → list of at most 2 (WebSocket, user_id) pairs
         self.rooms: dict[str, list[tuple[WebSocket, str]]] = defaultdict(list)
+        self.redis_bridge_enabled = True
 
     @staticmethod
     def _queue_key(call_id: str) -> str:
@@ -205,7 +215,8 @@ class CallSignalingManager:
 
     async def start(self) -> None:
         """Start cross-instance relay subscriber (called on app startup)."""
-        asyncio.create_task(self._relay_subscriber())
+        if self.redis_bridge_enabled:
+            asyncio.create_task(self._relay_subscriber())
 
     async def _relay_subscriber(self) -> None:
         """Receive signals published by other API instances and deliver locally.
@@ -299,6 +310,8 @@ class CallSignalingManager:
                     self.disconnect(call_id, ws)
 
         if not delivered:
+            if not self.redis_bridge_enabled:
+                return
             # Peer is not connected locally — publish for cross-instance delivery.
             try:
                 envelope = json.dumps({"_from_user": sender_user_id, "_payload": raw})
@@ -322,6 +335,8 @@ class CallSignalingManager:
         Called immediately after a peer connects so they receive the SDP offer
         (or ICE candidates) that were published before they joined the room.
         """
+        if not self.redis_bridge_enabled:
+            return
         try:
             key = self._queue_key(call_id)
             while True:
@@ -342,10 +357,11 @@ class CallSignalingManager:
                     await ws.send_text(msg)
                 except Exception:
                     pass
-        try:
-            await redis_async.delete(self._queue_key(call_id))
-        except Exception:
-            pass
+        if self.redis_bridge_enabled:
+            try:
+                await redis_async.delete(self._queue_key(call_id))
+            except Exception:
+                pass
         self.rooms.pop(call_id, None)
 
 
@@ -385,9 +401,11 @@ class UserCallNotificationManager:
 
     def __init__(self) -> None:
         self.connections: dict[str, WebSocket] = {}
+        self.redis_bridge_enabled = True
 
     async def start(self) -> None:
-        asyncio.create_task(self._redis_subscriber())
+        if self.redis_bridge_enabled:
+            asyncio.create_task(self._redis_subscriber())
 
     async def _redis_subscriber(self) -> None:
         while True:
@@ -450,6 +468,8 @@ class UserCallNotificationManager:
             except Exception:
                 self.connections.pop(user_id, None)
 
+        if not self.redis_bridge_enabled:
+            return False
         try:
             subscribers = await redis_async.publish(f"{self._CHAN_PREFIX}{user_id}", raw)
             return subscribers > 0

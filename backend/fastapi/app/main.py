@@ -1,6 +1,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import sentry_sdk
 from fastapi import FastAPI, HTTPException, WebSocket
@@ -68,6 +69,10 @@ from app.models import (  # noqa: F401
 )
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _validate_production_hard_lock() -> None:
     """Refuse to start in production if critical financial or security config is missing.
 
@@ -122,14 +127,34 @@ async def lifespan(app: FastAPI):
     if settings.sentry_dsn.strip():
         sentry_sdk.init(dsn=settings.sentry_dsn, traces_sample_rate=0.1, environment=settings.env)
     _validate_production_hard_lock()
+    if settings.sqlite_auto_create_schema and settings.database_url.startswith("sqlite"):
+        Base.metadata.create_all(bind=engine)
+        logger.info("ZASKA sqlite schema auto-created")
     # Chat Redis pub/sub subscriber (cross-instance chat delivery)
-    await chat_ws_manager.start()
-    # User call notification Redis pub/sub subscriber
-    await user_call_notification_manager.start()
-    # WebRTC signaling cross-instance relay subscriber (SC-03 fix)
-    await call_signaling_manager.start()
+    if settings.realtime_enabled:
+        redis_bridge_enabled = True
+        try:
+            from app.core.redis_client import redis_sync
+            redis_sync.ping()
+        except Exception as exc:
+            redis_bridge_enabled = False
+            logger.warning("ZASKA realtime Redis bridge disabled - %s", exc)
+
+        chat_ws_manager.redis_bridge_enabled = redis_bridge_enabled
+        user_call_notification_manager.redis_bridge_enabled = redis_bridge_enabled
+        call_signaling_manager.redis_bridge_enabled = redis_bridge_enabled
+        await chat_ws_manager.start()
+        # User call notification Redis pub/sub subscriber
+        await user_call_notification_manager.start()
+        # WebRTC signaling cross-instance relay subscriber (SC-03 fix)
+        await call_signaling_manager.start()
+    else:
+        logger.warning("ZASKA realtime disabled by configuration")
     # In-process scheduler with distributed Redis locks
-    start_scheduler()
+    if settings.scheduler_enabled:
+        start_scheduler()
+    else:
+        logger.warning("ZASKA scheduler disabled by configuration")
 
     # Seed trust catalog — idempotent, skips rows that already exist.
     # Badges and skills tables would be empty on first boot without this.
@@ -173,7 +198,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────────────
-    stop_scheduler()
+    if settings.scheduler_enabled:
+        stop_scheduler()
 
 
 # Public demo endpoints (P4): allocation simulator embedded on the public ZASKA
@@ -343,11 +369,14 @@ def health_realtime():
     )
     call_rooms_active = len(call_signaling_manager.rooms)
 
-    status = "degraded" if (dead_jobs or not scheduler_running) else "ok"
+    # Realtime health should reflect the websocket/call transport plane.
+    # Batch scheduler drift is already exposed in /health/scheduler and should
+    # not make realtime readiness fail when chat/call signaling is otherwise up.
+    status = "ok" if scheduler_running else "degraded"
     return success_response({
         "status": status,
         "scheduler_running": scheduler_running,
-        "dead_jobs": dead_jobs,
+        "scheduler_dead_jobs": dead_jobs,
         "ws_chat_connections": ws_chat_connections,
         "call_rooms_active": call_rooms_active,
     })
@@ -383,7 +412,6 @@ async def health_metrics():
     """
     from app.core.redis_client import redis_async as r
     from app.core.scheduler import get_scheduler_health, _job_heartbeats
-    from datetime import datetime
     from fastapi.responses import PlainTextResponse
 
     lines = []
@@ -392,7 +420,7 @@ async def health_metrics():
         label_str = f"{{{labels}}}" if labels else ""
         lines.append(f"{name}{label_str} {value}")
 
-    now = datetime.utcnow()
+    now = _utcnow()
     for job_name, last_run in _job_heartbeats.items():
         silence = (now - last_run).total_seconds()
         gauge("zaska_scheduler_job_silence_seconds", silence, f'job="{job_name}"')
