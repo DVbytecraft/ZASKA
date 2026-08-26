@@ -131,7 +131,7 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
         logger.info("ZASKA sqlite schema auto-created")
     # Chat Redis pub/sub subscriber (cross-instance chat delivery)
-    if settings.realtime_enabled:
+    if getattr(settings, "realtime_enabled", False):
         redis_bridge_enabled = True
         try:
             from app.core.redis_client import redis_sync
@@ -151,7 +151,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("ZASKA realtime disabled by configuration")
     # In-process scheduler with distributed Redis locks
-    if settings.scheduler_enabled:
+    if getattr(settings, "scheduler_enabled", False):
         start_scheduler()
     else:
         logger.warning("ZASKA scheduler disabled by configuration")
@@ -198,7 +198,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────────────
-    if settings.scheduler_enabled:
+    if getattr(settings, "scheduler_enabled", False):
         stop_scheduler()
 
 
