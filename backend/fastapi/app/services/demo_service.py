@@ -26,12 +26,15 @@ from sqlalchemy.orm import Session
 from app.core.security import create_token
 from app.models.user import User
 from app.models.wallet import Transaction, Wallet
-from app.services.wallet_service import WalletService
 
 logger = logging.getLogger(__name__)
 
 DEMO_JWT_TTL = timedelta(hours=2)
 _DEMO_USER_STALE_HOURS = 24
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def bootstrap_demo_user(db: Session) -> dict:
@@ -53,14 +56,30 @@ def bootstrap_demo_user(db: Session) -> dict:
     db.add(user)
     db.flush()
 
-    wallet_svc = WalletService(db)
-    wallet_svc.create_wallet(demo_id, "EUR")
-    wallet_svc.credit_wallet(
-        demo_id,
-        "EUR",
-        amount=Decimal("500"),
-        reference=f"demo_seed_{short_id}",
-        provider="internal",
+    # Keep demo bootstrap independent from optional accounting-ledger side
+    # effects so public demo access still works in partially migrated envs.
+    wallet = Wallet(
+        id=str(uuid.uuid4()),
+        user_id=demo_id,
+        currency="EUR",
+        balance=Decimal("500"),
+        is_sandbox=False,
+    )
+    db.add(wallet)
+    db.flush()
+
+    db.add(
+        Transaction(
+            id=str(uuid.uuid4()),
+            wallet_id=wallet.id,
+            type="credit",
+            amount=Decimal("500"),
+            status="completed",
+            reference=f"demo_seed_{short_id}",
+            provider="internal",
+            metadata_json='{"type":"demo_seed"}',
+            is_sandbox=False,
+        )
     )
 
     db.commit()
@@ -82,7 +101,7 @@ def cleanup_stale_demo_users(db: Session) -> dict:
     If user deletion fails (e.g. task FK), the user is suspended so it can
     no longer authenticate (the JWT will also have expired by this point).
     """
-    cutoff = datetime.utcnow() - timedelta(hours=_DEMO_USER_STALE_HOURS)
+    cutoff = _utcnow() - timedelta(hours=_DEMO_USER_STALE_HOURS)
     stale_users = db.execute(
         select(User).where(User.is_demo.is_(True), User.created_at < cutoff)
     ).scalars().all()
