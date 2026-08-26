@@ -20,10 +20,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import jwt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import create_token
+from app.core.config import settings
 from app.models.user import User
 from app.models.wallet import Transaction, Wallet
 
@@ -35,6 +36,20 @@ _DEMO_USER_STALE_HOURS = 24
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _create_demo_access_token(user_id: str) -> str:
+    expire = datetime.now(timezone.utc) + DEMO_JWT_TTL
+    payload = {
+        "sub": user_id,
+        "exp": expire,
+        "type": "access",
+        "jti": str(uuid.uuid4()),
+        # Demo sessions bypass Redis-backed token versioning on purpose so
+        # the public demo still works when Redis is degraded or exhausted.
+        "ver": 0,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
 def bootstrap_demo_user(db: Session) -> dict:
@@ -84,7 +99,7 @@ def bootstrap_demo_user(db: Session) -> dict:
 
     db.commit()
 
-    access_token = create_token(demo_id, DEMO_JWT_TTL, "access")
+    access_token = _create_demo_access_token(demo_id)
     return {
         "accessToken": access_token,
         "userId": demo_id,
