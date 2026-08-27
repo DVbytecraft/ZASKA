@@ -296,7 +296,10 @@ class AuthService:
         return tokens
 
     def logout(self, refresh_token: str) -> None:
-        redis_sync.setex(f"blacklist:{refresh_token}", settings.refresh_token_expire_minutes * 60, "1")
+        try:
+            redis_sync.setex(f"blacklist:{refresh_token}", settings.refresh_token_expire_minutes * 60, "1")
+        except Exception as exc:
+            logger.warning("logout: Redis blacklist write skipped: {}", exc)
         # Bump the token version so any outstanding access tokens are also rejected
         # immediately by deps.py — without this, the access token stays valid until
         # its natural 2-hour expiry even after an explicit logout.
@@ -311,7 +314,10 @@ class AuthService:
 
     def refresh(self, user_id: str, previous_refresh_token: str | None = None) -> dict:
         if previous_refresh_token:
-            redis_sync.setex(f"blacklist:{previous_refresh_token}", settings.refresh_token_expire_minutes * 60, "1")
+            try:
+                redis_sync.setex(f"blacklist:{previous_refresh_token}", settings.refresh_token_expire_minutes * 60, "1")
+            except Exception as exc:
+                logger.warning("refresh: Redis blacklist write skipped for user {}: {}", user_id, exc)
         tokens = self._generate_tokens(user_id)
         tokens["userId"] = user_id
         return tokens

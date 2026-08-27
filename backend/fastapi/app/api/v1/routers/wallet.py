@@ -68,10 +68,14 @@ def _wallet_rate_limit(user_id: str) -> None:
     # With a pipeline both commands land on Redis atomically (same network frame),
     # eliminating the crash window between them.
     key = f"rl:wallet:{user_id}"
-    pipe = redis_sync.pipeline(transaction=False)
-    pipe.incr(key)
-    pipe.expire(key, 60)
-    n = pipe.execute()[0]
+    try:
+        pipe = redis_sync.pipeline(transaction=False)
+        pipe.incr(key)
+        pipe.expire(key, 60)
+        n = pipe.execute()[0]
+    except Exception as exc:
+        logger.warning("wallet: Redis rate limit skipped for user {}: {}", user_id, exc)
+        return
     if n > 60:
         raise HTTPException(status_code=429, detail="Too many wallet requests")
 
