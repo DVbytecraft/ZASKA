@@ -277,12 +277,17 @@ class AuthService:
             self.db.commit()
 
         tokens = self._generate_tokens(user.id)
-        access_control = AccessControlService(self.db)
         tokens["userId"] = user.id
         tokens["email"] = user.email
         tokens["role"] = user.role
-        tokens["isAdmin"] = access_control.user_has_admin_console_access(user.id, user=user)
-        tokens["adminRoles"] = access_control.get_user_role_codes(user.id)
+        tokens["isAdmin"] = False
+        tokens["adminRoles"] = []
+        try:
+            access_control = AccessControlService(self.db)
+            tokens["isAdmin"] = access_control.user_has_admin_console_access(user.id, user=user)
+            tokens["adminRoles"] = access_control.get_user_role_codes(user.id)
+        except Exception as exc:
+            logger.warning("auth: admin access metadata fallback for user {}: {}", user.id, exc)
         tokens["referralCode"] = user.referral_code
         tokens["referredByUserId"] = user.referred_by_user_id
         # Return the user's registered country so the router uses it
