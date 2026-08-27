@@ -1,9 +1,11 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_auth_service, get_country_code, get_current_user_id
-from app.core.country_engine import CountryEngineService, PaymentRouterService
+from app.core.country_engine import CountryEngineService, PaymentRouterService, get_config
 from app.core.redis_client import redis_sync
 from app.core.responses import success_response
 from app.core.security import decode_token
@@ -12,6 +14,8 @@ from app.models.user import User
 from app.schemas.auth import ForgotPasswordPayload, LoginPayload, LogoutPayload, RefreshPayload, RegisterPayload, ResendOtpPayload, ResetPasswordPayload, SetPasswordPayload, VerifyOtpPayload
 from app.services.auth_service import AuthService
 from app.services.country_rollout_service import CountryRolloutService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -67,6 +71,22 @@ def _check_email_otp_rate_limit(request: Request, email: str) -> None:
     _check_rate_limit(f"rl:otp:{ip}", limit=5, window_seconds=300)
     email_norm = email.lower().strip()
     _check_rate_limit(f"rl:otp:email:{email_norm}", limit=3, window_seconds=300)
+
+
+def _attach_runtime_auth_metadata(data: dict, effective_country: str) -> dict:
+    try:
+        cre = CountryEngineService(redis_sync)
+        config = cre.get_country_config(effective_country)
+    except Exception as exc:
+        logger.warning("login: runtime country metadata fallback for %s - %s", effective_country, exc)
+        config = get_config(effective_country)
+
+    route = PaymentRouterService.route_payment(effective_country, 0, config.currency)
+    data["country"] = effective_country
+    data["currency"] = config.currency
+    data["paymentProvider"] = route.provider
+    data["mobileMoneyEnabled"] = config.mobile_money_enabled
+    return data
 
 
 @router.post("/register")
@@ -187,13 +207,7 @@ def login(
         # for all non-EU users. Using the stored country fixes this definitively.
         effective_country = data.pop("_user_country_code", None) or country_code
 
-        cre = CountryEngineService(redis_sync)
-        config = cre.get_country_config(effective_country)
-        route = PaymentRouterService.route_payment(effective_country, 0, config.currency)
-        data["country"] = effective_country
-        data["currency"] = config.currency
-        data["paymentProvider"] = route.provider
-        data["mobileMoneyEnabled"] = config.mobile_money_enabled
+        _attach_runtime_auth_metadata(data, effective_country)
 
         return success_response(data)
     except ValueError as exc:
@@ -207,8 +221,13 @@ def login(
 @router.post("/refresh")
 def refresh(payload: RefreshPayload, service: AuthService = Depends(get_auth_service)):
     try:
-        if redis_sync.get(f"blacklist:{payload.refresh_token}"):
-            raise HTTPException(status_code=401, detail="Refresh token revoked")
+        try:
+            if redis_sync.get(f"blacklist:{payload.refresh_token}"):
+                raise HTTPException(status_code=401, detail="Refresh token revoked")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("refresh: Redis blacklist check skipped - %s", exc)
         try:
             token_payload = decode_token(payload.refresh_token)
         except ValueError as exc:
