@@ -7,6 +7,7 @@ from jwt.exceptions import InvalidTokenError
 from passlib.context import CryptContext
 
 from app.core.config import settings
+from app.core.observability.logger import logger
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -25,8 +26,12 @@ def get_token_version(user_id: str) -> int:
     """Return the current token generation counter for a user (defaults to 0)."""
     from app.core.redis_client import redis_sync
 
-    raw = redis_sync.get(f"token_version:{user_id}")
-    return int(raw) if raw else 0
+    try:
+        raw = redis_sync.get(f"token_version:{user_id}")
+        return int(raw) if raw else 0
+    except Exception as exc:
+        logger.warning("auth: token_version fallback for user {}: {}", user_id, exc)
+        return 0
 
 
 def revoke_all_user_tokens(user_id: str) -> None:
