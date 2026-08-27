@@ -32,7 +32,11 @@ return count
 
 
 def _check_rate_limit(key: str, limit: int, window_seconds: int) -> None:
-    count = redis_sync.eval(_LUA_RATE_LIMIT, 1, key, str(window_seconds))
+    try:
+        count = redis_sync.eval(_LUA_RATE_LIMIT, 1, key, str(window_seconds))
+    except Exception as exc:
+        logger.warning("auth: Redis rate limit skipped for %s - %s", key, exc)
+        return
     if count > limit:
         raise HTTPException(
             status_code=429,
