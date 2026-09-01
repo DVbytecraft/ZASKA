@@ -11,6 +11,14 @@ interface RegisterScreenProps {
   onRegistered: (phone: string, email?: string) => void;
 }
 
+function toNationalPhone(value: string, dialCode: string): string {
+  const digits = value.replace(/\D/g, '');
+  const callingCode = dialCode.replace(/\D/g, '');
+
+  // Accept a pasted international number without duplicating the displayed prefix.
+  return digits.startsWith(callingCode) ? digits.slice(callingCode.length) : digits;
+}
+
 export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
@@ -31,7 +39,8 @@ export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
     digit: /\d/.test(password),
     special: /[!@#$%^&*]/.test(password),
   };
-  const phoneValid = /^\+[1-9]\d{6,14}$/.test(phone);
+  const phoneE164 = `${selectedCountry.dialCode}${phone}`;
+  const phoneValid = /^\+[1-9]\d{6,14}$/.test(phoneE164);
   const isValid =
     emailValid &&
     firstName.trim().length >= 2 &&
@@ -46,13 +55,13 @@ export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
         email: email.trim().toLowerCase() || undefined,
         firstName: firstName.trim(),
         lastName: lastName.trim(),
-        phone,
+        phone: phoneE164,
         password,
         role,
         country: selectedCountry.code,
         cf_turnstile_response: turnstileToken ?? undefined,
       });
-      onRegistered(phone, email.trim().toLowerCase() || undefined);
+      onRegistered(phoneE164, email.trim().toLowerCase() || undefined);
     } catch {
       // error already set in useAuth
     }
@@ -76,7 +85,12 @@ export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
               {SUPPORTED_COUNTRIES.map((country) => (
                 <button
                   key={country.code}
-                  onClick={() => { setSelectedCountry(country); setAppLanguage(country.code); setShowCountryPicker(false); }}
+                  onClick={() => {
+                    if (selectedCountry.code !== country.code) setPhone('');
+                    setSelectedCountry(country);
+                    setAppLanguage(country.code);
+                    setShowCountryPicker(false);
+                  }}
                   className={`w-full flex items-center gap-4 px-3 py-3.5 rounded-xl mb-1 transition-colors ${
                     selectedCountry.code === country.code
                       ? 'bg-purple-50 border border-[#6D28D9]'
@@ -205,12 +219,13 @@ export function RegisterScreen({ onBack, onRegistered }: RegisterScreenProps) {
               </div>
               <input
                 type="tel"
+                name="phone-national"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                pattern="[0-9]*"
                 placeholder="90123456"
                 value={phone}
-                onChange={(e) => {
-                  const v = e.target.value.replace(/\s/g, '');
-                  setPhone(v.startsWith('+') ? v : `${selectedCountry.dialCode}${v.replace(/^\+/, '')}`);
-                }}
+                onChange={(e) => setPhone(toNationalPhone(e.target.value, selectedCountry.dialCode))}
                 className={`flex-1 px-4 py-3.5 rounded-xl border-2 bg-gray-50 focus:bg-white focus:outline-none transition-all text-gray-900 font-medium placeholder:font-normal placeholder:text-gray-400 ${
                   phone && !phoneValid ? 'border-red-300 focus:border-red-400' : 'border-gray-100 focus:border-[#6D28D9]'
                 }`}
