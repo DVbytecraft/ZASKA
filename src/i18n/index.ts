@@ -13,6 +13,8 @@ const COUNTRY_LANGUAGE: Record<string, string> = {
   TG: "fr", CI: "fr", SN: "fr", BJ: "fr",
   BF: "fr", ML: "fr", NE: "fr", CM: "fr",
   FR: "fr", BE: "fr",
+  // Current catalogue supports French and English only for these EU launches.
+  DE: "en", EE: "en", ES: "en", LT: "en", LV: "en",
   // Anglophone Africa + North America
   GH: "en", NG: "en", KE: "en", US: "en",
 };

@@ -70,13 +70,15 @@ done
 
 echo "[entrypoint] Starting API server..."
 
+APP_PORT_RESOLVED="${PORT:-${APP_PORT:-6969}}"
+
 # WEB_CONCURRENCY: number of uvicorn worker processes.
 # Default 1: safe for in-process scheduler (Redis locks protect against concurrent
 # job execution across replicas, but extra threads waste memory at small scale).
 # Set WEB_CONCURRENCY=$(nproc) for multi-core production servers.
 exec uvicorn app.main:app \
     --host 0.0.0.0 \
-    --port 6969 \
+    --port "${APP_PORT_RESOLVED}" \
     --workers "${WEB_CONCURRENCY:-1}" \
     --timeout-keep-alive 30 \
     --limit-max-requests 1000 \

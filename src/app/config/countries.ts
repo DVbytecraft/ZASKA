@@ -28,6 +28,11 @@ export const SUPPORTED_COUNTRIES: SupportedCountry[] = [
   { code: 'KE', name: 'Kenya',         flag: '🇰🇪', dialCode: '+254', currency: 'KES', language: 'en', mobileMoneyEnabled: true  },
   { code: 'FR', name: 'France',        flag: '🇫🇷', dialCode: '+33',  currency: 'EUR', language: 'fr', mobileMoneyEnabled: false },
   { code: 'BE', name: 'Belgique',      flag: '🇧🇪', dialCode: '+32',  currency: 'EUR', language: 'fr', mobileMoneyEnabled: false },
+  { code: 'DE', name: 'Allemagne',     flag: '🇩🇪', dialCode: '+49',  currency: 'EUR', language: 'en', mobileMoneyEnabled: false },
+  { code: 'EE', name: 'Estonie',       flag: '🇪🇪', dialCode: '+372', currency: 'EUR', language: 'en', mobileMoneyEnabled: false },
+  { code: 'ES', name: 'Espagne',       flag: '🇪🇸', dialCode: '+34',  currency: 'EUR', language: 'en', mobileMoneyEnabled: false },
+  { code: 'LT', name: 'Lituanie',      flag: '🇱🇹', dialCode: '+370', currency: 'EUR', language: 'en', mobileMoneyEnabled: false },
+  { code: 'LV', name: 'Lettonie',      flag: '🇱🇻', dialCode: '+371', currency: 'EUR', language: 'en', mobileMoneyEnabled: false },
   { code: 'US', name: 'United States', flag: '🇺🇸', dialCode: '+1',   currency: 'USD', language: 'en', mobileMoneyEnabled: false },
 ];
 

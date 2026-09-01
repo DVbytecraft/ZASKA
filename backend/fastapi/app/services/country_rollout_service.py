@@ -27,7 +27,8 @@ _AML_AUTHORITIES: dict[str, str] = {
     "TG": "CENTIF",
 }
 
-_PRIORITY_ACTIVE_COUNTRIES = {"TG", "BJ", "GH", "NG", "CI", "SN", "EE", "FR", "ES"}
+# Countries intentionally open for the current registration rollout.
+_PRIORITY_ACTIVE_COUNTRIES = {"TG", "BJ", "GH", "NG", "CI", "SN", "DE", "EE", "ES", "FR", "LT", "LV"}
 
 _KNOWN_CURRENCY_SYMBOLS: dict[str, str] = {
     "XOF": "FCFA",

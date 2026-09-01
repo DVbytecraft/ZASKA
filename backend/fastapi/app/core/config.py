@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     env: str = "development"
     app_name: str = "ZASKA API"
     app_host: str = "0.0.0.0"
-    app_port: int = 6969
+    app_port: int = Field(default=6969, validation_alias=AliasChoices("APP_PORT", "PORT"))
 
     database_url: str = ""
     redis_url: str = "redis://redis:6379/0"
